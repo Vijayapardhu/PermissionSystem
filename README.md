@@ -169,7 +169,7 @@ redirect URI. Entra matches character for character, so paste it rather than
 typing it:
 
 ```
-https://<your-render-service>.onrender.com/auth/callback
+https://permissionsystem.onrender.com/auth/callback
 ```
 
 Set the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
@@ -202,7 +202,7 @@ Environment variables to set on the service:
 | `DATABASE_URL` | Supabase, Session-mode pooler URI |
 | `SECRET_KEY` | Render's **Generate** button |
 | `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
-| `REDIRECT_URI` | `https://<service>.onrender.com/auth/callback` |
+| `REDIRECT_URI` | `https://permissionsystem.onrender.com/auth/callback` |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Supabase API Keys |
 | `SUPABASE_STORAGE_BUCKET` | `proofs` |
 | `SESSION_COOKIE_SECURE` | `true` (Render terminates TLS) |

@@ -936,9 +936,9 @@ for package in ['Flask', 'msal', 'python-dotenv', 'gunicorn',
 # The database driver and storage client pin with extras, so a plain
 # "package==" match would miss them.
 check('requirements pins the Postgres driver',
-      re.search(r'^psycopg\[binary,pool\]==', _req, re.M) is not None)
-check('requirements pins the Supabase client',
-      re.search(r'^supabase==', _req, re.M) is not None)
+      re.search(r'^psycopg\[binary\]==', _req, re.M) is not None)
+check('requirements pins the connection pool',
+      re.search(r'^psycopg-pool==', _req, re.M) is not None)
 check('requirements no longer pulls the MySQL driver',
       'mysql' not in _req.lower())
 

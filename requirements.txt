@@ -7,7 +7,11 @@ Jinja2==3.1.6
 gunicorn==23.0.0
 
 # Database (Supabase Postgres)
-psycopg[binary,pool]==3.2.3
+# psycopg-binary ships wheels only, so it must be a version that publishes a
+# wheel for the Python Render is running. 3.2.3 has none for Python 3.13+
+# targets and fails the build with "No matching distribution found".
+psycopg[binary]==3.2.13
+psycopg-pool==3.3.3
 
 # Supabase Storage, for uploaded proof documents
 supabase==2.18.1

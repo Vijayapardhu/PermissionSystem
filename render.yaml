@@ -40,10 +40,10 @@ services:
         sync: false
       - key: CLIENT_SECRET
         sync: false
-      # Must match a registered Web redirect URI in Entra ID exactly:
-      #   https://permission-system.onrender.com/auth/callback
+      # Must match a registered Web redirect URI in Entra ID exactly.
+      # If the service is renamed, change this and the Entra entry together.
       - key: REDIRECT_URI
-        sync: false
+        value: https://permissionsystem.onrender.com/auth/callback
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY
