@@ -295,13 +295,18 @@ def _require_user(finder, *args):
     """Resolve a user or raise DirectoryUnavailable.
 
     Sign-in fails closed; this only converts an unreachable database into a
-    readable message instead of a stack trace.
+    readable message instead of a stack trace. The cause is logged at WARNING
+    with the connection target attached, because a pool that cannot connect is
+    an infrastructure problem and the traceback alone does not say which host or
+    port was tried.
     """
     from flask import current_app
     try:
         return finder(*args)
-    except Exception:
-        current_app.logger.exception('User lookup failed during sign-in')
+    except Exception as exc:
+        detail = str(exc) or type(exc).__name__
+        current_app.logger.warning('User lookup failed during sign-in: %s', detail)
+        current_app.logger.debug('User lookup traceback', exc_info=True)
         raise DirectoryUnavailable(
             'The user directory is temporarily unavailable. Please try again shortly.'
         )

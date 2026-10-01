@@ -152,10 +152,16 @@ class UserModel:
     def set_role(user_id: int, role: UserRole) -> User:
         with db.get_cursor() as cursor:
             cursor.execute(
-                "UPDATE users SET role = %s, updated_at = %s WHERE id = %s",
+                """UPDATE users SET role = %s, updated_at = %s
+                   WHERE id = %s
+                   RETURNING *""",
                 (role.value, datetime.now(), user_id)
             )
-            return UserModel.find_by_id(user_id)
+            # RETURNING, not a follow-up find_by_id(). The UPDATE is not
+            # committed until get_cursor() exits, so a read in its own
+            # transaction would return the role the user had before this call.
+            row = cursor.fetchone()
+            return UserModel._row_to_user(row) if row else None
 
     @staticmethod
     def _row_to_user(row) -> User:

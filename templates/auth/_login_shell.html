@@ -21,13 +21,23 @@
    the centred, padded content column. #}
 {% block main_class %}au-content au-content--flush{% endblock %}
 
+{# No flash banner above the sign-in button: it pushed the form down and
+   dominated the panel. The messages are still read, so they cannot survive in
+   the session and resurface on the next authenticated page. base.html renders
+   its banner before {% block content %}, so this has to override the flashes
+   block itself -- draining inside the content block ran too late and the banner
+   still appeared. #}
+{% block flashes %}
+  {% with messages = get_flashed_messages(with_categories=true) %}{% endwith %}
+{% endblock %}
+
 {% block content %}
 <div class="auth-split">
 
   <section class="auth-split__art">
     <div class="auth-split__brand">
       <img class="au-wordmark au-wordmark--invert au-wordmark--card d-block mx-auto"
-           src="{{ url_for('static', filename='images/aditya-logo.png') }}"
+           src="{{ asset('images/aditya-logo.png') }}"
            alt="Aditya University">
       <h2 class="auth-split__title">{{ DEPARTMENT_NAME }}</h2>
       <p class="auth-split__lede">{{ tagline }}</p>
@@ -35,19 +45,6 @@
   </section>
 
   <section class="auth-split__form">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, message in messages %}
-        <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show"
-             role="alert">
-          <i class="bi bi-{{ 'check-circle' if category == 'success' else 'exclamation-triangle' }} me-1"></i>
-          {{ message }}
-          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
-
     {% block form %}{% endblock %}
   </section>
 </div>

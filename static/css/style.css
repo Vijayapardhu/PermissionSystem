@@ -22,7 +22,11 @@
 .au-wordmark--invert { filter: brightness(0) invert(1); }
 
 .au-wordmark--side   { width: 152px; }
-.au-wordmark--card   { width: 234px; }
+
+/* The sign-in brand panel. max-width keeps it fluid: on a phone the mark scales
+   down to the panel instead of overflowing, so no fixed mobile override is
+   needed. */
+.au-wordmark--card   { width: 520px; max-width: 100%; }
 .au-wordmark--letter { width: 252px; }
 
 .au-crest {
@@ -227,6 +231,7 @@ a:hover { text-decoration: underline; }
     flex: 0 0 var(--au-sidebar-w) !important;
     width: var(--au-sidebar-w) !important;
     max-width: var(--au-sidebar-w) !important;
+    min-width: var(--au-sidebar-w) !important;
     overflow: hidden;
     background: var(--au-side-bg);
     /* No border and no shadow: the column must sit flush against the content
@@ -238,24 +243,36 @@ a:hover { text-decoration: underline; }
     z-index: 1020;
   }
 
-  /* The main column simply takes the space the sidebar leaves. */
+  /* The main column must occupy exactly the space the sidebar leaves, starting
+     at its right edge. `flex: 1 1 0` rather than `auto` pins the basis to zero
+     so the column cannot pick up slack of its own, and the explicit background
+     means no strip of <body> colour can show between the column and the
+     navigation. */
   .au-app--sidebar .au-app__main {
     margin-left: 0;
+    padding-left: 0;
     width: auto;
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
+    background-color: var(--au-page-bg);
   }
 
   .au-app--sidebar .offcanvas-header { display: none; }
 
-  /* Content must start against the navigation column, not float in the middle
-     of it. The auto margins on .au-content, .au-foot and .app-topbar__inner
-     exist to centre a page that owns the full viewport; once a sidebar owns the
-     left edge they leave a band of empty background between the column and the
-     first element, which reads as a gap in the layout. The max-width cap stays
-     so lines do not run the full width of an ultrawide display. */
+  /* Content must start flush against the navigation column. The auto margins
+     and the max-width cap exist to centre a page that owns the full viewport;
+     once a sidebar owns the left edge they leave a band of empty background
+     between the column and the first element. The left padding goes for the
+     same reason -- the column already provides the left edge, so padding it
+     again reads as a gutter. The right padding stays so content never touches
+     the window edge. */
   .au-app--sidebar .au-content,
-  .au-app--sidebar .au-foot,
+  .au-app--sidebar .au-foot {
+    max-width: none;
+    margin-inline: 0;
+    padding-left: 0;
+  }
+
   .au-app--sidebar .app-topbar__inner { margin-inline: 0; }
 }
 
@@ -273,6 +290,11 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  /* The column is a fixed width (--au-sidebar-w) and .au-side is its only
+     child, but it sits in a row flex container, so it would otherwise size to
+     its content and leave a band of bare background between the navigation and
+     the main column. Filling the row is what closes that gap. */
+  width: 100%;
   background: var(--au-side-bg);
   color: var(--au-side-text);
 }
@@ -955,19 +977,21 @@ a:hover { text-decoration: underline; }
   text-align: center;
 }
 
-.auth-split__brand { max-width: 34rem; }
+/* Wide enough for .au-wordmark--card, so the mark is not clipped by its own
+   container. */
+.auth-split__brand { max-width: 40rem; }
 
 .auth-split__title {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 600;
-  margin: 1.1rem 0 .3rem;
+  margin: 1.4rem 0 .4rem;
   color: #fff;
 }
 
 .auth-split__lede {
-  font-size: .95rem;
+  font-size: .82rem;
   line-height: 1.6;
-  color: rgba(255, 255, 255, .8);
+  color: rgba(255, 255, 255, .72);
   margin: 0;
   max-width: 42ch;
 }
@@ -1008,8 +1032,8 @@ a:hover { text-decoration: underline; }
     padding: 1.5rem 1.5rem 1.75rem;
   }
 
-  .auth-split__title { font-size: 1rem; margin-top: .8rem; }
-  .auth-split__lede { font-size: .85rem; }
+  .auth-split__title { font-size: .95rem; margin-top: 1rem; }
+  .auth-split__lede { font-size: .78rem; }
 
   .auth-split__form { padding: 2rem 1.25rem 3rem; }
 }
@@ -1232,7 +1256,9 @@ a:hover { text-decoration: underline; }
   .page-foot { padding: 16px 14px 24px; }
   .app-topbar__inner { padding: .5rem 14px; }
 
-  .au-wordmark--card { width: 190px; }
+  /* The wordmark is fluid (max-width: 100%), so it needs no width of its own
+     here -- dropping the old fixed 300px keeps it as large as the panel allows
+     instead of shrinking to a fixed size on every phone. */
 
   .stat-grid { grid-template-columns: repeat(2, 1fr); gap: .6rem; }
   .stat__value { font-size: 1.5rem; }

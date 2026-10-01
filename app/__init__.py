@@ -1,4 +1,5 @@
 import logging
+import time
 
 from datetime import datetime
 
@@ -24,6 +25,7 @@ def create_app(config_object=Config) -> Flask:
     _register_extensions(app)
     _register_blueprints(app)
     _register_health_check(app)
+    _register_static_cachebusting(app)
     _register_jinja_globals(app)
     _register_request_hooks(app)
     _register_template_helpers(app)
@@ -35,22 +37,84 @@ def create_app(config_object=Config) -> Flask:
 def _register_health_check(app: Flask) -> None:
     """Liveness probe for Render.
 
-    Render's health check path is polled continuously and a failure restarts the
-    service, so this pings the database: a container that cannot reach Supabase
-    is genuinely broken and worth recycling. The response carries no detail
-    about the cause, since the endpoint is unauthenticated.
+    This deliberately does not fail when the database is slow.
+
+    Render polls the health path continuously and restarts the service on a
+    non-2xx, so a probe that pings the database turns a transient network
+    hiccup into a restart loop. The container is restarted, every pooled
+    connection is torn down and re-established, the first requests after boot
+    queue behind that, and the next probe fails too. The site then looks
+    uniformly slow, which is a far worse outcome than a page that errors.
+
+    Restarting also cannot fix an unreachable database -- the replacement
+    process has the same network path. So the probe reports what it sees and
+    stays 200, and the verdict is cached for HEALTH_DB_CACHE_SECONDS so that
+    polling does not itself consume a pooled connection. The response carries
+    no detail about the cause, since the endpoint is unauthenticated.
     """
+
+    state = {'checked_at': 0.0, 'database': 'unknown'}
 
     @app.route('/healthz')
     def healthz():
         from app.models.database import db
 
-        try:
-            db.ping()
-        except Exception:
-            app.logger.exception('Health check failed')
-            return {'status': 'unhealthy'}, 503
-        return {'status': 'ok'}, 200
+        now = time.monotonic()
+        ttl = app.config['HEALTH_DB_CACHE_SECONDS']
+        if now - state['checked_at'] >= ttl:
+            try:
+                db.ping()
+                state['database'] = 'ok'
+            except Exception:
+                app.logger.exception('Health check: database unreachable')
+                state['database'] = 'unreachable'
+            state['checked_at'] = now
+
+        return {'status': 'ok', 'database': state['database']}, 200
+
+
+def _register_static_cachebusting(app: Flask) -> None:
+    """Add `?v=<mtime>` to static URLs so they can be cached for a year.
+
+    Flask serves /static/<path> with the file's mtime as the validator, so by
+    default the browser revalidates the stylesheet and the logo on every single
+    page view -- a full round trip per asset per navigation, which showed up in
+    the transfer log as a wall of 304s.
+
+    Long max-age alone would be wrong: the filenames are not hashed, so the URL
+    for a changed stylesheet would be identical and browsers would keep serving
+    the old copy for a year. Stamping the mtime into the query string makes the
+    URL change exactly when the content does, so the asset can be cached
+    aggressively and a deploy still takes effect immediately.
+
+    Exposed to templates as `asset()`. Kept alongside the existing
+    url_for('static', ...) calls rather than replacing them, so nothing depends
+    on the helper being present.
+    """
+    from flask import url_for
+
+    static_root = app.static_folder
+    # Served in-process by gunicorn, but the origin in front of Render is
+    # Cloudflare. A year is safe only because the URL carries the version.
+    app.config.setdefault('SEND_FILE_MAX_AGE_DEFAULT', 31536000)
+
+    @app.context_processor
+    def _asset_in_context():
+        import os as _os
+
+        def asset(filename: str) -> str:
+            version = 0
+            try:
+                version = int(_os.path.getmtime(
+                    _os.path.join(static_root, filename)
+                ))
+            except OSError:
+                # A missing file still needs a URL; without a version it just
+                # falls back to the normal revalidating behaviour.
+                pass
+            return url_for('static', filename=filename, v=version or None)
+
+        return {'asset': asset}
 
 
 def _register_jinja_globals(app: Flask) -> None:

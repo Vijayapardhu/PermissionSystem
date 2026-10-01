@@ -32,8 +32,37 @@ services:
       # Supabase Postgres, session-mode pooler on port 5432.
       - key: DATABASE_URL
         sync: false
+      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, which
+      # stays inside the Supabase session-pooler limit. It must stay at or above
+      # the --threads each worker serves, or a worker deadlocks against itself.
       - key: DB_POOL_MAX
-        value: "4"
+        value: "6"
+      - key: DB_POOL_MIN
+        value: "2"
+      # Kept separate and short on purpose. A single shared 10s value made every
+      # request stall for ten seconds whenever the pool was saturated.
+      - key: DB_POOL_TIMEOUT
+        value: "5"
+      - key: DB_CONNECT_TIMEOUT
+        value: "5"
+      # Two attempts per request, and a pool that recycles its idle sockets
+      # every four minutes. Supavisor reaps a silent session after fifteen, and
+      # the Render-to-Supabase path can drop an idle flow with no error on
+      # either side, so a pooled socket can be dead while the pool still calls
+      # it usable. Without this the first request after an idle spell is the one
+      # that pays for it.
+      - key: DB_POOL_RETRIES
+        value: "2"
+      - key: DB_POOL_MAX_IDLE
+        value: "240"
+      - key: DB_POOL_MAX_LIFETIME
+        value: "1800"
+      - key: DB_POOL_RECONNECT_TIMEOUT
+        value: "30"
+      # Render polls /healthz continuously; without a cache each poll took a
+      # pooled connection and the probe became part of the contention.
+      - key: HEALTH_DB_CACHE_SECONDS
+        value: "30"
       - key: CLIENT_ID
         sync: false
       - key: TENANT_ID

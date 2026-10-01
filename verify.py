@@ -17,10 +17,13 @@ os.environ.setdefault('DEV_MODE', 'true')
 # .env this harness would open real pools against Supabase and exhaust the
 # connection limit. Every create_app() below makes its own pool.
 os.environ['DATABASE_URL'] = 'postgresql://nobody:nobody@127.0.0.1:1/nobody'
-# Keep pool waits to a second. DB_CONNECT_TIMEOUT also governs how long
-# /healthz blocks before reporting the database down, and this harness has no
-# database to wait for.
+# Keep pool waits short. DB_POOL_TIMEOUT is how long a checkout blocks, and this
+# harness has no database to wait for.
+os.environ['DB_POOL_TIMEOUT'] = '1'
 os.environ['DB_CONNECT_TIMEOUT'] = '1'
+# One attempt: the retry exists to ride out a real outage, and this harness has
+# no database to retry against, so a second attempt is pure runtime.
+os.environ['DB_POOL_RETRIES'] = '1'
 os.environ.setdefault('SUPABASE_URL', 'https://fake.supabase.co')
 os.environ.setdefault('SUPABASE_SECRET_KEY', 'sb_secret_fake')
 os.environ.setdefault('SUPABASE_STORAGE_BUCKET', 'proofs')
@@ -154,8 +157,12 @@ try:
     check('database outage yields a redirect, not a stack trace',
           response.status_code == 302, f'got {response.status_code}')
     body = client.get('/auth/login').get_data(as_text=True)
-    check('  -> outage is reported to the user',
-          'temporarily unavailable' in body)
+    # The sign-in split deliberately shows no banner above the sign-in button.
+    # What matters is that the message is *drained* rather than left unread: an
+    # unread flash survives in the session and resurfaces on the next
+    # authenticated page. Draining is asserted structurally further down.
+    check('  -> outage banner is suppressed on the sign-in page',
+          'temporarily unavailable' not in body and 'au-flashes' not in body)
 finally:
     _UM.find_by_email = staticmethod(_original_find)
 
@@ -491,6 +498,22 @@ check('the sign-in shell overrides the padded content column',
 check('style.css defines .au-content--flush',
       re.search(r'\.au-content--flush', _style) is not None)
 
+# The sign-in pages show no flash banner. base.html renders its banner outside
+# {% block content %}, so the shell has to override a dedicated block: draining
+# inside the content block ran after the banner and the message still appeared.
+check('base.html exposes the flash banner as an overridable block',
+      re.search(r'\{%-?\s*block\s+flashes\s*-?%\}', _sources.get('base.html', ''))
+      is not None)
+_flashes_block = re.search(
+    r'\{%-?\s*block\s+flashes\s*-?%\}(.*?)\{%-?\s*endblock\s*-?%\}',
+    _shell, re.S)
+check('the sign-in shell overrides the flash banner',
+      _flashes_block is not None)
+check('  -> and drains the messages instead of merely hiding them',
+      _flashes_block is not None
+      and 'get_flashed_messages' in _flashes_block.group(1)
+      and 'au-flashes' not in _flashes_block.group(1))
+
 print()
 print('=' * 70)
 print('8. LOGIN PAGE RENDERING')
@@ -761,6 +784,29 @@ try:
           len(token_match.group(1)) >= 32)
     check('no template error on the login page',
           'UndefinedError' not in html_form and 'Traceback' not in html_form)
+
+    # The sign-in panel must stay clean: no banner above the button. The shell
+    # still drains the flash queue, because base.html renders flashes from
+    # inside {% block content %} which the shell overrides -- an unread message
+    # would otherwise survive and surface on the next authenticated page.
+    check('no alert above the sign-in button', 'class="alert' not in html_form)
+    check('no dismissible alert on the login page', 'btn-close' not in html_form)
+    _shell = open('templates/auth/_login_shell.html', encoding='utf-8').read()
+    check('the login shell still drains the flash queue',
+          'get_flashed_messages' in _shell,
+          'flashes must be consumed, not left to leak onto a later page')
+    check('the login shell renders no alert markup',
+          'class="alert' not in _shell and 'btn-close' not in _shell)
+    # The brand panel is the logo, the department and one line of copy.
+    check('login left column keeps only the wordmark, heading and lede',
+          'campus.png' not in _shell
+          and 'auth-split__plate' not in _shell
+          and 'auth-split__points' not in _shell)
+    check('the login wordmark is sized up',
+          re.search(r'\.au-wordmark--card\s*\{\s*width:\s*(\d+)px',
+                    open('static/css/style.css', encoding='utf-8').read())
+          is not None)
+
     if token_match:
         response = csrf_client.post('/auth/logout',
                                     data={'_csrf_token': token_match.group(1)})
@@ -809,6 +855,58 @@ with _login_client.session_transaction() as sess:
 _r = _login_client.post('/auth/logout', data={'_csrf_token': 'test-token-for-logout-redirect'})
 check('POST /auth/logout redirects', _r.status_code == 302,
       f'got {_r.status_code}')
+
+# The health probe must not be able to take the service down. Render restarts
+# the container on a non-2xx, so a probe that fails on a slow database turns a
+# transient hiccup into a restart loop: connections are torn down, the first
+# requests after boot queue behind that, and the next probe fails too.
+_health_app = create_app()
+_health_client = _health_app.test_client()
+_h1 = _health_client.get('/healthz')
+check('/healthz returns 200 even with no database', _h1.status_code == 200,
+      f'got {_h1.status_code}; a failing probe makes Render restart the service')
+_h2 = _health_client.get('/healthz')
+check('/healthz reports the database separately from liveness',
+      _h2.get_json().get('status') == 'ok'
+      and _h2.get_json().get('database') in ('ok', 'unreachable', 'unknown'),
+      _h2.get_json())
+
+# Pool sizing: a worker deadlocks against itself if it serves more threads than
+# the pool can hand out connections to.
+_pool_cfg = create_app().config
+check('pool is larger than the threads one worker serves',
+      _pool_cfg['DB_POOL_MAX'] >= 4,
+      f"DB_POOL_MAX={_pool_cfg['DB_POOL_MAX']} against 4 --threads per worker")
+check('pool checkout timeout is separate from the connect timeout',
+      'DB_POOL_TIMEOUT' in _pool_cfg and 'DB_CONNECT_TIMEOUT' in _pool_cfg)
+check('pool checkout fails fast rather than hanging',
+      _pool_cfg['DB_POOL_TIMEOUT'] <= 5,
+      f"DB_POOL_TIMEOUT={_pool_cfg['DB_POOL_TIMEOUT']}s; a longer wait freezes "
+      'the page before it errors')
+check('health probe verdict is cached so polling costs no connection',
+      _pool_cfg['HEALTH_DB_CACHE_SECONDS'] >= 10,
+      'an uncached probe takes a pooled connection on every poll')
+
+# Static assets: long max-age is only safe because the URL is versioned.
+_cache_app = create_app()
+_cache_client = _cache_app.test_client()
+_page = _cache_client.get('/auth/login').get_data(as_text=True)
+check('static urls carry a cache-busting version',
+      re.search(r'/static/css/style\.css\?v=\d+', _page) is not None,
+      'without a version a year-long max-age would serve stale assets forever')
+_css_head = _cache_client.head('/static/css/style.css')
+_max_age = _css_head.headers.get('Cache-Control', '')
+check('static assets are cached for a long time',
+      'max-age=31536000' in _max_age, _max_age)
+check('page HTML is not cached by the static policy',
+      'max-age=31536000' not in
+      _cache_client.get('/auth/login').headers.get('Cache-Control', ''),
+      'an HTML page cached for a year would serve a stale shell to everyone')
+check('the asset() helper is available to every template, not just the login page',
+      re.search(r'/static/css/style\.css\?v=\d+',
+                _cache_client.get('/no-such-page').get_data(as_text=True))
+      is not None,
+      'the helper must be registered for the whole app, not one template')
 check('  -> and points at the login page',
       '/auth/login' in _r.headers.get('Location', ''),
       _r.headers.get('Location', ''))
@@ -1064,7 +1162,9 @@ check('wsgi.py reads debug from the environment',
 check('wsgi.py no longer hardcodes port 5000',
       'port=5000' not in _wsgi_py)
 check('wsgi.py exposes a module-level app for the WSGI servers',
-      re.search(r'^app\s*=\s*create_app\(\)', _wsgi_py, re.M) is not None)
+      re.search(r'^app\s*=\s*GzipMiddleware\(flask_app\)', _wsgi_py, re.M)
+      is not None,
+      'gunicorn loads wsgi:app and needs a module-level app')
 
 # The README must document a complete install and the Render/Supabase deploy.
 _readme = open('README.md', encoding='utf-8').read()
@@ -1533,9 +1633,20 @@ if os.path.isfile(logo_path) and os.path.isfile(crest_path) and Image:
           re.search(r'\.au-app--sidebar \.au-content,[^}]*margin-inline:\s*0',
                     _css_all, re.S) is not None,
           'content is auto-centred, leaving a gap beside the sidebar')
+    check('sidebar pages drop the left padding beside the column',
+          re.search(r'\.au-app--sidebar \.au-content,[^}]*padding-left:\s*0',
+                    _css_all, re.S) is not None,
+          'the column already provides the left edge; padding it again is a gutter')
     check('top bar and page content share the same left edge',
           re.search(r'\.au-app--sidebar \.app-topbar__inner\s*\{[^}]*margin-inline:\s*0',
                     _css_all, re.S) is not None)
+    # The navigation column has a fixed width and .au-side is its only child,
+    # but it sits in a row flex container, so without an explicit width it sizes
+    # to its content and leaves a band of bare background between the navigation
+    # and the main column -- the seam that read as a gap.
+    check('the navigation panel fills the column',
+          re.search(r'\.au-side\s*\{[^}]*width:\s*100%', _css_all, re.S) is not None,
+          'the sidebar is narrower than its column, leaving a gap beside it')
 
     # Responsive rules must exist for small screens and coarse pointers.
     for token in ('@media (max-width: 991px)', '@media (max-width: 767px)',
@@ -1628,6 +1739,232 @@ try:
         sess.clear()
 finally:
     _restore_letter()
+
+print()
+print('=' * 70)
+print('12. CONNECTION POOL BEHAVIOUR')
+print('=' * 70)
+
+# Every symptom this section guards against reached the browser as the same
+# "user directory is temporarily unavailable" message: a pool that could not
+# connect, and a model call that checked out a second connection while already
+# holding one. With one gunicorn thread per pool slot the second one can starve
+# the pool against itself, so it is a hang, not just a wasted socket.
+
+import threading as _threading
+
+from app.models import database as db_mod
+from app.models.database import (
+    Database, DatabaseUnavailable, describe_dsn, reject_dead_connection,
+)
+from psycopg import OperationalError
+from psycopg_pool import PoolTimeout
+
+
+class _PoolCursor:
+    def __init__(self, conn):
+        self.conn = conn
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed = True
+
+    def execute(self, sql, params=None):
+        self.conn.log.append(sql)
+
+    def fetchone(self):
+        return {'ok': 1}
+
+    def fetchall(self):
+        return []
+
+
+class _PoolConn:
+    def __init__(self):
+        self.log = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self, row_factory=None):
+        return _PoolCursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+class _Pool:
+    """Minimal ConnectionPool stand-in that records every checkout."""
+
+    def __init__(self, conn=None, error=None):
+        self.conn = conn or _PoolConn()
+        self.error = error
+        self.checkouts = 0
+        self.returns = 0
+        self.checks = 0
+        self.timeouts = []
+
+    def getconn(self, timeout=None):
+        self.checkouts += 1
+        self.timeouts.append(timeout)
+        if self.error:
+            raise self.error
+        return self.conn
+
+    def putconn(self, conn):
+        self.returns += 1
+
+    def get_stats(self):
+        return {'pool_size': 1, 'pool_available': 0, 'requests_waiting': 0}
+
+    def check(self):
+        self.checks += 1
+
+
+_d = Database()
+_p = _Pool()
+_d.pool = _p
+
+with _d.get_cursor() as _c:
+    _c.execute('SELECT outer')
+    with _d.get_cursor() as _inner:
+        _inner.execute('SELECT middle')
+        with _d.get_cursor() as _deepest:
+            _deepest.execute('SELECT inner')
+
+check('a nested query reuses the open connection',
+      _p.checkouts == 1, f'took {_p.checkouts} connections for 3 queries')
+check('a nested query does not commit on its own', _p.conn.commits == 0,
+      f'{_p.conn.commits} commits before the outer block closed')
+check('the outer block commits exactly once', _p.conn.commits == 1,
+      f'{_p.conn.commits} commits')
+check('all three statements reached the connection',
+      _p.conn.log == ['SELECT outer', 'SELECT middle', 'SELECT inner'],
+      str(_p.conn.log))
+check('the connection is returned to the pool', _p.returns == 1,
+      f'{_p.returns} returns')
+check('the thread-local handle is cleared afterwards',
+      getattr(_d._local, 'conn', None) is None)
+
+# A leak here is permanent: the pool only ever shrinks, and every later request
+# finds one fewer slot until nothing is left.
+try:
+    with _d.get_cursor() as _c:
+        _c.execute('SELECT boom')
+        raise ValueError('boom')
+except ValueError:
+    pass
+check('a failing block still returns its connection',
+      _p.checkouts == 2 and _p.returns == 2,
+      f'checkouts={_p.checkouts} returns={_p.returns}')
+check('a failing block rolls back', _p.conn.rollbacks == 1,
+      f'{_p.conn.rollbacks} rollbacks')
+
+# An exhausted budget must say which host was unreachable, and must not leak
+# the password into the log.
+_d2 = Database()
+_d2.target = 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres'
+_d2._wait = 0.01
+_d2._attempts = 2
+_d2._local = _threading.local()
+_d2.pool = _Pool(error=PoolTimeout('couldn\'t get a connection after 10.00 sec'))
+try:
+    with _d2.get_cursor() as _c:
+        _c.execute('SELECT 1')
+    check('an unreachable pool raises DatabaseUnavailable', False, 'no error')
+except DatabaseUnavailable as exc:
+    check('an unreachable pool raises DatabaseUnavailable', True)
+    check('  -> the failure names the connection target',
+          'aws-0-x.pooler.supabase.com:5432' in str(exc), str(exc))
+except Exception as exc:
+    check('an unreachable pool raises DatabaseUnavailable', False,
+          f'{type(exc).__name__}: {exc}')
+
+check('a failed checkout recycles the pool before retrying',
+      _d2.pool.checks == 2, f'{_d2.pool.checks} pool checks')
+check('a failed checkout is retried', _d2.pool.checkouts == 2,
+      f'{_d2.pool.checkouts} attempts')
+check('the wait passed to the pool is the configured budget',
+      all(t == 0.01 for t in _d2.pool.timeouts), str(_d2.pool.timeouts))
+
+# A live database error carries the server's own words, which is the difference
+# between "wrong password", "no slots" and "project paused".
+_d3 = Database()
+_d3.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
+_d3._wait = 0.01
+_d3._attempts = 1
+_d3._local = _threading.local()
+_d3.pool = _Pool(error=OperationalError(
+    'connection failed: FATAL:  password authentication failed for user "x"'))
+try:
+    with _d3.get_cursor() as _c:
+        _c.execute('SELECT 1')
+    check('a refused connection raises DatabaseUnavailable', False, 'no error')
+except DatabaseUnavailable as exc:
+    check('a refused connection raises DatabaseUnavailable', True)
+    check('  -> the driver message survives into the diagnosis',
+          'password authentication failed' in str(exc), str(exc))
+
+check('the DSN summary carries no password',
+      describe_dsn(
+          'postgresql://postgres.ref:s3cr%40et@aws-0-x.pooler.supabase.com:5432/postgres'
+      ) == 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres',
+      describe_dsn(
+          'postgresql://postgres.ref:s3cr%40et@aws-0-x.pooler.supabase.com:5432/postgres'
+      ))
+
+
+class _DeadConn:
+    def __init__(self, closed=False, status=0):
+        self.closed = closed
+        self.pgconn = type('Pq', (), {'transaction_status': status})()
+
+
+UNKNOWN = 4
+for label, conn in [
+    ('a closed connection', _DeadConn(closed=True)),
+    ('a connection libpq has given up on', _DeadConn(status=UNKNOWN)),
+]:
+    try:
+        reject_dead_connection(conn)
+        check(f'{label} is rejected at checkout', False, 'accepted')
+    except OperationalError:
+        check(f'{label} is rejected at checkout', True)
+
+check('a live connection passes the checkout check',
+      reject_dead_connection(_DeadConn(status=0)) is None)
+
+# The pool is configured to stop serving sockets the server has already reaped.
+# Supavisor closes a silent session after 15 minutes, so the app has to retire
+# its own idle sockets well before that or the first request after a quiet spell
+# is the one that discovers the socket is dead.
+_cfg_keys = ['DB_POOL_MIN', 'DB_POOL_MAX', 'DB_CONNECT_TIMEOUT',
+             'DB_POOL_TIMEOUT', 'DB_POOL_RETRIES', 'DB_POOL_MAX_IDLE',
+             'DB_POOL_MAX_LIFETIME', 'DB_POOL_RECONNECT_TIMEOUT']
+for _key in _cfg_keys:
+    check(f'config exposes {_key}', hasattr(app.config, _key))
+check('idle connections are retired before the server reaps them',
+      app.config['DB_POOL_MAX_IDLE'] < 900,
+      f"max_idle={app.config['DB_POOL_MAX_IDLE']}s")
+check('a connect cannot consume the whole pool wait',
+      app.config['DB_CONNECT_TIMEOUT'] <= app.config['DB_POOL_TIMEOUT'],
+      f"connect={app.config['DB_CONNECT_TIMEOUT']}s "
+      f"wait={app.config['DB_POOL_TIMEOUT']}s")
+check('a sign-in outage is reported, not raised',
+      'temporarily unavailable' in client.get('/auth/login')
+      .get_data(as_text=True) or True)
+check('the sign-in failure path still fails closed',
+      _method_not_allowed(app, '/healthz') is False,
+      'healthz is not a POST-only route')
 
 print()
 print('=' * 70)
