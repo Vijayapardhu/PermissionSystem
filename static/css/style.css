@@ -468,12 +468,23 @@ a:hover { text-decoration: underline; }
   font-size: .8rem;
 }
 
-.page-wrap { max-width: var(--au-max-width); margin-inline: auto; padding: 24px 28px 8px; }
-.page-wrap-narrow { max-width: 880px; margin-inline: auto; padding: 24px 28px 8px; }
+/* Standalone content columns for pages that set their own <main class>. Every
+   page is sized by the browser rather than by a cap, so nothing is stranded in
+   the middle of a wide window; a sidebar page opts out of the centring in the
+   block above. */
+.page-wrap { max-width: none; margin-inline: 0; padding: 24px 28px 8px; }
+.page-wrap-narrow { max-width: none; margin-inline: 0; padding: 24px 28px 8px; }
 .page-foot { max-width: var(--au-max-width); margin-inline: auto; padding: 24px 28px 32px; color: var(--au-text-faint); font-size: .8rem; }
 
 @media (max-width: 991px) {
-  .au-content, .au-foot { padding-inline: 16px; }
+  .au-content, .au-foot,
+  .page-wrap, .page-wrap-narrow { padding-inline: 16px; }
+}
+
+@media (max-width: 767px) {
+  .au-content { padding: 16px 14px 8px; }
+  .au-foot { padding: 16px 14px 24px; }
+  .page-wrap, .page-wrap-narrow { padding: 16px 14px 8px; }
 }
 
 @media (max-width: 767px) {
@@ -997,7 +1008,10 @@ a:hover { text-decoration: underline; }
   font-size: .82rem;
   line-height: 1.6;
   color: rgba(255, 255, 255, .72);
-  margin: 0;
+  /* The measure cap narrows the box to a readable line length, so the box itself
+     has to be centred too -- centred text inside a left-aligned box still reads
+     as left-aligned against the wordmark above it. */
+  margin: 0 auto;
   max-width: 42ch;
 }
 
@@ -1257,7 +1271,7 @@ a:hover { text-decoration: underline; }
 }
 
 @media (max-width: 767px) {
-  .page-wrap { padding: 16px 14px 8px; }
+  .page-wrap, .page-wrap-narrow { padding: 16px 14px 8px; }
   .page-foot { padding: 16px 14px 24px; }
   .app-topbar__inner { padding: .5rem 14px; }
 

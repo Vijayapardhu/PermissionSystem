@@ -2,7 +2,7 @@
 
 The pool is per-process, so DB_POOL_MAX is multiplied by the number of gunicorn
 workers when sizing connections against the Supabase connection limit. The
-default of 4 x 2 workers leaves room well inside the free plan's limit.
+default of 6 x 2 workers leaves room well inside the free plan's limit.
 
 Three distinct failures used to reach the browser as the same opaque "the user
 directory is temporarily unavailable" message, so each is handled explicitly
@@ -212,22 +212,27 @@ class Database:
         """
         deadline = time.monotonic() + (self._wait * self._attempts)
         attempt = 0
+        # Kept local, not on self: a pooled failure belongs to the thread that
+        # hit it, and two threads failing at once must not report each other's
+        # error.
+        last_error = None
 
         while True:
             attempt += 1
             try:
                 return self.pool.getconn(timeout=self._wait)
             except PoolTimeout:
-                self._recycle(attempt, None)
+                self._recycle(attempt, last_error)
             except TRANSPORT_ERRORS as exc:
-                self._last_error = exc
+                last_error = exc
                 self._recycle(attempt, exc)
 
             if attempt >= self._attempts or time.monotonic() >= deadline:
                 break
             time.sleep(min(0.2 * attempt, 1.0))
 
-        raise DatabaseUnavailable(self.diagnosis()) from self._last_error
+        self._last_error = last_error
+        raise DatabaseUnavailable(self.diagnosis()) from last_error
 
     def _recycle(self, attempt: int, error) -> None:
         """Log why the checkout failed and replace any broken connections.

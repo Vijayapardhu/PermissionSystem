@@ -1625,18 +1625,35 @@ if os.path.isfile(logo_path) and os.path.isfile(crest_path) and Image:
     check('no white plate remains in the top bar',
           'au-logo-plate' not in base, 'white plate still wrapped around the logo')
 
-    # Sidebar content must sit against the column edge. The auto margins that
-    # centre a full-width page leave a visible band of empty background between
-    # the navigation and the first element once a sidebar owns the left edge.
+    # Sidebar content must fill the column the navigation leaves. The auto
+    # margins and the max-width cap exist to centre a page that owns the full
+    # viewport; once a sidebar owns the left edge they leave a visible band of
+    # empty background beside the column and cap the page well short of a wide
+    # window.
     _css_all = open('static/css/style.css', encoding='utf-8').read()
+    # The declarations of the rule that starts at the sidebar content selector.
+    # Matching up to the next "}" rather than to a "}\s*}" pair keeps this
+    # working whether or not the selector list has grown extra members.
+    _sel = _css_all.find('.au-app--sidebar .au-content,')
+    _end = _css_all.find('}', _sel) if _sel != -1 else -1
+    _sidebar_block = _css_all[_sel:_end] if _sel != -1 and _end != -1 else ''
     check('sidebar pages align content to the column edge',
-          re.search(r'\.au-app--sidebar \.au-content,[^}]*margin-inline:\s*0',
-                    _css_all, re.S) is not None,
+          re.search(r'margin-inline:\s*0', _sidebar_block) is not None,
           'content is auto-centred, leaving a gap beside the sidebar')
-    check('sidebar pages drop the left padding beside the column',
-          re.search(r'\.au-app--sidebar \.au-content,[^}]*padding-left:\s*0',
-                    _css_all, re.S) is not None,
-          'the column already provides the left edge; padding it again is a gutter')
+    check('sidebar pages are not capped narrower than the column',
+          re.search(r'max-width:\s*none', _sidebar_block) is not None,
+          'the page stops short of the window width')
+    check('the pages that set their own content column get the same treatment',
+          re.search(r'\.au-app--sidebar \.page-wrap,', _css_all) is not None
+          and re.search(r'\.au-app--sidebar \.page-wrap-narrow', _css_all) is not None,
+          'a standalone <main class="page-wrap-narrow"> stays centred and stranded')
+    # The content keeps its own gutter beside the column: the navigation provides
+    # the left edge, but a page whose first element touches it reads as clipped.
+    check('sidebar pages keep a left gutter beside the column',
+          re.search(r'padding-left:\s*0', _sidebar_block) is None
+          and re.search(r'\.au-content\s*\{[^}]*padding:\s*24px 28px',
+                        _css_all, re.S) is not None,
+          'content is flush against the navigation column')
     check('top bar and page content share the same left edge',
           re.search(r'\.au-app--sidebar \.app-topbar__inner\s*\{[^}]*margin-inline:\s*0',
                     _css_all, re.S) is not None)
@@ -1834,17 +1851,21 @@ _d = Database()
 _p = _Pool()
 _d.pool = _p
 
+_commits_while_open = None
 with _d.get_cursor() as _c:
     _c.execute('SELECT outer')
     with _d.get_cursor() as _inner:
         _inner.execute('SELECT middle')
         with _d.get_cursor() as _deepest:
             _deepest.execute('SELECT inner')
+    # Sampled from inside the outer block: a nested call that committed or
+    # rolled back would end the transaction the outer block is still writing to.
+    _commits_while_open = _p.conn.commits
 
 check('a nested query reuses the open connection',
       _p.checkouts == 1, f'took {_p.checkouts} connections for 3 queries')
-check('a nested query does not commit on its own', _p.conn.commits == 0,
-      f'{_p.conn.commits} commits before the outer block closed')
+check('a nested query does not commit on its own', _commits_while_open == 0,
+      f'{_commits_while_open} commits before the outer block closed')
 check('the outer block commits exactly once', _p.conn.commits == 1,
       f'{_p.conn.commits} commits')
 check('all three statements reached the connection',
@@ -1951,7 +1972,7 @@ _cfg_keys = ['DB_POOL_MIN', 'DB_POOL_MAX', 'DB_CONNECT_TIMEOUT',
              'DB_POOL_TIMEOUT', 'DB_POOL_RETRIES', 'DB_POOL_MAX_IDLE',
              'DB_POOL_MAX_LIFETIME', 'DB_POOL_RECONNECT_TIMEOUT']
 for _key in _cfg_keys:
-    check(f'config exposes {_key}', hasattr(app.config, _key))
+    check(f'config exposes {_key}', _key in app.config)
 check('idle connections are retired before the server reaps them',
       app.config['DB_POOL_MAX_IDLE'] < 900,
       f"max_idle={app.config['DB_POOL_MAX_IDLE']}s")
@@ -1959,12 +1980,156 @@ check('a connect cannot consume the whole pool wait',
       app.config['DB_CONNECT_TIMEOUT'] <= app.config['DB_POOL_TIMEOUT'],
       f"connect={app.config['DB_CONNECT_TIMEOUT']}s "
       f"wait={app.config['DB_POOL_TIMEOUT']}s")
-check('a sign-in outage is reported, not raised',
-      'temporarily unavailable' in client.get('/auth/login')
-      .get_data(as_text=True) or True)
-check('the sign-in failure path still fails closed',
-      _method_not_allowed(app, '/healthz') is False,
-      'healthz is not a POST-only route')
+
+# Render restarts the service on a non-2xx health check, so a database that is
+# merely unreachable must not be able to drive a restart loop. It cannot help:
+# the replacement process has the same network path to Supabase.
+_health = client.get('/healthz')
+check('health check stays 200 with no database reachable',
+      _health.status_code == 200, f'got {_health.status_code}')
+check('  -> and still reports the database verdict',
+      _health.get_json().get('database') in ('ok', 'unreachable', 'unknown'),
+      str(_health.get_json()))
+
+print()
+print('=' * 70)
+print('13. LETTER QR AND PUBLIC VERIFICATION')
+print('=' * 70)
+
+# The QR is the whole point of the letter, and the link behind it is public, so
+# the two things worth guarding are that it works and that it cannot be guessed.
+# A bare /verify/REQ-0001 would let anyone enumerate every student in the
+# department, and these records carry medical reasons.
+
+from app.utils import qr as qr_mod
+from app.utils.qr import (
+    data_uri, reference_for, resolve_reference, verification_url,
+)
+
+import base64
+
+_qr_app = app
+
+with _qr_app.test_request_context('/student/requests/1/letter'):
+    _link = verification_url(1024)
+    _reference = _link.rsplit('/verify/', 1)[1]
+    _token = _reference[len('REQ-1024.'):]
+    _origin = _qr_app.config['REDIRECT_URI'].rsplit('/', 2)[0]
+
+    check('the reference is the padded request id',
+          reference_for(1024) == 'REQ-1024', reference_for(1024))
+    check('the link points at the public verification route',
+          '/verify/' in _link, _link)
+    # An http:// link printed on a formal letter is wrong in a way the reader
+    # cannot fix, and nothing rewrites wsgi.url_scheme behind Render's proxy.
+    check('the link is minted against the configured origin',
+          _link.startswith(_origin), f'{_link} does not start with {_origin}')
+
+    # Reprinting a letter must not invalidate the code already on it: that is
+    # what a non-timestamped signature buys.
+    check('the same letter always produces the same code',
+          verification_url(1024) == _link)
+    check('a different request gets a different code',
+          verification_url(1025) != _link)
+
+    check('a signed link resolves to its request', resolve_reference(_reference) == 1024)
+    check('the token is not the bare id', '1024' not in _token.split('.')[-1], _token)
+
+    for _label, _bad in [
+        ('no token at all', 'REQ-1024'),
+        ('a forged signature', 'REQ-1024.forged'),
+        ('a tampered signature', _reference[:-2] + 'xy'),
+        ('a swapped readable half', 'REQ-0001' + _reference[7:]),
+        ('a bare numeric id', '1024'),
+        ('an empty link', ''),
+        ('a token with no reference', '.' + _token),
+    ]:
+        try:
+            _resolved = resolve_reference(_bad)
+            check(f'{_label} is refused', False, f'accepted as {_resolved}')
+        except ValueError:
+            check(f'{_label} is refused', True)
+
+    # A token minted for a different record, pasted onto this reference.
+    _other = verification_url(2048).rsplit('/verify/', 1)[1]
+    try:
+        resolve_reference('REQ-1024' + _other[len('REQ-2048'):])
+        check('a reference from another letter is refused', False, 'accepted')
+    except ValueError:
+        check('a reference from another letter is refused', True)
+
+    _png = data_uri(_link)
+    check('the code is an inline PNG', _png.startswith('data:image/png;base64,'))
+    check('  -> and decodes to a real PNG',
+          base64.b64decode(_png.split(',', 1)[1]).startswith(b'\x89PNG'))
+
+check('requirements pins the QR encoder',
+      re.search(r'^qrcode==', _req, re.M) is not None)
+
+# The letter, rendered for every status that can reach a printer.
+for _status, _expect in [
+    (RequestStatus.APPROVED, 'APPROVED'),
+    (RequestStatus.REJECTED, 'REJECTED'),
+    (RequestStatus.CANCELLED, 'CANCELLED'),
+    (RequestStatus.PENDING, 'AWAITING VERIFICATION'),
+]:
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid, s=_status: make_request(rid, s))
+    perm_mod.ApprovalModel.find_by_request = staticmethod(
+        lambda rid: [make_history(3)])
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = 1
+        sess['_last_seen'] = int(datetime.now().timestamp())
+    _page = client.get('/student/requests/1024/letter')
+    _html = _page.get_data(as_text=True)
+
+    check(f'letter renders for {_status.value}', _page.status_code == 200,
+          f'got {_page.status_code}')
+    check(f'  -> {_status.value} letter carries a QR code',
+          'data:image/png;base64,' in _html)
+    check(f'  -> {_status.value} letter states the PIN',
+          STUDENT.roll_number in _html)
+    check(f'  -> {_status.value} letter states the status',
+          _expect in _html, _expect)
+    check(f'  -> {_status.value} letter names the reviewing faculty',
+          LECTURER.name in _html)
+    # The signature blocks were replaced by a single name line. Leaving them in
+    # is what pushed the letter onto a second sheet.
+    check(f'  -> {_status.value} letter has no signature blocks',
+          'Faculty Signature' not in _html
+          and 'letter-sign' not in _html
+          and 'Head of Department</small>' not in _html)
+    check(f'  -> {_status.value} letter prints as one A4 page',
+          'size: A4 portrait' in _html
+          and 'break-inside: avoid' in _html)
+    check(f'  -> {_status.value} letter has no template errors',
+          'Traceback' not in _html and 'UndefinedError' not in _html)
+    with client.session_transaction() as sess:
+        sess.clear()
+
+# The page behind the code. A fresh client, and no session in it: the whole
+# point is that a gatekeeper with no account can open it.
+_verify_client = app.test_client()
+with _qr_app.test_request_context('/'):
+    _verify_ref = verification_url(1024).rsplit('/verify/', 1)[1]
+
+_response = _verify_client.get('/verify/' + _verify_ref)
+_body = _response.get_data(as_text=True)
+check('a signed link opens without signing in', _response.status_code == 200,
+      f'got {_response.status_code}')
+check('  -> the page shows the PIN', STUDENT.roll_number in _body)
+check('  -> the page shows the status', 'APPROVED' in _body)
+check('  -> the page names the reviewing faculty', LECTURER.name in _body)
+check('  -> the page shows the period', 'October' in _body)
+check('  -> the page is not indexable', 'noindex' in _body)
+# It is a read-only receipt, so it must offer no way to change anything.
+check('  -> the page exposes no form', '<form' not in _body.lower())
+check('  -> the page leaks no connection detail',
+      'postgres' not in _body.lower() and 'psycopg' not in _body.lower())
+
+check('a forged link 404s', _verify_client.get('/verify/REQ-1024.forged').status_code == 404)
+check('a bare reference 404s', _verify_client.get('/verify/REQ-0001').status_code == 404)
 
 print()
 print('=' * 70)

@@ -29,5 +29,8 @@ Flask-Mail==0.10.0
 # Spreadsheet roster import (Excel workbooks)
 openpyxl==3.1.5
 
+# QR code on the permission letter, for the public verification link
+qrcode==8.2
+
 # Image assertions in the test harness (branding checks)
 Pillow==11.3.0

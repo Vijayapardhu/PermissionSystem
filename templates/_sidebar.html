@@ -17,6 +17,18 @@
   </div>
 
   <nav class="au-side__nav" aria-label="Sections">
+    {# Every destination in this column, collected once. A deeper page such as
+       /student/requests/new sits underneath /student/requests, so matching on
+       the prefix alone lit up both "New Request" and "My Requests". Knowing the
+       full set lets an exact hit win outright, and only a page that is not a
+       destination of its own falls back to the section it lives under. #}
+    {% set ns = namespace(targets=[]) %}
+    {% for _section, _entries in nav_sections %}
+      {% for _entry in _entries %}
+        {% set _ = ns.targets.append(url_for(_entry.endpoint)) %}
+      {% endfor %}
+    {% endfor %}
+
     {% for section, entries in nav_sections %}
       {% if section %}
       <h3 class="au-side__grouphead">{{ section }}</h3>
@@ -24,8 +36,11 @@
       <ul class="au-side__list">
         {% for entry in entries %}
           {% set target = url_for(entry.endpoint) %}
+          {% set is_destination = current_path in ns.targets %}
           {% set active = current_path == target
-                          or (target != '/' and current_path.startswith(target.rstrip('/') + '/')) %}
+                          or (not is_destination
+                              and target != '/'
+                              and current_path.startswith(target.rstrip('/') + '/')) %}
         <li>
           <a class="au-side__item {{ 'is-active' if active }}"
              href="{{ target }}"

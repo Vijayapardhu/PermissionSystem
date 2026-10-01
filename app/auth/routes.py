@@ -56,6 +56,56 @@ def route_for_role(user) -> str:
     return url_for(DASHBOARDS[user.role])
 
 
+@auth.route('/verify/<reference>')
+def verify_letter(reference: str):
+    """Public lookup for a scanned permission letter.
+
+    Reachable without a session, because the whole point of the QR code is that
+    a gatekeeper, a class rep or an employer can confirm a letter without an
+    account. Access control is the signature in the URL (see app/utils/qr.py),
+    not authentication, so this route deliberately grants no privilege: it shows
+    what the letter already shows and nothing that only staff can see.
+
+    A link that does not verify returns 404, the same as a request that does not
+    exist. Answering 403 to a forged signature and 404 to a missing one would
+    hand anyone a way to test which reference numbers are real.
+    """
+    from app.models.permission import ApprovalModel, PermissionModel
+    from app.models.user import UserModel
+    from app.utils.qr import reference_for, resolve_reference
+
+    try:
+        request_id = resolve_reference(reference)
+    except ValueError:
+        abort(404)
+
+    try:
+        record = PermissionModel.find_by_id(request_id)
+    except Exception:
+        current_app.logger.exception('Verification lookup failed for %s', reference)
+        abort(503, description=(
+            'The department record could not be reached. Please try again shortly.'
+        ))
+
+    if record is None:
+        abort(404)
+
+    student = UserModel.find_by_id(record.student_id)
+    history = ApprovalModel.find_by_request(request_id)
+    decision = history[-1] if history else None
+
+    faculty_name = getattr(decision, 'faculty_name', None) if decision else None
+
+    return render_template(
+        'auth/verify.html',
+        record=record,
+        student=student,
+        decision=decision,
+        faculty_name=faculty_name,
+        reference=reference_for(request_id),
+    )
+
+
 @auth.route('/')
 def landing():
     if current_user():

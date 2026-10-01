@@ -11,6 +11,7 @@ from app.models.database import db
 from app.models.permission import ApprovalModel, PermissionModel, ProofModel
 from app.models.user import UserModel
 from app.permissions.service import ValidationError, cancel_request, submit_request
+from app.utils.qr import letter_qr
 from app.utils.security import current_user, login_required, roles_required
 
 student_bp = Blueprint('student', __name__, url_prefix='/student')
@@ -178,6 +179,15 @@ def request_letter(request_id: int):
         faculty_name = getattr(latest, 'faculty_name', None) or '—'
         decision = latest
 
+    # The QR points at the public verification page. A QR encoder that is
+    # missing or failing yields an empty data URI and the letter prints without
+    # a code, which is a far better outcome than a letter that will not print.
+    try:
+        qr = letter_qr(record.id)
+    except Exception:
+        current_app.logger.exception('Could not build the verification QR code')
+        qr = {'url': '', 'image': '', 'reference': f'REQ-{record.id:04d}'}
+
     return render_template(
         'student/letter.html',
         user=user,
@@ -187,6 +197,7 @@ def request_letter(request_id: int):
         history=history,
         faculty_name=faculty_name,
         decision=decision,
+        qr=qr,
     )
 
 

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify {{ reference }} &middot; {{ UNIVERSITY_NAME }}</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="{{ asset('images/aditya-crest.png') }}">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{{ asset('css/style.css') }}" rel="stylesheet">
+  <style>
+    .verify-shell {
+      max-width: 34rem;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 3rem;
+      font-family: var(--au-font);
+    }
+    .verify-card {
+      background: #fff;
+      border: 1px solid var(--au-border, #dfe4ec);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 12px 32px rgba(16, 24, 40, .1);
+    }
+    .verify-card__head {
+      display: flex;
+      align-items: center;
+      gap: .9rem;
+      padding: 1.1rem 1.25rem;
+      border-bottom: 1px solid var(--au-border, #dfe4ec);
+    }
+    .verify-card__head img { height: 34px; width: auto; }
+    .verify-card__head strong { display: block; font-size: .95rem; letter-spacing: .02em; }
+    .verify-card__head span { font-size: .72rem; color: var(--au-text-faint, #64748b); }
+
+    .verify-state {
+      display: flex;
+      align-items: center;
+      gap: .85rem;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--au-border, #dfe4ec);
+      font-weight: 700;
+    }
+    .verify-state i { font-size: 1.6rem; line-height: 1; }
+    .verify-state small {
+      display: block;
+      font-size: .66rem;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      opacity: .75;
+    }
+    .verify-state--approved  { background: #f0fdf6; color: #046c4e; }
+    .verify-state--rejected  { background: #fef2f2; color: #991b1b; }
+    .verify-state--pending   { background: #fffbeb; color: #92400e; }
+    .verify-state--cancelled { background: #f8fafc; color: #334155; }
+    .verify-state--expired   { background: #f1f5f9; color: #0f172a; }
+
+    .verify-rows { margin: 0; }
+    .verify-row {
+      display: flex;
+      gap: 1rem;
+      padding: .6rem 1.25rem;
+      border-bottom: 1px solid #eef1f5;
+      font-size: .86rem;
+    }
+    .verify-row:last-child { border-bottom: 0; }
+    .verify-row dt {
+      flex: 0 0 38%;
+      margin: 0;
+      color: var(--au-text-faint, #64748b);
+      font-weight: 500;
+    }
+    .verify-row dd { flex: 1; margin: 0; font-weight: 600; word-break: break-word; }
+    .verify-row dd.is-quiet { font-weight: 400; }
+
+    .verify-foot {
+      padding: .9rem 1.25rem;
+      background: #f8fafc;
+      border-top: 1px solid var(--au-border, #dfe4ec);
+      font-size: .72rem;
+      color: var(--au-text-faint, #64748b);
+    }
+    .verify-foot strong { color: #046c4e; }
+  </style>
+</head>
+<body class="verify-shell">
+
+  <div class="verify-card">
+    <div class="verify-card__head">
+      <img src="{{ asset('images/aditya-logo.png') }}"
+           alt="{{ UNIVERSITY_NAME }}"
+           class="au-wordmark au-wordmark--invert-keep">
+      <div>
+        <strong>{{ UNIVERSITY_NAME|upper }}</strong>
+        <span>{{ DEPARTMENT_NAME }}</span>
+      </div>
+    </div>
+
+    {% set state = record.status.value|lower %}
+    {% set icons = {
+      'APPROVED': 'check-circle-fill', 'REJECTED': 'x-circle-fill',
+      'PENDING': 'hourglass-split', 'CANCELLED': 'slash-circle',
+      'EXPIRED': 'clock-history' } %}
+    <div class="verify-state verify-state--{{ state }}">
+      <i class="bi bi-{{ icons.get(record.status.value, 'question-circle') }}"></i>
+      <div>
+        <small>Status verified against the department record</small>
+        {{ record.status.value }}
+      </div>
+    </div>
+
+    <dl class="verify-rows">
+      <div class="verify-row">
+        <dt>PIN / Roll number</dt>
+        <dd>{{ student.roll_number if student and student.roll_number else '—' }}</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Reference number</dt>
+        <dd>{{ reference }}</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Student name</dt>
+        <dd>{{ student.name if student else '—' }}</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Department</dt>
+        <dd>{{ student.department if student else '—' }}</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Permission type</dt>
+        <dd>{{ record.permission_type.value|title }} Permission</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Period</dt>
+        <dd>
+          {{ record.start_date.strftime('%d %B %Y') }}
+          {% if record.end_date != record.start_date %}
+            to {{ record.end_date.strftime('%d %B %Y') }}
+          {% endif %}
+          {% if record.start_time and record.end_time %}
+            <br><span class="is-quiet">{{ record.start_time.strftime('%I:%M %p') }} &ndash; {{ record.end_time.strftime('%I:%M %p') }}</span>
+          {% else %}
+            <br><span class="is-quiet">All day</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div class="verify-row">
+        <dt>Reason stated</dt>
+        <dd class="is-quiet">{{ record.reason }}</dd>
+      </div>
+      <div class="verify-row">
+        <dt>Reviewed by</dt>
+        <dd>
+          {% if faculty_name and faculty_name != '—' %}{{ faculty_name }}
+          {% else %}<span class="is-quiet">Not yet actioned</span>{% endif %}
+        </dd>
+      </div>
+      <div class="verify-row">
+        <dt>Decision date</dt>
+        <dd>
+          {% if decision and decision.actioned_at %}
+            {{ decision.actioned_at.strftime('%d %B %Y at %I:%M %p') }}
+          {% else %}
+            <span class="is-quiet">—</span>
+          {% endif %}
+        </dd>
+      </div>
+      {% if decision and decision.remarks %}
+      <div class="verify-row">
+        <dt>Remarks</dt>
+        <dd class="is-quiet">{{ decision.remarks }}</dd>
+      </div>
+      {% endif %}
+      <div class="verify-row">
+        <dt>Submitted on</dt>
+        <dd>{{ record.created_at.strftime('%d %B %Y') }}</dd>
+      </div>
+    </dl>
+
+    <div class="verify-foot">
+      <strong>Verified.</strong> This link was signed by
+      {{ UNIVERSITY_NAME }}'s permission system and its reference
+      <strong>{{ reference }}</strong> exists in the department record with the
+      status shown above. The signature is part of the link: a reference number
+      on its own cannot be looked up.
+    </div>
+  </div>
+
+</body>
+</html>

@@ -231,8 +231,12 @@ sessions.
   limit is what runs out first on the free Supabase plan.
 - `--timeout 120`: uploads run to 5 MB and the permission letter renders inline,
   which is tight against gunicorn's 30-second default.
-- `/healthz` pings Postgres, because Render restarts the service when the health
-  check fails and a container that cannot reach the database is genuinely broken.
+- `/healthz` stays 200 even when Postgres is unreachable. Render restarts the
+  service on a non-2xx health check, and restarting cannot fix a database the
+  container cannot route to — the replacement process has the same network path.
+  The probe reports `{"status":"ok","database":"unreachable"}` instead, and caches
+  that verdict for `HEALTH_DB_CACHE_SECONDS` so polling does not itself take a
+  pooled connection.
 
 ## Install on a new computer
 
