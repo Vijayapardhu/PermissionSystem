@@ -44,9 +44,9 @@ services:
       # so an unresolvable host boots and recovers on its own.
       - key: DATABASE_URL
         sync: false
-      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, which is
-      # charged directly against the project's connection limit now that
-      # Supavisor is bypassed. Keep it inside that limit.
+      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, charged
+      # straight against the project's connection limit, since nothing sits in
+      # front of Postgres to pool it. Keep it inside that limit.
       #
       # MAX must exceed --threads, or a worker deadlocks against itself. MIN is
       # what makes that survivable: the pool grows one connection at a time and

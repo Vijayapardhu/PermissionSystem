@@ -250,8 +250,9 @@ class Database:
         # db.<ref>.supabase.co, is published as an IPv6-only AAAA record with no A
         # record at all, so on an IPv4-only network the name does not resolve --
         # "getaddrinfo failed", raised before a packet is even sent. If that is
-        # the failure, the fix is IPv6 egress on this host or the pooler URI in
-        # DATABASE_URL, not a guess made here at import time.
+        # the failure, the fix is IPv6 egress on this host, or a DATABASE_URL that
+        # names a host it can actually resolve. Neither is a guess worth making at
+        # import time, where it would hide the real configuration.
         self.target = describe_dsn(dsn)
         self._wait = float(app.config['DB_POOL_TIMEOUT'])
         self._attempts = max(1, int(app.config['DB_POOL_RETRIES']))
@@ -307,7 +308,7 @@ class Database:
                 # with AT TIME ZONE REPORT_TIMEZONE so a request submitted at
                 # 23:30 IST lands on the right chart day.
                 'options': '-c timezone=UTC',
-                # A carrier-grade NAT or a load balancer in front of Supavisor
+                # Any NAT or load balancer between this process and Postgres
                 # silently drops idle flows. Without keepalives a pooled
                 # connection can stay "open" locally long after it is dead.
                 'keepalives': 1,
