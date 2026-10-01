@@ -456,6 +456,14 @@ a:hover { text-decoration: underline; }
   padding: 24px 28px 8px;
 }
 
+/* The sign-in split is edge-to-edge and exactly one viewport tall, so it has to
+   escape the centred, padded content column that every other page uses. */
+.au-content--flush {
+  max-width: none;
+  margin-inline: 0;
+  padding: 0;
+}
+
 .au-flashes { margin-bottom: .5rem; }
 
 .au-foot {

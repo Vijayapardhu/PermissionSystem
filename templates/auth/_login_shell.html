@@ -1,6 +1,11 @@
 {#
    Shared split layout for both sign-in pages.
 
+   This must extend base.html. It used to be a bare fragment, so login.html and
+   faculty_login.html rendered an <div> with no document around it: no <head>,
+   no Bootstrap, no style.css, hence a completely unstyled page. Extending the
+   base template is what pulls the stylesheet in.
+
    Left: the brand panel on the Aditya navy gradient, carrying the wordmark and
    the campus illustration inside a white plate. The artwork is navy line art
    with a transparent background, so it needs a light plate to read correctly.
@@ -10,6 +15,13 @@
    Below the lg breakpoint the two stack, and the artwork is dropped so the form
    is not pushed below the fold on a phone.
 #}
+{% extends 'base.html' %}
+
+{# The split is edge-to-edge and exactly one viewport tall, so it must escape
+   the centred, padded content column. #}
+{% block main_class %}au-content au-content--flush{% endblock %}
+
+{% block content %}
 <div class="auth-split">
 
   <section class="auth-split__art">
@@ -51,3 +63,4 @@
     {% block form %}{% endblock %}
   </section>
 </div>
+{% endblock %}
