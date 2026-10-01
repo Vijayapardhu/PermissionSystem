@@ -7,9 +7,9 @@ dependencies, prepares .env and loads the database schema.
 
 Re-running is safe: it skips anything already in place.
 
-Storage is Supabase, not the local filesystem, so there is no upload folder to
-create here. Create the bucket in the Supabase dashboard (Storage -> New bucket,
-Public off) before the first upload.
+Storage is Cloudflare R2, not the local filesystem, so there is no upload folder
+to create here. Create the bucket and its API token in the Cloudflare dashboard
+(R2 -> Create bucket, Public off) before the first upload.
 """
 
 import os
@@ -126,7 +126,8 @@ say('      CLIENT_ID      Entra ID -> App registrations -> Overview')
 say('      TENANT_ID      Entra ID -> App registrations -> Overview')
 say('      CLIENT_SECRET  Certificates & secrets -> New client secret')
 say('      DATABASE_URL   Supabase -> Project Settings -> Database -> URI')
-say('      SUPABASE_URL / SUPABASE_SECRET_KEY   Supabase -> Project Settings -> API Keys')
+say('      R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY')
+say('                       Cloudflare -> R2 -> Manage R2 API Tokens')
 say('')
 say('    Leave DEV_MODE=true to use the local account picker while testing.')
 say('    Set DEV_MODE=false once Outlook sign-in works.')
@@ -135,13 +136,15 @@ say('    Set DEV_MODE=false once Outlook sign-in works.')
 step(4, 'Storage bucket')
 
 say('')
-say('    Proof documents live in Supabase Storage, not on this machine.')
-say('    Create the bucket once, in the Supabase dashboard:')
-say('      Storage -> New bucket -> name it "proofs" -> Public: OFF')
+say('    Proof documents live in a Cloudflare R2 bucket, not on this machine.')
+say('    Create the bucket and a token once, in the Cloudflare dashboard:')
+say('      R2 -> Create bucket -> name it "proofs" -> public access OFF')
+say('      R2 -> Manage R2 API Tokens -> Create Account API token')
+say('                      (Object Read & Write on that bucket)')
 say('')
 say('    The bucket must stay private. Proofs carry medical and identity')
 say('    documents and are only ever served through an authorised route.')
-ok.append('storage: Supabase bucket "proofs" (create it in the dashboard)')
+ok.append('storage: R2 bucket "proofs" (create it and a token in the dashboard)')
 
 # ---------------------------------------------------------------- 5
 step(5, 'Database schema')
@@ -194,7 +197,7 @@ if fail:
 
 say('Next steps:')
 say('  1. Edit .env and enter CLIENT_ID, TENANT_ID, CLIENT_SECRET,')
-say('     DATABASE_URL and the Supabase API keys.')
+say('     DATABASE_URL and the R2 API token values.')
 say('  2. Start the app:')
 say('       Windows   .venv\\Scripts\\activate     then  python wsgi.py')
 say('       mac/Linux source .venv/bin/activate   then  python wsgi.py')

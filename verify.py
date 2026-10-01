@@ -27,6 +27,14 @@ os.environ['DB_POOL_RETRIES'] = '1'
 os.environ.setdefault('SUPABASE_URL', 'https://fake.supabase.co')
 os.environ.setdefault('SUPABASE_SECRET_KEY', 'sb_secret_fake')
 os.environ.setdefault('SUPABASE_STORAGE_BUCKET', 'proofs')
+# Cloudflare R2 is the proof store, and the harness fakes the S3 client rather
+# than reaching Cloudflare. The values only have to be non-empty: storage_bucket
+# refuses to build a client without them, and the fake replaces the client.
+os.environ['STORAGE_BACKEND'] = 'r2'
+os.environ.setdefault('R2_ACCOUNT_ID', 'fake-account')
+os.environ.setdefault('R2_ACCESS_KEY_ID', 'fake-key')
+os.environ.setdefault('R2_SECRET_ACCESS_KEY', 'fake-secret')
+os.environ.setdefault('R2_BUCKET', 'proofs')
 
 failures = []
 passes = []
@@ -1441,7 +1449,7 @@ finally:
 
 print()
 print('=' * 70)
-print('11. SUPABASE STORAGE ROUND TRIP')
+print('11. PROOF STORAGE ROUND TRIP (CLOUDFLARE R2)')
 print('=' * 70)
 
 from werkzeug.datastructures import FileStorage
@@ -1450,46 +1458,47 @@ import app.utils.files as files_mod
 from app.utils.files import UploadError, delete_proof, fetch_proof, validate_and_store
 
 
-class _FakeBucket:
-    """In-memory stand-in for supabase-py's storage.from_(...) handle."""
+class _FakeMissing(Exception):
+    """Shaped like botocore's ClientError for an object that is not there."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {'Error': {'Code': code, 'Message': code}}
+
+
+class _FakeS3:
+    """In-memory stand-in for the boto3 S3 client R2 is reached through."""
 
     def __init__(self):
         self.objects = {}
+        self.puts = 0
 
-    def upload(self, key, payload, options=None):
-        if not (options or {}).get('upsert') == 'false' and key in self.objects:
-            return type('R', (), {'error': 'Asset already exists'})()
-        self.objects[key] = bytes(payload)
-        return type('R', (), {'error': None})()
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('404')
+        return {'ContentLength': len(self.objects[Key])}
 
-    def download(self, key):
-        if key not in self.objects:
-            raise KeyError(key)
-        return self.objects[key]
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        self.puts += 1
+        self.objects[Key] = bytes(Body)
+        return {'ETag': f'"{len(self.objects[Key])}"'}
 
-    def remove(self, keys):
-        for key in keys:
-            self.objects.pop(key, None)
-        return keys
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('NoSuchKey')
+        return {'Body': io.BytesIO(self.objects[Key])}
 
-
-class _FakeStorage:
-    def __init__(self, bucket):
-        self._bucket = bucket
-
-    def from_(self, name):
-        return self._bucket
+    def delete_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('NoSuchKey')
+        self.objects.pop(Key)
 
 
-class _FakeClient:
-    def __init__(self, bucket):
-        self.storage = _FakeStorage(bucket)
+_FAKE = _FakeS3()
+_fake_stored = {'count': 0}
 
-
-_FAKE = _FakeBucket()
-
-_real_storage_client = files_mod.storage_client
-files_mod.storage_client = lambda: _FakeClient(_FAKE)
+_real_storage_bucket = files_mod.storage_bucket
+files_mod.storage_bucket = lambda: (_FAKE, 'proofs')
 
 
 def store(name, payload):
@@ -1516,6 +1525,19 @@ with app.test_request_context():
           str(meta['file_size']))
     check('stored key never leaks the original filename',
           'doctor-letter' not in meta['file_path'], meta['file_path'])
+
+    # An existing proof must not be clobbered: S3's put_object overwrites
+    # silently, so the pre-write head check is the only thing preventing it.
+    _puts_before = _FAKE.puts
+    _payload_before = _FAKE.objects[meta['file_path']]
+    try:
+        _put_again = files_mod._put(meta['file_path'], b'%PDF-1.7\nX', 'application/pdf')
+        check('an existing proof is never overwritten', False, 'the write went through')
+    except UploadError:
+        check('an existing proof is never overwritten', True)
+    check('  -> and the stored bytes are untouched',
+          _FAKE.objects[meta['file_path']] == _payload_before
+          and _FAKE.puts == _puts_before)
 
     renamed = store('holiday.png', b'%PDF-1.7\n' + b'0' * 100)
     try:
@@ -1562,8 +1584,38 @@ with app.test_request_context():
     except UploadError:
         check('fetching a deleted proof raises', True)
 
-files_mod.storage_client = _real_storage_client
+# The client must be built from the environment, and refuse to exist without
+# credentials rather than dialling an endpoint built from empty strings.
+files_mod.storage_bucket = _real_storage_bucket
+files_mod._handle, files_mod._bucket = None, None
+with app.test_request_context():
+    _saved = {key: app.config[key] for key in
+              ('R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY')}
+    app.config.update({'R2_ACCOUNT_ID': '', 'R2_ACCESS_KEY_ID': '',
+                       'R2_SECRET_ACCESS_KEY': ''})
+    try:
+        files_mod.storage_bucket()
+        check('unconfigured storage refuses to build a client', False, 'no error')
+    except UploadError as exc:
+        check('unconfigured storage refuses to build a client',
+              'not configured' in str(exc), str(exc))
+    app.config.update(_saved)
 
+    # The real builder is what constructs the R2 client, so the endpoint, the
+    # signing scheme and the bucket all come from config rather than a literal.
+    import boto3
+    _built, _built_bucket = files_mod.storage_bucket()
+    check('the R2 client is built against the account endpoint',
+          _built.meta.endpoint_url.endswith('.r2.cloudflarestorage.com'),
+          str(getattr(_built.meta, 'endpoint_url', '')))
+    check('  -> with the configured bucket', _built_bucket == 'proofs', _built_bucket)
+    check('  -> and SigV4 signing', _built.meta.config.signature_version == 's3v4',
+          str(_built.meta.config.signature_version))
+    check('  -> and the region Cloudflare documents', _built.meta.region_name == 'auto',
+          str(_built.meta.region_name))
+    files_mod._handle, files_mod._bucket = None, None
+
+print()
 
 print()
 print('=' * 70)
