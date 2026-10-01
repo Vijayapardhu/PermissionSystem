@@ -1,5 +1,6 @@
 import os
 from datetime import timedelta
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -11,32 +12,41 @@ class Config:
 
     # Database: Supabase Postgres, DIRECT connection.
     #
-    # The direct host is db.<ref>.supabase.co, not aws-0-<region>.pooler... The
-    # pooler reaps and reschedules session connections underneath the client,
-    # which is what produced the production log's "consuming input failed: SSL
-    # SYSCALL error: EOF detected", and it shares one slot limit between every
-    # client pointed at the project. This app pools for itself, so it has nothing
-    # for Supavisor to pool.
+    # The direct host is db.<ref>.supabase.co. Nothing in this app derives a
+    # second endpoint from it: DATABASE_URL is dialled exactly as written, with
+    # no pooler host, no startup probe and no fallback, so the target in the
+    # startup log is the URI the operator configured.
     #
-    # db.<ref>.supabase.co is published as an IPv6-only AAAA record. On an
-    # IPv4-only network the name does not resolve at all, so DB_POOLER_REGION
-    # below is what keeps the site up when that is the case: with it set, the app
-    # tries direct first and falls back to Supavisor, logging which one answered.
-    DATABASE_URL = os.environ.get('DATABASE_URL') or ''
-
-    # Supabase project region, e.g. ap-southeast-2. Non-empty enables the direct
-    # -> Supavisor fallback; set it to "" to use DATABASE_URL verbatim with no
-    # startup probe. Both endpoints are derived from one DSN (the project ref
-    # appears in both the pooler username and the direct hostname), so this is
-    # the only extra value a fallback needs.
-    DB_POOLER_REGION = os.environ.get('DB_POOLER_REGION', 'ap-southeast-2')
+    # Supavisor, the pooler, is deliberately not used. It reaps and reschedules
+    # session connections underneath the client, which is what produced the
+    # production log's "consuming input failed: SSL SYSCALL error: EOF
+    # detected", and it shares one slot limit between every client pointed at
+    # the project. This app pools for itself, so there is nothing for Supavisor
+    # to pool.
+    #
+    # db.<ref>.supabase.co is published as an IPv6-only AAAA record, so the host
+    # running the app needs IPv6 egress to resolve it. The pool opens in the
+    # background either way, so an unresolvable host still boots and recovers on
+    # its own rather than failing every request until the next deploy.
+    #
+    # Set DATABASE_URL to override all of this. Otherwise the URI is assembled
+    # from the project ref and the password below, which keeps the password out
+    # of two places at once.
+    SUPABASE_PROJECT_REF = (
+        os.environ.get('SUPABASE_PROJECT_REF') or 'cndqajpjmnvsafrxjowx'
+    )
+    SUPABASE_DB_PASSWORD = os.environ.get('SUPABASE_DB_PASSWORD') or ''
+    DATABASE_URL = os.environ.get('DATABASE_URL') or (
+        f'postgresql://postgres:{quote(SUPABASE_DB_PASSWORD, safe="")}'
+        f'@db.{SUPABASE_PROJECT_REF}.supabase.co:5432/postgres'
+        if SUPABASE_DB_PASSWORD else ''
+    )
 
     # Sizing: the pool is per gunicorn worker process, so the total is
     # DB_POOL_MAX x workers, and it is charged against the Supabase project's
-    # connection limit because the direct endpoint bypasses Supavisor's own
-    # pool. It must also be at least the number of --threads that worker serves,
-    # or a worker deadlocks against itself: every thread holds a connection
-    # while a query runs, and the pool checkout then blocks forever.
+    # connection limit. It must also be at least the number of --threads that
+    # worker serves, or a worker deadlocks against itself: every thread holds a
+    # connection while a query runs, and the pool checkout then blocks forever.
     #
     # DB_POOL_MIN is what makes that survivable rather than merely unlikely.
     # It is the number of connections the pool holds ready, and the pool grows

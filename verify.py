@@ -250,8 +250,13 @@ for role_name, path, needs_db, expected in matrix:
             status = 500 if expected is None else 'raised'
 
         if expected is None:
-            # Route is role-allowed; a DB error here is expected and fine.
-            check(f'{role_name} can reach {path}', status in (200, 500),
+            # Route is role-allowed, so the guard let it through regardless of
+            # what the database did. 200 when the model calls are stubbed, 503
+            # when they are not and the pool cannot connect: an unreachable
+            # database is now reported as an unavailable service rather than
+            # escaping as an unhandled exception, which is the point of the
+            # DatabaseUnavailable handler.
+            check(f'{role_name} can reach {path}', status in (200, 500, 503),
                   f'status {status}')
         else:
             check(f'{role_name} -> {path} returns {expected}',
@@ -1987,7 +1992,7 @@ check('a live connection is rolled back after a failed commit',
 # and the retry never gets to happen, which is exactly the flake this section
 # must not have.
 _d2 = Database()
-_d2.target = 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres'
+_d2.target = 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres'
 _d2._wait = 0.5
 _d2._attempts = 2
 _d2._local = _threading.local()
@@ -1999,7 +2004,7 @@ try:
 except DatabaseUnavailable as exc:
     check('an unreachable pool raises DatabaseUnavailable', True)
     check('  -> the failure names the connection target',
-          'aws-0-x.pooler.supabase.com:5432' in str(exc), str(exc))
+          'db.ref-x.supabase.co:5432' in str(exc), str(exc))
 except Exception as exc:
     check('an unreachable pool raises DatabaseUnavailable', False,
           f'{type(exc).__name__}: {exc}')
@@ -2022,7 +2027,7 @@ class _NoStatsPool(_Pool):
 
 
 _d4 = Database()
-_d4.target = 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres'
+_d4.target = 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres'
 _d4._wait = 0.05
 _d4._attempts = 1
 _d4._local = _threading.local()
@@ -2058,10 +2063,10 @@ except DatabaseUnavailable as exc:
 
 check('the DSN summary carries no password',
       describe_dsn(
-          'postgresql://postgres.ref:s3cr%40et@aws-0-x.pooler.supabase.com:5432/postgres'
-      ) == 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres',
+          'postgresql://postgres.ref:s3cr%40et@db.ref-x.supabase.co:5432/postgres'
+      ) == 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres',
       describe_dsn(
-          'postgresql://postgres.ref:s3cr%40et@aws-0-x.pooler.supabase.com:5432/postgres'
+          'postgresql://postgres.ref:s3cr%40et@db.ref-x.supabase.co:5432/postgres'
       ))
 
 
@@ -2086,9 +2091,9 @@ check('a live connection passes the checkout check',
       reject_dead_connection(_DeadConn(status=0)) is None)
 
 # The pool is configured to stop serving sockets the server has already reaped.
-# Supavisor closes a silent session after 15 minutes, so the app has to retire
-# its own idle sockets well before that or the first request after a quiet spell
-# is the one that discovers the socket is dead.
+# Supabase closes a silent session well before that, so the app has to retire its
+# own idle sockets early or the first request after a quiet spell is the one that
+# discovers the socket is dead.
 _cfg_keys = ['DB_POOL_MIN', 'DB_POOL_MAX', 'DB_CONNECT_TIMEOUT',
              'DB_POOL_TIMEOUT', 'DB_POOL_RETRIES', 'DB_POOL_MAX_IDLE',
              'DB_POOL_MAX_LIFETIME', 'DB_POOL_RECONNECT_TIMEOUT']
@@ -2267,6 +2272,230 @@ try:
           _verify_client.get('/verify/REQ-0001').status_code == 404)
 finally:
     _restore_verify()
+
+print()
+print('=' * 70)
+print('14. LIVE SOCKET CHECKS AND UNAVAILABILITY')
+print('=' * 70)
+
+# Everything above proved the pool fails *cleanly*. These check the two things
+# left: that a socket which died while idle is never handed to a query, and
+# that the single configured DSN is the only endpoint the app can dial.
+
+from app.models.database import (
+    describe_dsn, reject_dead_connection, verify_connection,
+)
+from config import Config
+from flask import Flask
+
+PROJECT_REF = 'cndqajpjmnvsafrxjowx'
+DIRECT_URI = (
+    f'postgresql://postgres:s3cr%40et@db.{PROJECT_REF}.supabase.co:5432/postgres'
+)
+
+# One endpoint, verbatim. Nothing is derived from the DSN, nothing is probed at
+# boot and nothing is tried second, so a DSN the operator wrote cannot be
+# rewritten into a host that answers for a different tenant.
+check('no pooler endpoint machinery is left in the db layer',
+      not any(hasattr(db_mod, _gone) for _gone in
+              ('resolve_dsn', 'pooled_dsn', 'direct_dsn', '_reachable',
+               'project_ref', '_retarget')),
+      ', '.join(_gone for _gone in
+                ('resolve_dsn', 'pooled_dsn', 'direct_dsn', '_reachable',
+                 'project_ref', '_retarget') if hasattr(db_mod, _gone)))
+check('config carries neither a pooler region nor a fallback DSN',
+      'DB_POOLER_REGION' not in app.config
+      and 'DATABASE_URL_FALLBACK' not in app.config,
+      ', '.join(sorted(
+          key for key in app.config
+          if 'POOLER' in key or 'FALLBACK' in key)) or 'none')
+check('the direct URI is described without its password',
+      describe_dsn(DIRECT_URI)
+      == f'postgresql://postgres@db.{PROJECT_REF}.supabase.co:5432/postgres',
+      describe_dsn(DIRECT_URI))
+
+# The pool is opened against the DSN exactly as configured: no derived host, no
+# boot-time probe, no second candidate. A loopback DSN stands in for the real
+# one so this checks the target rather than the network -- the connection fails
+# instantly in a background thread that the pool owns.
+_probe = describe_dsn('postgresql://nobody@127.0.0.1:1/nobody')
+_verbatim_app = Flask('verbatim')
+_verbatim_app.config.update(Config.__dict__)
+_verbatim_app.config['DATABASE_URL'] = 'postgresql://nobody@127.0.0.1:1/nobody'
+_verbatim_db = Database()
+_verbatim_db.init_app(_verbatim_app)
+check('the pool opens against the configured DSN, verbatim',
+      _verbatim_db.target == _probe, _verbatim_db.target)
+check('  -> and the pool was dialled with the DSN itself, not a rehosted one',
+      _verbatim_db.pool.conninfo == 'postgresql://nobody@127.0.0.1:1/nobody',
+      _verbatim_db.pool.conninfo)
+_verbatim_db.pool.close()
+
+
+class _PingConn:
+    """Stands in for a pooled connection, counting what the check does to it."""
+
+    def __init__(self, ping_error=None, closed=False, status=0):
+        self.closed = closed
+        self.pgconn = type('Pq', (), {'transaction_status': status})()
+        self.ping_error = ping_error
+        self.pings = 0
+        self.rollbacks = 0
+
+    def cursor(self, row_factory=None):
+        conn = self
+
+        class _C:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def execute(self_inner, sql, params=None):
+                conn.pings += 1
+                if conn.ping_error:
+                    raise conn.ping_error
+
+            def fetchone(self_inner):
+                return {'?column?': 1}
+
+        return _C()
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+_ping = _PingConn()
+verify_connection(_ping, interval=30)
+check('a connection nobody has verified is checked against the server',
+      _ping.pings == 1, f'{_ping.pings} round trips')
+check('  -> and the probe leaves no transaction open',
+      _ping.rollbacks == 1, f'{_ping.rollbacks} rollbacks')
+
+# The stamp lives on the connection, so a hot path pays nothing.
+verify_connection(_ping, interval=30)
+check('a just-verified connection is not checked again',
+      _ping.pings == 1, f'{_ping.pings} round trips after a second checkout')
+
+_ping_stale = _PingConn()
+_ping_stale._au_verified_at = 0.0
+verify_connection(_ping_stale, interval=30)
+check('a connection idle past the interval is checked again',
+      _ping_stale.pings == 1, f'{_ping_stale.pings} round trips')
+
+# The failure this whole check exists for: the socket died while idle, so it
+# still looks alive to libpq and is only found out when a query goes out on it.
+_dead_while_idle = _PingConn(
+    ping_error=OperationalError(
+        'consuming input failed: SSL SYSCALL error: EOF detected'))
+try:
+    verify_connection(_dead_while_idle, interval=30)
+    check('a socket that died while idle is rejected at checkout', False, 'accepted')
+except OperationalError as exc:
+    check('a socket that died while idle is rejected at checkout',
+          'SSL SYSCALL error' in str(exc), str(exc))
+check('  -> the failure is reported, not masked by the rollback',
+      _dead_while_idle.rollbacks == 0,
+      f'{_dead_while_idle.rollbacks} rollbacks against a dead socket')
+
+_ping_off = _PingConn()
+verify_connection(_ping_off, interval=0)
+check('the round trip can be switched off', _ping_off.pings == 0)
+
+for label, conn in [('a closed one', _PingConn(closed=True)),
+                    ('one libpq has given up on', _PingConn(status=UNKNOWN))]:
+    try:
+        verify_connection(conn, interval=30)
+        check(f'{label} is rejected before any round trip', False, 'accepted')
+    except OperationalError:
+        check(f'{label} is rejected before any round trip', True)
+
+# Sizing is enforced rather than trusted, because the value actually running is
+# whatever the dashboard holds, and a floor below the thread count is what put
+# production's seven waiting requests in a queue with nothing to give them.
+for _label, _config, _expected in [
+    ('a floor below the thread count is raised to it',
+     {'DB_POOL_MIN': 2, 'DB_POOL_MAX': 8}, (4, 8)),
+    ('a ceiling at or below the floor is lifted above it',
+     {'DB_POOL_MIN': 4, 'DB_POOL_MAX': 4}, (4, 5)),
+    ('sane values are left alone',
+     {'DB_POOL_MIN': 4, 'DB_POOL_MAX': 6}, (4, 6)),
+]:
+    _sizing_app = Flask('sizing')
+    _sizing_app.config.update(Config.__dict__)
+    _sizing_app.config['DATABASE_URL'] = 'postgresql://nobody@127.0.0.1:1/nobody'
+    _sizing_app.config.update(_config)
+    _probe_database = Database()
+    _probe_database.init_app(_sizing_app)
+    check(_label, (_probe_database.pool.min_size, _probe_database.pool.max_size)
+          == _expected,
+          f'got min={_probe_database.pool.min_size} '
+          f'max={_probe_database.pool.max_size}, wanted {_expected}')
+    _probe_database.pool.close()
+
+# An unreachable database must produce a page a person can read, not an empty
+# 500. Both spellings matter: `abort(503)` from a guard, and the pool's own
+# exception from a view whose query could not run.
+_live_pool = db_mod.db.pool
+_db_module = sys.modules['app.models.database']
+try:
+    db_mod.db.pool = _Pool(error=PoolTimeout('couldn\'t get a connection'))
+    _outage = app.test_client()
+
+    with _outage.session_transaction() as _sess:
+        _sess['user_id'] = 7
+        _sess['_last_seen'] = int(datetime.now().timestamp())
+        _sess['_marker'] = 'kept'
+
+    _body404 = _outage.get('/no/such/page').get_data(as_text=True)
+    check('a 404 page still renders while the database is unreachable',
+          _outage.get('/no/such/page').status_code == 404, _body404[:80])
+    check('  -> and it is a real page, not an empty body', len(_body404) > 500,
+          f'{len(_body404)} bytes')
+
+    _landing = _outage.get('/')
+    check('the front door reports unavailability instead of signing you out',
+          _landing.status_code == 503, f'got {_landing.status_code}')
+
+    _guarded = _outage.get('/student/dashboard')
+    check('a signed-in page reports unavailability rather than the login page',
+          _guarded.status_code == 503, f'got {_guarded.status_code}')
+    check('  -> and it tells the client when to come back',
+          _guarded.headers.get('Retry-After', '').isdigit(),
+          str(_guarded.headers.get('Retry-After')))
+
+    with _outage.session_transaction() as _sess:
+        _kept = _sess.get('_marker') is not None and _sess.get('user_id') == 7
+    check('an outage does not sign the user out', _kept,
+          'the session was cleared by a database failure')
+
+    with app.test_request_context('/'):
+        from flask import session as _session
+        from app.utils.security import current_user, database_unavailable
+        # A context with no session never reaches the database at all, so the
+        # session has to be seeded for this to test the unavailable branch.
+        _session['user_id'] = 7
+        _session['_last_seen'] = int(datetime.now().timestamp())
+        _loaded = current_user()
+        check('current_user() answers None instead of raising', _loaded is None)
+        check('  -> and the caller can tell why',
+              database_unavailable() is True)
+        check('  -> and it is asked once, not on every template lookup',
+              current_user() is None and database_unavailable() is True)
+
+    _err503 = app.test_client().get('/student/dashboard')
+    check('the unavailable page leaks no connection detail',
+          'postgres' not in _err503.get_data(as_text=True).lower())
+finally:
+    db_mod.db.pool = _live_pool
+
+# The favicon the browser asks for by default, not because the layout asked.
+_favicon = client.get('/favicon.ico')
+check('the default favicon request is answered', _favicon.status_code == 200,
+      f'got {_favicon.status_code}')
+check('  -> and it is an image, not an error page',
+      (_favicon.mimetype or '').startswith('image/'), str(_favicon.mimetype))
 
 print()
 print('=' * 70)

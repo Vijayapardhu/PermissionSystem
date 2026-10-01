@@ -123,20 +123,30 @@ Create a project, then open **SQL Editor** and paste `migrations/schema.sql`.
 Run it once. It drops and recreates every table, so never re-run it against a
 database that holds real data.
 
-Then copy **Project Settings → Database → Connection string → URI**. Use the
-**Session mode** pooler on port **5432**:
+Then copy **Project Settings → Database → Connection string → URI (Direct)**:
 
 ```
-postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
 ```
+
+Use that URI exactly as written. The app dials it verbatim: there is no pooler
+host to derive, no startup probe and no fallback, and the target printed in the
+startup log is the URI configured here.
 
 Two things about this URI:
 
-- Port 6543 is the transaction-mode pooler. Do not use it. psycopg promotes
-  statements to server-side prepared statements, and transaction mode discards
-  them between transactions.
+- Use the **Direct** connection, not the Supavisor pooler. Supavisor reaps and
+  reschedules session connections underneath the client, which is where
+  `consuming input failed: SSL SYSCALL error: EOF detected` comes from, and it
+  shares one slot limit between everything pointed at the project. This app
+  pools for itself, so it has nothing for Supavisor to pool.
 - A password containing `@ / : #` must be percent-encoded, or the DSN silently
   parses up to the wrong separator.
+
+`db.<ref>.supabase.co` is published as an **IPv6-only AAAA record**, so the host
+running the app needs IPv6 egress to resolve it at all. The pool opens in the
+background rather than failing the boot, so an unresolvable host still starts and
+recovers on its own once egress exists.
 
 ### 2. Supabase: storage bucket
 
@@ -199,7 +209,7 @@ Environment variables to set on the service:
 
 | Variable | Source |
 |---|---|
-| `DATABASE_URL` | Supabase, Session-mode pooler URI |
+| `DATABASE_URL` | Supabase, Direct URI (`db.<ref>.supabase.co`, not the pooler) |
 | `SECRET_KEY` | Render's **Generate** button |
 | `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
 | `REDIRECT_URI` | `https://permissionsystem.onrender.com/auth/callback` |
@@ -318,7 +328,7 @@ project and never again.
 Then set the connection string in `.env`:
 
 ```env
-DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
 ```
 
 ### Create the storage bucket
@@ -380,12 +390,12 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 | `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
 | `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
 | `DATABASE_URL is not set` | `.env` missing the connection string, or the service has no env vars |
-| `could not translate host name` / `Connection refused` | Wrong pooler host or port. Use Session mode on 5432, not 6543 |
+| `could not translate host name` / `Connection refused` | Wrong host or port in `DATABASE_URL`. It must be the Direct host `db.<ref>.supabase.co` on 5432 — a pooler URI is no longer rewritten |
 | `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
 | `too many connections` | `DB_POOL_MAX` x gunicorn `--workers` exceeds the plan limit. Free Supabase allows 15 |
 | "The user directory is temporarily unavailable" on sign-in | The pool could not get a connection. Search the log for `Postgres checkout failed` — it names the host, the last driver error and the pool stats, which distinguishes "the database is unreachable" from "the pool was full" |
 | The log says `couldn't get a connection after 5.00 sec` repeatedly | Every request is queueing. `DB_POOL_MAX` must be at least the `--threads` one worker serves, or the worker deadlocks against itself |
-| The log says `connection timeout expired` on connect | Render cannot route to the pooler host. Check `DATABASE_URL` (Session mode on **5432**, not 6543) and that the host is IPv4-reachable |
+| The log says `connection timeout expired` on connect | The host cannot reach `db.<ref>.supabase.co`. It is an IPv6-only AAAA record, so the host needs IPv6 egress, and a typo in the host fails the same way |
 | The log says `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
 | `/healthz` reports `"database": "unreachable"` | Postgres is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
 | `relation "users" does not exist` | `migrations/schema.sql` was never loaded |

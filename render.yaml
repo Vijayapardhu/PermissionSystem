@@ -35,18 +35,15 @@ services:
       # connections underneath the client -- which is where the production log's
       # "consuming input failed: SSL SYSCALL error: EOF detected" came from --
       # and it shares one slot limit between everything pointed at the project.
-      # This app pools for itself, so there is nothing for Supavisor to pool.
+      # This app pools for itself, so there is nothing for Supavisor to pool, and
+      # the DSN below is dialled exactly as written: no derived host, no probe,
+      # no fallback.
       #
-      # If the panel still holds the old aws-0-...pooler.supabase.com value that
-      # is fine: DB_POOLER_REGION below lets the app derive the direct host from
-      # whichever form is configured, try direct first, and fall back. Set
-      # DATABASE_URL to the direct URI to be explicit.
+      # Direct is an IPv6-only AAAA record, so this service needs IPv6 egress to
+      # resolve db.<ref>.supabase.co. The pool opens in the background either way,
+      # so an unresolvable host boots and recovers on its own.
       - key: DATABASE_URL
         sync: false
-      # Supabase project region. Non-empty enables the direct -> Supavisor
-      # fallback; set it to "" to pin DATABASE_URL exactly as written.
-      - key: DB_POOLER_REGION
-        value: "ap-southeast-2"
       # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, which is
       # charged directly against the project's connection limit now that
       # Supavisor is bypassed. Keep it inside that limit.

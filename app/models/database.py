@@ -3,24 +3,26 @@
 The pool is per-process, so DB_POOL_MAX is multiplied by the number of gunicorn
 workers when sizing connections against the Supabase connection limit.
 
-The pool is opened against the *direct* endpoint, `db.<ref>.supabase.co`, which
-bypasses Supavisor. Supavisor reaps and reschedules session connections
-underneath the client, which is where the production log's
-`SSL SYSCALL error: EOF detected` came from, and it shares one slot limit
-between everything pointed at the project. This app has its own pool, so it has
-nothing for Supavisor to pool.
+The pool is opened against the *direct* endpoint, `db.<ref>.supabase.co`. That
+host is used exactly as DATABASE_URL states it: there is no pooler host to
+derive, no startup probe and no fallback, so the DSN an operator wrote is the
+only one dialled. Supavisor is deliberately not involved -- it reaps and
+reschedules session connections underneath the client, which is where the
+production log's `SSL SYSCALL error: EOF detected` came from, and it shares one
+slot limit between everything pointed at the project. This app has its own pool,
+so it has nothing for Supavisor to pool.
 
-That direct host is published as an IPv6-only AAAA record, so a host without
-IPv6 egress cannot resolve it at all. `resolve_dsn` therefore tries direct first
-and falls back to Supavisor, logging which one answered; set DB_POOLER_REGION to
-"" to pin DATABASE_URL exactly as written and skip the probe entirely.
+Direct is published as an IPv6-only AAAA record, so the host running this app
+needs IPv6 egress to resolve it at all. The pool still opens in the background
+rather than failing the boot, so a host that cannot resolve the name comes up
+and recovers on its own instead of serving errors until the next deploy.
 
 Four distinct failures used to reach the browser as the same opaque "the user
 directory is temporarily unavailable" message, so each is handled explicitly
 here:
 
 * The pool cannot open a connection at all (wrong DSN, paused Supabase project,
-  Supavisor out of slots, IPv6-only host from an IPv4-only container).
+  project connection limit reached, IPv6-only host from an IPv4-only container).
   `connect_timeout` is deliberately shorter than DB_POOL_TIMEOUT, so one hung
   handshake cannot eat a request's entire budget, and `_checkout` retries rather
   than reporting the first attempt as final.
@@ -40,12 +42,11 @@ here:
 """
 
 import logging
-import socket
 import threading
 import time
 
 from contextlib import contextmanager
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit
 
 from psycopg import InterfaceError, OperationalError
 from psycopg.pq import TransactionStatus
@@ -61,6 +62,10 @@ log = logging.getLogger('app.db')
 # itself as unusable, which is what makes the pool replace it on return.
 TRANSPORT_ERRORS = (OperationalError, InterfaceError)
 
+# Set once a connection string has been reported unparseable, so one
+# configuration mistake is one log line rather than one per helper that asks.
+_UNREADABLE_REPORTED = False
+
 
 class DatabaseUnavailable(RuntimeError):
     """Raised when no usable connection can be obtained.
@@ -74,17 +79,64 @@ class DatabaseUnavailable(RuntimeError):
         self.retry_after = retry_after
 
 
+class _UnreadableDSN:
+    """Stand-in for a netloc `urlsplit` refuses to look at.
+
+    Every field reads as absent, so each caller below takes its graceful branch
+    instead of raising: the DSN is described rather than reported, no endpoint
+    is derived from it, and it is probed exactly as written -- which is what
+    leaves the driver's own message as the last word.
+    """
+
+    scheme = 'postgresql'
+    username = password = hostname = None
+    port = None
+    path = '/postgres'
+    query = ''
+
+
+def _split_dsn(dsn: str):
+    """Parse a DSN, tolerating one `urlsplit` will not touch.
+
+    urlsplit treats a `[` anywhere in the netloc as the start of an IPv6 literal
+    and validates what is between the brackets as an address. A password
+    containing a bracket -- and Supabase's generated passwords do -- therefore
+    raises ValueError before any of this module gets to look at the host. The
+    same applies to the connection strings pasted out of the Supabase dashboard,
+    which carry a literal `[YOUR-PASSWORD]` until it is filled in.
+
+    Neither is a reason to take the site down, so the DSN is reported as
+    unreadable and the work carries on. Reported once per string: every helper
+    below asks for the same DSN, and a mistake in configuration should read as
+    one line in the log rather than one per question.
+    """
+    global _UNREADABLE_REPORTED
+    try:
+        return urlsplit(dsn)
+    except ValueError as exc:
+        if not _UNREADABLE_REPORTED:
+            _UNREADABLE_REPORTED = True
+            log.error(
+                'The database connection string cannot be parsed (%s). If the '
+                'password contains a "[" or "]", or if [YOUR-PASSWORD] was '
+                'pasted in without being replaced, that is the cause.', exc,
+            )
+        return _UnreadableDSN()
+
+
 def describe_dsn(dsn: str) -> str:
     """Render a DSN as scheme://user@host:port/db, with no password.
 
     The connection target is the first thing needed to diagnose a pool that
     cannot connect, and it has to be safe to write to a log.
     """
-    parts = urlsplit(dsn)
+    parts = _split_dsn(dsn)
+    if parts.hostname is None:
+        return 'unparseable connection string'
     user = unquote(parts.username or '')
     if ':' in user:
         user = user.split(':', 1)[0]
-    host = parts.hostname or '?'
+    host = parts.hostname
     port = parts.port or 5432
     return f'{parts.scheme}://{user}@{host}:{port}{parts.path}'
 
@@ -144,136 +196,6 @@ def verify_connection(conn, interval: float = 30.0) -> None:
     conn._au_verified_at = now
 
 
-def project_ref(dsn: str) -> str:
-    """The project reference, read off either endpoint form.
-
-    Supabase publishes the same `<ref>` in two places: the pooler username is
-    `postgres.<ref>`, and the direct host is `db.<ref>.supabase.co`. Reading
-    either one gives the other's address, so moving between them costs no second
-    secret -- only the project's region.
-    """
-    user = unquote(urlsplit(dsn).username or '')
-    if '.' in user:
-        ref = user.split('.', 1)[1]
-        if ref:
-            return ref
-    host = urlsplit(dsn).hostname or ''
-    suffix = '.supabase.co'
-    if host.startswith('db.') and host.endswith(suffix):
-        return host[len('db.'):-len(suffix)]
-    return ''
-
-
-def _retarget(dsn: str, username: str, host: str, port: int) -> str:
-    """Point a DSN at another host, keeping its credentials and database.
-
-    The password is copied across exactly as written rather than decoded and
-    re-encoded: `urlsplit` hands it back still percent-encoded, so re-quoting it
-    would turn `%40` into `%2540` and quietly produce a DSN that authenticates as
-    the wrong password against the new host.
-    """
-    parts = urlsplit(dsn)
-    userinfo = username
-    if parts.password is not None:
-        userinfo += ':' + parts.password
-    return urlunsplit((
-        parts.scheme or 'postgresql',
-        f'{userinfo}@{host}:{port}',
-        parts.path or '/postgres',
-        parts.query,
-        '',
-    ))
-
-
-def direct_dsn(dsn: str) -> str:
-    """The same database addressed directly, past Supavisor."""
-    ref = project_ref(dsn)
-    return _retarget(dsn, 'postgres', f'db.{ref}.supabase.co', 5432) if ref else dsn
-
-
-def pooled_dsn(dsn: str, region: str) -> str:
-    """The same database addressed through Supabase's Supavisor pooler.
-
-    Port 5432, not 6543. psycopg promotes statements to server-side prepared
-    statements, which transaction mode discards between transactions.
-    """
-    ref = project_ref(dsn)
-    if not ref or not region:
-        return dsn
-    return _retarget(
-        dsn, f'postgres.{ref}', f'aws-0-{region}.pooler.supabase.com', 5432
-    )
-
-
-def _reachable(dsn: str, connect_timeout: float) -> bool:
-    """True when one connection completes a handshake and a round trip."""
-    import psycopg
-
-    try:
-        with psycopg.connect(dsn, connect_timeout=connect_timeout) as probe:
-            with probe.cursor() as cursor:
-                cursor.execute('SELECT 1')
-                cursor.fetchone()
-        return True
-    except Exception as exc:
-        log.warning('Cannot reach %s: %s', describe_dsn(dsn), exc)
-        return False
-
-
-def resolve_dsn(dsn: str, region: str, connect_timeout: float) -> str:
-    """Return the endpoint to open the pool against, preferring the direct one.
-
-    Direct is preferred because it is the only path that does not route every
-    query through Supavisor. Supavisor is where the production log's
-    `SSL SYSCALL error: EOF detected` resets came from -- a shared proxy that
-    reaps and reschedules session connections underneath the client -- and its
-    slot limit is a shared budget that anything else pointed at the same project
-    can exhaust. Direct has neither problem, and this app owns its own pool, so
-    there is nothing for Supavisor to pool.
-
-    Direct is also published as an IPv6-only AAAA record:
-    `db.<ref>.supabase.co` has no A record at all. On an IPv4-only network the
-    name does not resolve -- `getaddrinfo failed`, raised before a packet is even
-    sent -- so the direct host is tried first and Supavisor is kept as the
-    fallback rather than assumed unreachable. Which one answered is logged, and
-    `diagnosis()` reports the live target.
-
-    This costs one connection per candidate, once, at boot, and only when
-    DB_POOLER_REGION names a region. With it unset there is no second candidate,
-    no probe, and DATABASE_URL is used exactly as given.
-    """
-    if not region:
-        return dsn
-
-    candidates = [('direct', direct_dsn(dsn)), ('supavisor', pooled_dsn(dsn, region))]
-    # A DSN already in the preferred form makes both candidates the same host;
-    # probing it twice would double the boot cost and log the same failure twice.
-    unique = []
-    for label, candidate in candidates:
-        if candidate not in [item[1] for item in unique]:
-            unique.append((label, candidate))
-
-    for position, (label, candidate) in enumerate(unique):
-        if _reachable(candidate, connect_timeout):
-            if position:
-                log.warning(
-                    'Direct Postgres is unreachable from this host; using %s (%s) '
-                    'instead. Set DB_POOLER_REGION="" once IPv6 egress exists.',
-                    label, describe_dsn(candidate),
-                )
-            return candidate
-
-    # Nothing answered. The pool is still built against the preferred endpoint
-    # rather than left uninitialised: its background worker keeps retrying, so the
-    # site comes up on its own as soon as Supabase does, instead of failing every
-    # request until the next deploy.
-    log.error(
-        'No Postgres endpoint answered at startup; opening the pool against %s '
-        'and letting it reconnect.', describe_dsn(unique[0][1]),
-    )
-    return unique[0][1]
-
-
 def settle(conn, commit: bool) -> None:
     """Commit or roll back a transaction, tolerating a connection already dead.
 
@@ -312,20 +234,28 @@ class Database:
             self.init_app(app)
 
     def init_app(self, app):
+        # Used exactly as configured. No rewriting to another host, no probe and
+        # no fallback: the direct URI in DATABASE_URL is the only thing dialled,
+        # so what the log reports is what the operator wrote.
         dsn = app.config.get('DATABASE_URL')
         if not dsn:
             raise RuntimeError('DATABASE_URL is not set')
 
-        connect_timeout = app.config['DB_CONNECT_TIMEOUT']
-        dsn = resolve_dsn(
-            dsn,
-            app.config['DB_POOLER_REGION'],
-            connect_timeout,
-        )
-
-        self.target = describe_dsn(dsn)
+        # Opened against exactly the DSN that is configured. Nothing is derived
+        # from it and nothing is tried second: a host this code invented is a host
+        # that can answer for a different tenant, and a silently substituted
+        # endpoint is a configuration nobody can read back out of the log.
+        #
+        # The consequence is stated plainly instead: the direct Supabase host,
+        # db.<ref>.supabase.co, is published as an IPv6-only AAAA record with no A
+        # record at all, so on an IPv4-only network the name does not resolve --
+        # "getaddrinfo failed", raised before a packet is even sent. If that is
+        # the failure, the fix is IPv6 egress on this host or the pooler URI in
+        # DATABASE_URL, not a guess made here at import time.
+self.target = describe_dsn(dsn)
         self._wait = float(app.config['DB_POOL_TIMEOUT'])
         self._attempts = max(1, int(app.config['DB_POOL_RETRIES']))
+        connect_timeout = app.config['DB_CONNECT_TIMEOUT']
 
         # One warm connection per thread this worker serves. The pool grows one
         # connection at a time and only once a client is already queued, and a
