@@ -1,0 +1,65 @@
+{#
+   Sidebar navigation.
+
+   One markup tree serves two presentations: a permanent column on desktop, and a
+   Bootstrap off-canvas drawer below the lg breakpoint.
+
+   Deliberately restrained: a plain light surface, one flat active state, plain
+   icons with no decorative tiles. The wordmark lives in the header only, so it
+   is never repeated.
+#}
+<div class="au-side">
+
+  <div class="au-side__top">
+    <img class="au-wordmark au-wordmark--side"
+         src="{{ url_for('static', filename='images/aditya-logo.png') }}"
+         alt="Aditya University">
+  </div>
+
+  <nav class="au-side__nav" aria-label="Sections">
+    {% for section, entries in nav_sections %}
+      {% if section %}
+      <h3 class="au-side__grouphead">{{ section }}</h3>
+      {% endif %}
+      <ul class="au-side__list">
+        {% for entry in entries %}
+          {% set target = url_for(entry.endpoint) %}
+          {% set active = current_path == target
+                          or (target != '/' and current_path.startswith(target.rstrip('/') + '/')) %}
+        <li>
+          <a class="au-side__item {{ 'is-active' if active }}"
+             href="{{ target }}"
+             {% if active %}aria-current="page"{% endif %}>
+            <i class="bi {{ entry.icon }}" aria-hidden="true"></i>
+            <span>{{ entry.label }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    {% endfor %}
+  </nav>
+
+  {% if current_user() %}
+  <div class="au-side__foot">
+    <a class="au-side__who" href="{{ url_for('auth.profile') }}">
+      <span class="au-side__who-name">
+        {% if current_user().is_student %}
+          {{ current_user().roll_number_display }}
+        {% else %}
+          {{ current_user().name }}
+        {% endif %}
+      </span>
+      <span class="au-side__who-role">{{ current_user().role.value|title }}</span>
+    </a>
+
+    {# Sign-out is POST so a link or prefetch can never end the session. #}
+    <form method="post" action="{{ url_for('auth.logout') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="au-side__out">
+        <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
+        <span>Sign out</span>
+      </button>
+    </form>
+  </div>
+  {% endif %}
+</div>

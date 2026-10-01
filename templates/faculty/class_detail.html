@@ -1,0 +1,216 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, time_range, roll, stat, csrf_field, empty_state with context %}
+{% block title %}{{ class_group.name }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('faculty.classes') }}">My Classes</a></li>
+    <li class="breadcrumb-item active">{{ class_group.name }}</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">{{ class_group.name }}</h1>
+    <p class="page-head__sub">
+      {% if class_group.section_code %}Section {{ class_group.section_code }}{% endif %}
+      {% if class_group.academic_year %} &middot; {{ class_group.academic_year }}{% endif %}
+      &middot; {{ summary.roster }} student{{ '' if summary.roster == 1 else 's' }} on the roster
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.attendance', class_id=class_group.id, date=view_date) }}"
+       class="btn btn-primary btn-pill">
+      <i class="bi bi-check2-square"></i> Mark Attendance
+    </a>
+    <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All Classes
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('On Roster', summary.roster, 'people', 'primary') }}
+  {{ stat('Linked Accounts', summary.linked, 'link-45deg', 'success') }}
+  {{ stat('On Permission', summary.on_permission, 'file-earmark-check', 'info') }}
+  {{ stat('Not Yet Linked', summary.unlinked, 'question-circle', 'warning') }}
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-calendar3"></i> Permissions On</h2>
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+      <label for="date" class="form-label mb-0">Date</label>
+      <input type="date" class="form-control form-control-sm"
+             id="date" name="date" value="{{ view_date }}" style="width:auto">
+      <button type="submit" class="btn btn-sm btn-primary btn-pill">Show</button>
+      {% if view_date != now_date %}
+      <a href="{{ url_for('faculty.class_detail', class_id=class_group.id) }}"
+         class="btn btn-sm btn-outline-secondary btn-pill">Today</a>
+      {% endif %}
+    </form>
+  </div>
+  <div class="card-au__body py-2">
+    <p class="small text-muted mb-0">
+      Approved permissions in force on
+      <strong>{{ view_date.strftime('%d %B %Y') }}</strong>.
+      Cancelled, rejected and pending requests are excluded.
+    </p>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-list-check"></i> Class Roster &amp; Permissions</h2>
+    <span class="form-text">{{ rows | length }} row{{ '' if rows|length == 1 else 's' }}</span>
+  </div>
+
+  {% if rows %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Contact</th>
+          <th>On Date</th>
+          <th>Permission</th>
+          <th>Attendance</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set member = row.member %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td>{{ roll(member.roll_number) }}</td>
+          <td class="text-nowrap">
+            {% if member.is_linked %}
+              {{ member.student_name }}
+            {% else %}
+              <span class="text-muted">Not provisioned</span>
+            {% endif %}
+          </td>
+          <td class="small text-muted">
+            {% if member.is_linked %}
+              {{ member.student_email or '—' }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>
+            {% if row.has_permission %}
+              <span class="badge-au badge-au--approved"><i class="bi bi-check-circle"></i> Yes</span>
+            {% elif member.is_linked %}
+              <span class="badge-au badge-au--cancelled"><i class="bi bi-dash-circle"></i> No</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="small">
+            {% if row.has_permission %}
+              {% for record in row.permissions %}
+              <div class="mb-1">
+                {{ type_badge(record.permission_type) }}
+                <span class="text-muted small">
+                  {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
+                </span>
+                <div class="small text-muted">{{ record.reason|truncate(52) }}</div>
+                <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+                   class="small">View request</a>
+              </div>
+              {% endfor %}
+            {% else %}
+              <span class="text-muted small">No permission on this date</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.attendance == 'PRESENT' %}
+              <span class="badge-au badge-au--approved">Present</span>
+            {% elif row.attendance == 'ABSENT' %}
+              <span class="badge-au badge-au--rejected">Absent</span>
+            {% elif row.attendance == 'ON_PERMISSION' %}
+              <span class="badge-au badge-au--pending">On permission</span>
+            {% else %}
+              <span class="badge-au badge-au--cancelled">Not marked</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <form method="post" class="d-inline"
+                  action="{{ url_for('faculty.delete_member', class_id=class_group.id, member_id=member.id) }}"
+                  onsubmit="return confirm('Remove {{ member.roll_number }} from this class?');">
+              {{ csrf_field() }}
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="Remove from roster">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      {{ summary.on_permission }} on permission &middot;
+      {{ summary.present }} present &middot; {{ summary.absent }} absent
+    </span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Attendance marked
+        <strong>{{ summary.present + summary.absent }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('upload', 'Roster is empty',
+                   'Upload a spreadsheet of roll numbers to populate this class.') }}
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-6">
+    <div class="card-au">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload / Replace Roster</h2></div>
+      <div class="card-au__body">
+        <form method="post" enctype="multipart/form-data"
+              action="{{ url_for('faculty.upload_roster', class_id=class_group.id) }}">
+          {{ csrf_field() }}
+          <label for="roster" class="form-label">Spreadsheet of roll numbers</label>
+          <input type="file" class="form-control mb-3" id="roster" name="roster"
+                 accept=".xlsx,.xlsm,.csv,.txt" required>
+          <div class="form-text mb-3">
+            Excel (.xlsx, .xlsm) or CSV. One roll number per row; a header row is
+            skipped. Existing rows are updated, not duplicated.
+          </div>
+          <button type="submit" class="btn btn-primary btn-pill">
+            <i class="bi bi-upload"></i> Import roster
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au" style="border-left:3px solid var(--au-danger)">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-trash"></i> Delete Class</h2></div>
+      <div class="card-au__body">
+        <p class="small text-muted">
+          Removes <strong>{{ class_group.name }}</strong>, its
+          {{ summary.roster }} roster {{ 'entry' if summary.roster == 1 else 'entries' }}
+          and all attendance recorded for it. Permission requests are not affected.
+        </p>
+        <form method="post" action="{{ url_for('faculty.delete_class', class_id=class_group.id) }}"
+              onsubmit="return confirm('Delete {{ class_group.name }}? This cannot be undone.');">
+          {{ csrf_field() }}
+          <button type="submit" class="btn btn-outline-danger btn-pill">
+            <i class="bi bi-trash"></i> Delete this class
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

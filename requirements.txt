@@ -1,0 +1,23 @@
+# Web framework and templating
+Flask==3.1.3
+Werkzeug==3.1.3
+Jinja2==3.1.6
+
+# Database
+mysql-connector-python==8.0.33
+
+# Microsoft Entra ID sign-in
+msal==1.39.0
+cryptography==46.0.3
+
+# Configuration
+python-dotenv==1.0.1
+
+# Email notifications
+Flask-Mail==0.10.0
+
+# Spreadsheet roster import (Excel workbooks)
+openpyxl==3.1.5
+
+# Image assertions in the test harness (branding checks)
+Pillow==11.3.0

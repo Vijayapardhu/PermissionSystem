@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% block title %}Search Students &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Search Student Records</h1>
+    <p class="page-head__sub">
+      Find any student by roll number or name and review their full permission
+      history.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-people"></i> My Classes
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__body">
+    <form method="get" class="d-flex gap-2 flex-wrap">
+      <div class="flex-grow-1" style="min-width:240px">
+        <label for="q" class="form-label">Roll number or name</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input type="search" class="form-control" id="q" name="q"
+                 value="{{ query }}" autofocus
+                 placeholder="e.g. 26B21CS058" minlength="2" maxlength="80">
+        </div>
+      </div>
+      <div class="d-flex align-items-end">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-search"></i> Search
+        </button>
+      </div>
+    </form>
+    <p class="form-text mt-2 mb-0">
+      Partial matches work. Search results are limited to the {{ DEPARTMENT_NAME }}.
+    </p>
+  </div>
+</div>
+
+{% if not query %}
+  <div class="card-au">
+    {{ empty_state('search', 'Start typing to search',
+                   'Enter a roll number such as 26B21CS058, or part of a name, then press Search.') }}
+  </div>
+{% elif not results %}
+  <div class="card-au">
+    {{ empty_state('person-x', 'No matching student',
+                   'No student in the department matches "' ~ query ~ '". Check the spelling, or confirm the student has signed in at least once.') }}
+  </div>
+{% else %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <span class="text-muted">
+    <strong>{{ results | length }}</strong> match{{ '' if results|length == 1 else 'es' }} for
+    &ldquo;{{ query }}&rdquo;
+  </span>
+</div>
+
+{% for item in results %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <div>
+      <h2 class="card-au__title mb-1">
+        <i class="bi bi-person"></i> {{ item.name }}
+        {% if item.roll_number %}{{ roll(item.roll_number) }}{% endif %}
+      </h2>
+      <div class="small text-muted">
+        {{ item.email }}{% if item.phone %} &middot; {{ item.phone }}{% endif %}
+        {% if item.in_my_classes %}
+          &middot; <span class="badge-au badge-au--leave">
+            In {{ item.in_my_classes | length }} of your classes</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      <span class="badge-au badge-au--approved">{{ item.approved }} approved</span>
+      {% if item.pending %}
+        <span class="badge-au badge-au--pending">{{ item.pending }} pending</span>
+      {% endif %}
+      <span class="badge-au badge-au--cancelled">{{ item.total }} total</span>
+    </div>
+  </div>
+
+  {% if item.in_my_classes %}
+  <div class="card-au__body py-2 border-bottom">
+    <span class="small text-muted">Classes: </span>
+    {% for group in item.in_my_classes %}
+      <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+         class="badge-au badge-au--classroom text-decoration-none">{{ group.name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if item.requests %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Submitted</th>
+          <th>Status</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in item.requests %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="text-muted small">{{ record.reason|truncate(46) }}</td>
+          <td class="text-nowrap text-muted small">{{ record.created_at.strftime('%d %b %Y') }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>Showing the {{ item.requests | length }} most recent of {{ item.total }} requests</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Approved <strong>{{ item.approved }}</strong></span>
+      <span class="table-foot__stat">Pending <strong>{{ item.pending }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+  <div class="card-au__body">
+    <p class="text-muted mb-0 small">This student has not submitted any permission requests.</p>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

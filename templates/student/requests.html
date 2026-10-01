@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, csrf_field, empty_state with context %}
+{% block title %}My Requests &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Permission Requests</h1>
+    <p class="page-head__sub">Every request you have submitted, with its current decision.</p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('student.new_request') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-circle"></i> New Request
+    </a>
+  </div>
+</div>
+
+<div class="card-au">
+  <form class="toolbar" method="get">
+    <span class="toolbar__label">Filter</span>
+    <button type="submit" name="status" value=""
+            class="chip {{ 'is-active' if not selected_status }}">All</button>
+    {% for status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] %}
+    <button type="submit" name="status" value="{{ status }}"
+            class="chip {{ 'is-active' if selected_status and selected_status.value == status }}">
+      {{ status|title }}
+    </button>
+    {% endfor %}
+  </form>
+
+  {% if requests %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Submitted</th>
+          <th>Status</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in requests %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="text-muted">{{ record.reason|truncate(42) }}</td>
+          <td class="text-nowrap text-muted">{{ record.created_at.strftime('%d %b %Y') }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('student.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">View</a>
+            {% if record.status.value == 'PENDING' %}
+            <form method="post" class="d-inline"
+                  action="{{ url_for('student.withdraw', request_id=record.id) }}"
+                  onsubmit="return confirm('Withdraw request REQ-{{ '%04d' % record.id }}?');">
+              {{ csrf_field() }}
+              <button type="submit" class="btn btn-sm btn-outline-secondary">Withdraw</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      {{ requests | length }} record{{ '' if requests|length == 1 else 's' }}
+      {% if selected_status %}&nbsp;with status {{ selected_status.value|title }}{% endif %}
+    </span>
+    <a href="{{ url_for('student.new_request') }}" class="btn btn-sm btn-primary btn-pill">
+      Submit another
+    </a>
+  </div>
+  {% else %}
+    {{ empty_state('search', 'Nothing to show',
+                   'No requests match this filter. Clear the filter or submit a new request.') }}
+  {% endif %}
+</div>
+{% endblock %}

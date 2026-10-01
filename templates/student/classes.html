@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% block title %}My Classes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Classes</h1>
+    <p class="page-head__sub">Classes you are enrolled in, and your active permissions.</p>
+  </div>
+</div>
+
+{% if active_today %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check-circle"></i> Your Permissions Today</h2>
+    <span class="form-text">{{ today.strftime('%d %B %Y') }}</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Status</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in active_today %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="small text-muted">{{ record.reason|truncate(46) }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('student.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">View</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-people"></i> Enrolled Classes</h2>
+    <span class="form-text">{{ classes | length }} class{{ '' if classes|length == 1 else 'es' }}</span>
+  </div>
+
+  {% if classes %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Class</th>
+          <th>Section</th>
+          <th>Year</th>
+          <th>Lecturer</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in classes %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">{{ group.name }}</td>
+          <td>{{ group.section_code or '—' }}</td>
+          <td>{{ group.academic_year or '—' }}</td>
+          <td class="text-nowrap">{{ group.faculty_name or 'Unassigned' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {{ empty_state('people', 'Not enrolled in any class',
+                   'You appear in a class once a lecturer adds your roll number to their roster.') }}
+  {% endif %}
+</div>
+{% endblock %}

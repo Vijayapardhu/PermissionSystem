@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}Sign out &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<div class="card-au mt-4">
+  <div class="card-au__body">
+    <div class="empty">
+      <div class="empty__icon"><i class="bi bi-box-arrow-right"></i></div>
+
+      {% if current_user() %}
+        <h1 class="empty__title">Sign out of the portal?</h1>
+        <p class="empty__text">
+          You are signed in as
+          <strong>{{ current_user().email }}</strong>
+          ({{ current_user().role.value|title }}).
+          You will need to sign in again with your university Outlook account.
+        </p>
+
+        <div class="d-flex gap-2 justify-content-center flex-wrap mt-4">
+          <form method="post" action="{{ url_for('auth.logout') }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-primary btn-pill px-4">
+              <i class="bi bi-box-arrow-right"></i> Yes, sign me out
+            </button>
+          </form>
+          <a href="{{ url_for('auth.landing') }}" class="btn btn-outline-secondary btn-pill">
+            Stay signed in
+          </a>
+        </div>
+
+        <div class="mt-4 pt-3 border-top">
+          <p class="small text-muted mb-2">
+            Signed in on a shared or public computer? End your university
+            single sign-on everywhere, on this device and on others.
+          </p>
+          <form method="post" action="{{ url_for('auth.logout_all') }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary btn-pill">
+              <i class="bi bi-power"></i> Sign out of all Microsoft sessions
+            </button>
+          </form>
+        </div>
+
+      {% else %}
+        <h1 class="empty__title">You are already signed out</h1>
+        <p class="empty__text">There is no active portal session on this browser.</p>
+        <div class="mt-3">
+          <a href="{{ url_for('auth.login') }}" class="btn btn-primary btn-pill">
+            Go to sign in
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

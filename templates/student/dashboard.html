@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, stat, empty_state with context %}
+{% block title %}Dashboard &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">
+      {% if user.is_student %}Welcome, {{ user.roll_number_display }}{% else %}Welcome, {{ user.name }}{% endif %}
+    </h1>
+    <p class="page-head__sub">
+      Roll No {{ roll(user.roll_number) }}
+      {% if user.phone %}&nbsp;&middot;&nbsp;{{ user.phone }}{% endif %}
+      &nbsp;&middot;&nbsp;{{ user.email }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('student.new_request', type='LEAVE') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-circle"></i> New Leave Permission
+    </a>
+    <a href="{{ url_for('student.new_request', type='CLASSROOM') }}" class="btn btn-outline-primary btn-pill">
+      <i class="bi bi-door-open"></i> Classroom Permission
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('Pending', counts.get('PENDING', 0), 'hourglass-split', 'warning') }}
+  {{ stat('Approved', counts.get('APPROVED', 0), 'check-circle', 'success') }}
+  {{ stat('Rejected', counts.get('REJECTED', 0), 'x-circle', 'danger') }}
+  {{ stat('All Requests', counts.values() | sum, 'journal-text', 'primary') }}
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> Recent Requests</h2>
+    <a href="{{ url_for('student.requests') }}" class="btn btn-sm btn-outline-secondary btn-pill">
+      View all <i class="bi bi-arrow-right"></i>
+    </a>
+  </div>
+
+  {% if requests %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Status</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in requests %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="text-muted">{{ record.reason|truncate(48) }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('student.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">View</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>Showing the {{ requests | length }} most recent of {{ counts.values() | sum }} total</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Approved <strong>{{ counts.get('APPROVED', 0) }}</strong></span>
+      <span class="table-foot__stat">Pending <strong>{{ counts.get('PENDING', 0) }}</strong></span>
+      <span class="table-foot__stat">Rejected <strong>{{ counts.get('REJECTED', 0) }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('inbox', 'No permission requests yet',
+                   'Use the buttons above to submit your first leave or classroom permission.') }}
+  {% endif %}
+</div>
+{% endblock %}

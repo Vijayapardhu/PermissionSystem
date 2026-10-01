@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_state with context %}
+{% block title %}Classes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Classes</h1>
+    <p class="page-head__sub">Every class group created by lecturers in the department.</p>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-people"></i> All Class Groups</h2>
+    <span class="form-text">{{ classes | length }} class{{ '' if classes|length == 1 else 'es' }}</span>
+  </div>
+
+  {% if classes %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Class</th>
+          <th>Section</th>
+          <th>Year</th>
+          <th>Lecturer</th>
+          <th class="table-au__num">Students</th>
+          <th class="table-au__num">Linked</th>
+          <th class="table-au__center">Roster</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in classes %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">{{ group.name }}</td>
+          <td>{{ group.section_code or '—' }}</td>
+          <td>{{ group.academic_year or '—' }}</td>
+          <td class="text-nowrap">{{ group.faculty_name }}</td>
+          <td class="table-au__num">{{ group.member_count }}</td>
+          <td class="table-au__num">
+            {% if group.linked_count == group.member_count %}
+              <span class="badge-au badge-au--approved">{{ group.linked_count }}</span>
+            {% else %}
+              <span class="badge-au badge-au--pending">{{ group.linked_count }}</span>
+            {% endif %}
+          </td>
+          <td class="table-au__center" style="min-width:110px">
+            {% set pct = ((group.linked_count / group.member_count) * 100) | round | int if group.member_count else 100 %}
+            <div class="progress" style="height:6px" role="progressbar"
+                 aria-label="Linked accounts for {{ group.name }}"
+                 aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-bar bg-{{ 'success' if pct == 100 else 'warning' }}"
+                   style="width: {{ pct }}%"></div>
+            </div>
+          </td>
+          <td class="table-au__actions">
+            <span class="small text-muted">
+              {{ (group.member_count - group.linked_count) }} awaiting accounts
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      Roster entries link to a student automatically the first time that
+      student signs in.
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('people', 'No classes yet',
+                   'Lecturers create classes from the Classes page and upload a roster of roll numbers.') }}
+  {% endif %}
+</div>
+{% endblock %}

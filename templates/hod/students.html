@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import roll, empty_state with context %}
+{% block title %}Students &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Students</h1>
+    <p class="page-head__sub">Every student provisioned in the department.</p>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <form class="toolbar" method="get">
+    <div class="input-group input-group-sm" style="max-width:260px">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input type="search" class="form-control" name="q" value="{{ search }}"
+             placeholder="Roll number or name" aria-label="Search students">
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary btn-pill">Search</button>
+    {% if search %}
+    <a href="{{ url_for('hod.students') }}" class="btn btn-sm btn-outline-secondary btn-pill">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-mortarboard"></i> Directory</h2>
+    <span class="form-text">{{ students | length }} student{{ '' if students|length == 1 else 's' }}</span>
+  </div>
+
+  {% if students %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Phone</th>
+          <th class="table-au__num">Classes</th>
+          <th class="table-au__num">Total</th>
+          <th class="table-au__num">Approved</th>
+          <th class="table-au__num">Pending</th>
+          <th class="table-au__num">Rejected</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in students %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td>{{ roll(student.roll_number) }}</td>
+          <td class="table-au__strong text-nowrap">{{ student.name }}</td>
+          <td class="small text-muted">{{ student.email }}</td>
+          <td class="small">{{ student.phone or '—' }}</td>
+          <td class="table-au__num">{{ student.classes }}</td>
+          <td class="table-au__num">{{ student.total }}</td>
+          <td class="table-au__num text-success">{{ student.approved }}</td>
+          <td class="table-au__num">{{ student.pending }}</td>
+          <td class="table-au__num text-danger">{{ student.rejected }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.search', q=student.roll_number) }}"
+               class="btn btn-sm btn-outline-secondary">History</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>Counts cover every permission the student has ever submitted.</span>
+  </div>
+  {% else %}
+    {{ empty_state('person-x', 'No students found',
+                   'No student matches that search. Students appear once their Microsoft account has been provisioned.') }}
+  {% endif %}
+</div>
+{% endblock %}

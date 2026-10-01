@@ -1,0 +1,139 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, time_range, roll, stat, empty_state with context %}
+{% block title %}Pending Reviews &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Requests Awaiting Verification</h1>
+    <p class="page-head__sub">
+      {{ user.name }} &middot; {{ user.email }}
+      {% if pending %}&nbsp;&middot;&nbsp;Oldest submitted {{ pending[0].created_at.strftime('%d %b %Y') }}{% endif %}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <div class="text-end">
+      <div class="stat__value" style="color:var(--au-warning)">{{ pending_count }}</div>
+      <div class="stat__label">Pending</div>
+    </div>
+  </div>
+</div>
+
+<div class="card-au mb-4">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-inbox"></i> Queue</h2>
+    <span class="form-text">Oldest first</span>
+  </div>
+
+  {% if pending %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Time</th>
+          <th>Reason</th>
+          <th>Submitted</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in pending %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="small">{{ time_range(record.start_time, record.end_time) }}</td>
+          <td class="text-muted">{{ record.reason|truncate(40) }}</td>
+          <td class="text-nowrap text-muted">{{ record.created_at.strftime('%d %b') }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-primary btn-pill">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{{ pending | length }} request{{ '' if pending|length == 1 else 's' }} awaiting your decision</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Leave
+        <strong>{{ pending | selectattr('permission_type.value', 'equalto', 'LEAVE') | list | length }}</strong></span>
+      <span class="table-foot__stat">Classroom
+        <strong>{{ pending | selectattr('permission_type.value', 'equalto', 'CLASSROOM') | list | length }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('check2-circle', 'Queue is clear',
+                   'No requests are awaiting your verification right now. Check back after the next submission.') }}
+  {% endif %}
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> Recently Processed</h2>
+    <span class="form-text">Last {{ recent | length }} decisions</span>
+  </div>
+  {% set processed = recent | rejectattr('status.value', 'equalto', 'PENDING') | list %}
+  {% if processed %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>Period</th>
+          <th>Status</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in processed %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap small">
+            {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
+          </td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{{ processed | length }} processed</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Approved
+        <strong>{{ processed | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
+      <span class="table-foot__stat">Rejected
+        <strong>{{ processed | selectattr('status.value', 'equalto', 'REJECTED') | list | length }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('journal-text', 'No decisions yet',
+                   'Requests you approve or reject will be listed here.') }}
+  {% endif %}
+</div>
+{% endblock %}

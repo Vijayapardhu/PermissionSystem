@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import stat, empty_state with context %}
+{% block title %}Faculty Workload &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Faculty Workload</h1>
+    <p class="page-head__sub">
+      How many requests each lecturer currently holds and how many they have decided.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+  </div>
+</div>
+
+{% set total_pending = lecturers | sum(attribute='pending') %}
+<div class="stat-grid">
+  {{ stat('Lecturers', lecturers | length, 'person-workspace', 'primary') }}
+  {{ stat('Open Queue', total_pending, 'hourglass-split', 'warning') }}
+  {{ stat('Decisions Made', lecturers | sum(attribute='decisions'), 'check2-all', 'success') }}
+  {{ stat('Classes Taught', lecturers | sum(attribute='classes'), 'people', 'info') }}
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-workspace"></i> By Lecturer</h2>
+    <span class="form-text">Sorted by open queue</span>
+  </div>
+
+  {% if lecturers %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Lecturer</th>
+          <th>Email</th>
+          <th class="table-au__num">Pending</th>
+          <th class="table-au__num">Approved</th>
+          <th class="table-au__num">Rejected</th>
+          <th class="table-au__num">Decisions</th>
+          <th class="table-au__num">Classes</th>
+          <th class="table-au__center">Load</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set busiest = total_pending if total_pending > 0 else 1 %}
+        {% for lecturer in lecturers %}
+        {% set load = ((lecturer.pending / busiest) * 100) | round | int %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">{{ lecturer.name }}</td>
+          <td class="small text-muted">{{ lecturer.email }}</td>
+          <td class="table-au__num">
+            {% if lecturer.pending %}
+              <span class="badge-au badge-au--pending">{{ lecturer.pending }}</span>
+            {% else %}
+              <span class="text-muted">0</span>
+            {% endif %}
+          </td>
+          <td class="table-au__num text-success">{{ lecturer.approved }}</td>
+          <td class="table-au__num text-danger">{{ lecturer.rejected }}</td>
+          <td class="table-au__num">{{ lecturer.decisions }}</td>
+          <td class="table-au__num">{{ lecturer.classes }}</td>
+          <td class="table-au__center" style="min-width:110px">
+            <div class="progress" style="height:6px" role="progressbar"
+                 aria-label="Queue load for {{ lecturer.name }}"
+                 aria-valuenow="{{ load }}" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-bar bg-{{ 'danger' if load > 66 else ('warning' if load > 33 else 'success') }}"
+                   style="width: {{ load }}%"></div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      New requests go to whichever lecturer has the smallest open queue, so this
+      column should stay even.
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('person-workspace', 'No lecturers provisioned',
+                   'Lecturer accounts appear here once their role is set to LECTURER.') }}
+  {% endif %}
+</div>
+{% endblock %}

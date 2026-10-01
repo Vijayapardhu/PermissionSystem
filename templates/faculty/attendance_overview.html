@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_state, date_short with context %}
+{% block title %}Attendance &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Attendance</h1>
+    <p class="page-head__sub">Choose a class, then mark attendance for a date.</p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-people"></i> My Classes
+    </a>
+  </div>
+</div>
+
+{% if classes %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Pick a Class</h2>
+    <span class="form-text">{{ classes | length }} class{{ '' if classes|length == 1 else 'es' }}</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Class</th>
+          <th>Section</th>
+          <th>Year</th>
+          <th class="table-au__num">Students</th>
+          <th class="table-au__num">Linked</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in classes %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">{{ group.name }}</td>
+          <td>{{ group.section_code or '—' }}</td>
+          <td>{{ group.academic_year or '—' }}</td>
+          <td class="table-au__num">{{ group.member_count }}</td>
+          <td class="table-au__num">{{ group.linked_count }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.attendance', class_id=group.id) }}"
+               class="btn btn-sm btn-primary btn-pill">Mark today</a>
+            <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+               class="btn btn-sm btn-outline-secondary">Permissions</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>Today is {{ now_date.strftime('%d %B %Y') }}.</span>
+  </div>
+</div>
+{% else %}
+<div class="card-au">
+  {{ empty_state('people', 'No classes yet',
+                 'Create a class and upload a roster before marking attendance.') }}
+  <div class="card-au__body text-center">
+    <a href="{{ url_for('faculty.classes') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-lg"></i> Create a class
+    </a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

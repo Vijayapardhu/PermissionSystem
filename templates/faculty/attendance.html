@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import roll, csrf_field, stat, empty_state with context %}
+{% block title %}Attendance &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('faculty.classes') }}">My Classes</a></li>
+    <li class="breadcrumb-item"><a href="{{ url_for('faculty.class_detail', class_id=class_group.id) }}">{{ class_group.name }}</a></li>
+    <li class="breadcrumb-item active">Attendance</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Attendance &mdash; {{ class_group.name }}</h1>
+    <p class="page-head__sub">
+      Marking for <strong>{{ view_date.strftime('%d %B %Y') }}</strong>.
+      Students with an approved permission for this date are marked
+      <em>On permission</em> automatically.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Class view
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('Present', summary.get('PRESENT', 0), 'check-circle', 'success') }}
+  {{ stat('Absent', summary.get('ABSENT', 0), 'x-circle', 'danger') }}
+  {{ stat('On Permission', summary.get('ON_PERMISSION', 0), 'file-earmark-check', 'warning') }}
+  {{ stat('Marked Total', summary.get('total', 0), 'list-check', 'primary') }}
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-calendar3"></i> Choose Date</h2>
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+      <input type="date" class="form-control form-control-sm" name="date"
+             value="{{ view_date }}" max="{{ now_date }}" style="width:auto"
+             onchange="this.form.submit()">
+      <noscript><button type="submit" class="btn btn-sm btn-primary">Show</button></noscript>
+      {% if view_date != now_date %}
+      <a href="{{ url_for('faculty.attendance', class_id=class_group.id) }}"
+         class="btn btn-sm btn-outline-secondary btn-pill">Today</a>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+{% set linked = members | selectattr('is_linked') | list %}
+{% if linked %}
+<form method="post" action="{{ url_for('faculty.attendance', class_id=class_group.id) }}">
+  {{ csrf_field() }}
+  <input type="hidden" name="date" value="{{ view_date }}">
+
+  <div class="card-au mb-3">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-person-check"></i> Mark Each Student</h2>
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="auMarkAll('PRESENT')">All present</button>
+        <button type="button" class="btn btn-sm btn-outline-danger"
+                onclick="auMarkAll('ABSENT')">All absent</button>
+      </div>
+    </div>
+
+    <div class="au-table-wrap">
+      <table class="table-au">
+        <thead>
+          <tr>
+            <th class="table-au__idx">#</th>
+            <th>Roll No</th>
+            <th>Student</th>
+            <th>Permission Today</th>
+            <th class="table-au__center">Attendance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for member in linked %}
+          {% set current = existing.get(member.student_id) %}
+          {% set excused = member.id in on_permission %}
+          <tr>
+            <td class="table-au__idx">{{ loop.index }}</td>
+            <td>{{ roll(member.roll_number) }}</td>
+            <td class="text-nowrap">{{ member.student_name }}</td>
+            <td>
+              {% if excused %}
+                <span class="badge-au badge-au--approved"><i class="bi bi-check-circle"></i> Approved</span>
+              {% else %}
+                <span class="text-muted small">None</span>
+              {% endif %}
+            </td>
+            <td class="table-au__center">
+              <div class="btn-group btn-group-sm" role="group"
+                   aria-label="Attendance for {{ member.roll_number }}">
+                {% for option, icon, tone in [
+                     ('PRESENT', 'check', 'success'),
+                     ('ABSENT', 'x', 'danger'),
+                     ('ON_PERMISSION', 'file-earmark-check', 'warning')] %}
+                <input class="btn-check" type="radio"
+                       name="att_{{ member.id }}"
+                       id="att_{{ member.id }}_{{ option }}"
+                       value="{{ option }}"
+                       data-group="att_{{ member.id }}"
+                       {{ 'checked' if (current == option) or (not current and option == ('ON_PERMISSION' if excused else 'PRESENT')) }}>
+                <label class="btn btn-outline-{{ tone }} btn-sm d-inline-flex gap-1"
+                       for="att_{{ member.id }}_{{ option }}">
+                  <i class="bi bi-{{ icon }}"></i> {{ option|replace('_', ' ')|title }}
+                </label>
+                {% endfor %}
+              </div>
+              {% if excused and current != 'ON_PERMISSION' %}
+                <div class="form-text mt-1">
+                  Will be saved as <strong>On permission</strong> unless you change it.
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-foot">
+      <span>{{ linked | length }} student{{ '' if linked|length == 1 else 's' }} ready to mark</span>
+      <button type="submit" class="btn btn-primary btn-pill">
+        <i class="bi bi-save"></i> Save attendance for {{ view_date.strftime('%d %b %Y') }}
+      </button>
+    </div>
+  </div>
+</form>
+
+<script>
+  function auMarkAll(status) {
+    document.querySelectorAll('input[type=radio][value="' + status + '"]').forEach(function (input) {
+      input.checked = true;
+    });
+  }
+</script>
+{% else %}
+  <div class="card-au">
+    {{ empty_state('people', 'No students to mark',
+                   'This roster has no roll numbers linked to student accounts yet. Upload a roster of students who have already signed in once.') }}
+  </div>
+{% endif %}
+
+{% set unlinked = members | rejectattr('is_linked') | list %}
+{% if unlinked %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-hourglass-split"></i> Awaiting Student Accounts</h2>
+    <span class="form-text">{{ unlinked | length }}</span>
+  </div>
+  <div class="card-au__body">
+    <p class="small text-muted">
+      These roll numbers are on the roster but have never signed in, so they
+      cannot be marked for attendance. They will link automatically on first
+      sign-in.
+    </p>
+    <div class="d-flex flex-wrap gap-2">
+      {% for member in unlinked %}{{ roll(member.roll_number) }}{% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

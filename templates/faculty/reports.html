@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import stat, empty_state with context %}
+{% block title %}My Reports &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Reports</h1>
+    <p class="page-head__sub">
+      Workload and decision figures for requests assigned to
+      {{ user.name }}.
+    </p>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('Assigned To Me', stats.total, 'inbox', 'primary') }}
+  {{ stat('Pending', stats.pending, 'hourglass-split', 'warning') }}
+  {{ stat('Approved', stats.approved, 'check-circle', 'success') }}
+  {{ stat('Rejected', stats.rejected, 'x-circle', 'danger') }}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-bar-chart"></i> By Permission Type</h2></div>
+      <div class="card-au__body">
+        <canvas id="typeChart" height="230"
+                data-labels='["Leave", "Classroom"]'
+                data-values='{{ [stats.leave, stats.classroom] | tojson }}'></canvas>
+      </div>
+      <div class="table-foot">
+        <span class="table-foot__stat">Leave <strong>{{ stats.leave }}</strong></span>
+        <span class="table-foot__stat">Classroom <strong>{{ stats.classroom }}</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-graph-up-arrow"></i> Last 7 Days</h2></div>
+      <div class="card-au__body">
+        <canvas id="trendChart" height="230"
+                data-labels='{{ stats.trend.labels | tojson }}'
+                data-values='{{ stats.trend.created | tojson }}'
+                data-secondary='{{ stats.trend.decided | tojson }}'></canvas>
+      </div>
+      <div class="table-foot">
+        <span>Assigned per day, with your decisions overlaid.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-tags"></i> Most Common Reasons</h2>
+        <span class="form-text">{{ stats.reasons | length }} shown</span>
+      </div>
+      {% if stats.reasons %}
+      <div class="au-table-wrap">
+        <table class="table-au table-au--narrow">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Reason</th>
+              <th class="table-au__num">Requests</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in stats.reasons %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td>{{ item.reason|truncate(60) }}</td>
+              <td class="table-au__num">{{ item.n }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      {{ empty_state('inbox', 'No requests yet',
+                     'Once requests are assigned to you, their reasons appear here.') }}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-5">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-people"></i> My Classes</h2>
+        <span class="form-text">{{ stats.classes | length }}</span>
+      </div>
+      {% if stats.classes %}
+      <div class="au-table-wrap">
+        <table class="table-au table-au--narrow">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Class</th>
+              <th class="table-au__num">Students</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for group in stats.classes %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td>
+                <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+                   class="text-decoration-none">{{ group.name }}</a>
+              </td>
+              <td class="table-au__num">{{ group.member_count }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      {{ empty_state('people', 'No classes',
+                     'Create a class to group students and mark attendance.') }}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

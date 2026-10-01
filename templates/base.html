@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+
+  <link rel="icon" href="{{ url_for('static', filename='images/aditya-crest.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/aditya-crest.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    (function () {
+      try {
+        var saved = localStorage.getItem('au-theme');
+        if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.setAttribute('data-bs-theme', 'dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+{% set user = current_user() %}
+
+<div class="au-app {{ 'au-app--sidebar' if show_sidebar else '' }}">
+
+{% if show_sidebar %}
+  {# ---------- Desktop column / mobile drawer ---------- #}
+  <div class="offcanvas-lg offcanvas-start au-sidebar-wrap" tabindex="-1"
+       id="auSidebar" aria-label="Main navigation">
+    <div class="offcanvas-body p-0">
+      {% include '_sidebar.html' %}
+    </div>
+  </div>
+{% endif %}
+
+<div class="au-app__main">
+{% if user %}
+<header class="app-topbar no-print">
+  <div class="app-topbar__inner">
+    {% if show_sidebar %}
+    <button class="navbar-toggler border-0 p-1 d-lg-none" type="button"
+            data-bs-toggle="offcanvas" data-bs-target="#auSidebar"
+            aria-controls="auSidebar" aria-label="Open navigation">
+      <i class="bi bi-list text-white" style="font-size:1.6rem"></i>
+    </button>
+    {% endif %}
+
+    {# The wordmark belongs to the navigation column. It is only repeated here
+       for roles that have no sidebar (students), so it never appears twice. #}
+    {% if not show_sidebar %}
+    <button class="navbar-toggler border-0 p-1 d-lg-none ms-auto" type="button"
+            data-bs-toggle="collapse" data-bs-target="#appNav"
+            aria-controls="appNav" aria-expanded="false" aria-label="Toggle navigation">
+      <i class="bi bi-list text-white" style="font-size:1.6rem"></i>
+    </button>
+
+    <a class="app-brand" href="{{ url_for('auth.landing') }}">
+      <img class="au-wordmark au-wordmark--bar au-wordmark--invert"
+           src="{{ url_for('static', filename='images/aditya-logo.png') }}"
+           alt="Aditya University">
+      <span class="d-none d-sm-block">
+        <span class="app-brand__name d-block">CSE Permission Portal</span>
+        <span class="app-brand__sub">Digital Services</span>
+      </span>
+    </a>
+    {% endif %}
+
+    {# With a sidebar the header holds only the right-hand controls, so it must
+       be a flex row that fills the bar -- otherwise they stack on the left. #}
+    <div class="{{ 'd-flex align-items-center gap-2 flex-grow-1 justify-content-end'
+                      if show_sidebar else 'collapse navbar-collapse' }}"
+         id="appNav">
+      {% if not show_sidebar %}
+      <nav class="app-nav">
+        {% for section, entries in nav_sections %}
+          {% for entry in entries %}
+          {% set target = url_for(entry.endpoint) %}
+          <a class="app-nav__link {{ 'is-active' if current_path == target }}"
+             href="{{ target }}"><i class="bi {{ entry.icon }}"></i> {{ entry.label }}</a>
+          {% endfor %}
+        {% endfor %}
+      </nav>
+      {% endif %}
+
+      <div class="app-topbar__spacer"></div>
+
+      {# Sign-out sits at the far right of the header. #}
+      <div class="app-user">
+        <button class="icon-btn" type="button" onclick="auToggleTheme()"
+                title="Switch between light and dark" aria-label="Switch theme">
+          <i class="bi bi-moon-stars"></i>
+        </button>
+
+        {% if not show_sidebar %}
+        <a href="{{ url_for('auth.profile') }}" class="app-user__id text-white text-decoration-none d-none d-md-block">
+          <span class="d-block">
+            {% if user.is_student %}{{ user.roll_number_display }}{% else %}{{ user.name }}{% endif %}
+          </span>
+          <span class="app-user__role">{{ user.role.value }}</span>
+        </a>
+        {% endif %}
+
+        {# Sign-out is a POST form, always available in the header. #}
+        <form method="post" action="{{ url_for('auth.logout') }}" class="signout-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-light btn-pill ms-1"
+                  title="Sign out of the portal">
+            <i class="bi bi-box-arrow-right"></i>
+            <span class="d-none d-xl-inline">Sign out</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</header>
+{% endif %}
+
+<main class="{% block main_class %}au-content{% endblock %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="au-flashes">
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show mb-3"
+           role="alert">
+        <i class="bi bi-{{ 'check-circle' if category == 'success' else 'exclamation-triangle' }} me-1"></i>
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+{% if user %}
+<footer class="au-foot no-print">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <span>{{ UNIVERSITY_NAME }} &middot; {{ DEPARTMENT_NAME }}</span>
+    {# Signing out of all Microsoft sessions lives on the account page, not
+       repeated in the footer of every view. #}
+    <a href="{{ url_for('auth.profile') }}" class="small text-muted text-decoration-none">
+      My account
+    </a>
+  </div>
+</footer>
+{% endif %}
+
+</div>{# /.au-app__main #}
+</div>{# /.au-app #}
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  function auToggleTheme() {
+    var root = document.documentElement;
+    var next = root.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-bs-theme', next);
+    try { localStorage.setItem('au-theme', next); } catch (e) {}
+    var icon = document.querySelector('.app-user .icon-btn i');
+    if (icon) { icon.className = next === 'dark' ? 'bi bi-sun' : 'bi bi-moon-stars'; }
+  }
+  // Keep the icon in step with a theme restored before first paint.
+  (function () {
+    var icon = document.querySelector('.app-user .icon-btn i');
+    if (icon && document.documentElement.getAttribute('data-bs-theme') === 'dark') {
+      icon.className = 'bi bi-sun';
+    }
+  })();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

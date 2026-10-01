@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Uploaded proof documents must never be committed
+storage/proofs/*
+!storage/proofs/.gitkeep
+
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

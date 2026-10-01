@@ -1,0 +1,74 @@
+{#
+   Shared presentation macros.
+
+   Imported with "with context" so these can read context globals such as
+   status_icons. verify.py asserts that every import site keeps that clause.
+#}
+
+{% macro status_badge(status) -%}
+<span class="badge-au badge-au--{{ status.value|lower }}">
+  <i class="bi bi-{{ status_icons.get(status.value, 'question-circle') }}"></i>
+  {{ status.value|title }}
+</span>
+{%- endmacro %}
+
+{% macro type_badge(perm_type) -%}
+{% if perm_type.value == 'LEAVE' %}
+  <span class="badge-au badge-au--leave"><i class="bi bi-calendar-minus"></i> Leave</span>
+{% else %}
+  <span class="badge-au badge-au--classroom"><i class="bi bi-door-open"></i> Classroom</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro roll(roll_number, large=false) -%}
+{% if roll_number %}
+  <span class="roll {{ 'roll--lg' if large }}">{{ roll_number }}</span>
+{% else %}
+  <span class="text-muted">&mdash;</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro date(value) -%}
+{{ value.strftime('%d %b %Y') if value else '<span class="text-muted">&mdash;</span>' }}
+{%- endmacro %}
+
+{% macro date_short(value) -%}
+{{ value.strftime('%d-%m-%Y') if value else '—' }}
+{%- endmacro %}
+
+{% macro time_range(start_time, end_time) -%}
+{% if start_time and end_time %}
+  <span class="text-nowrap">{{ start_time.strftime('%I:%M') }}&ndash;{{ end_time.strftime('%I:%M %p') }}</span>
+{% else %}
+  <span class="text-muted">All day</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro proof_link(proof) -%}
+<a href="{{ url_for('faculty.download_proof', proof_id=proof.id) }}"
+   class="btn btn-sm btn-outline-primary btn-pill" target="_blank" rel="noopener">
+  <i class="bi bi-file-earmark-text"></i> {{ proof.original_filename }}
+</a>
+{%- endmacro %}
+
+{% macro stat(label, value, icon, tone='primary') -%}
+<div class="stat stat--{{ tone }}">
+  <div>
+    <div class="stat__label">{{ label }}</div>
+    <div class="stat__value">{{ value }}</div>
+  </div>
+  <i class="bi bi-{{ icon }} stat__icon"></i>
+</div>
+{%- endmacro %}
+
+{% macro empty_state(icon, title, text) -%}
+<div class="empty">
+  <div class="empty__icon"><i class="bi bi-{{ icon }}"></i></div>
+  <div class="empty__title">{{ title }}</div>
+  <p class="empty__text">{{ text }}</p>
+</div>
+{%- endmacro %}
+
+{% macro csrf_field() -%}
+<input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+{%- endmacro %}

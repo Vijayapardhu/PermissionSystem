@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, csrf_field, empty_state with context %}
+{% block title %}My Account &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Account</h1>
+    <p class="page-head__sub">Your identity is verified by Microsoft Entra ID and cannot be edited here.</p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('student.requests') if user.is_student else url_for('faculty.dashboard') }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-circle"></i> Identity</h2>
+    <span class="badge-au badge-au--role">{{ user.role.value }}</span>
+  </div>
+  <div class="card-au__body">
+    <dl class="definition">
+      <dt>Full name</dt><dd class="fw-semibold">{{ user.name }}</dd>
+      <dt>Roll number</dt><dd>{{ roll(user.roll_number, large=true) }}</dd>
+      <dt>Email</dt><dd>{{ user.email }}</dd>
+      <dt>Phone number</dt><dd>{{ user.phone or '—' }}</dd>
+      <dt>Department</dt><dd>{{ user.department }}</dd>
+      <dt>Account created</dt><dd>{{ user.created_at.strftime('%d %B %Y') }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-shield-lock"></i> Session &amp; Security</h2>
+  </div>
+  <div class="card-au__body">
+    <dl class="definition">
+      <dt>Signed in as</dt><dd>{{ user.email }}</dd>
+      <dt>Idle timeout</dt><dd>{{ idle_timeout_minutes }} minutes</dd>
+    </dl>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <form method="post" action="{{ url_for('auth.logout') }}">
+        {{ csrf_field() }}
+        <button type="submit" class="btn btn-outline-secondary btn-pill">
+          <i class="bi bi-box-arrow-right"></i> Sign out of this portal
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('auth.logout_all') }}">
+        {{ csrf_field() }}
+        <button type="submit" class="btn btn-outline-secondary btn-pill">
+          <i class="bi bi-power"></i> Sign out of all Microsoft sessions
+        </button>
+      </form>
+    </div>
+    <p class="form-text mt-3 mb-0">
+      Signing out of all Microsoft sessions also ends your university single
+      sign-on on other university services and on other devices.
+    </p>
+  </div>
+</div>
+
+{% if user.is_student %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> Recent Activity</h2>
+    <a href="{{ url_for('student.requests') }}" class="btn btn-sm btn-outline-secondary btn-pill">All requests</a>
+  </div>
+  {% if recent %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>Period</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in recent %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {{ empty_state('inbox', 'No activity yet', 'Your submitted permissions will appear here.') }}
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, time_range, roll, proof_link, csrf_field with context %}
+{% block title %}Review REQ-{{ '%04d' % request.id }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('faculty.dashboard') }}">Pending Reviews</a></li>
+    <li class="breadcrumb-item active">REQ-{{ '%04d' % request.id }}</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Verify Request REQ-{{ '%04d' % request.id }}</h1>
+    <p class="page-head__sub">Submitted {{ request.created_at.strftime('%d %B %Y at %I:%M %p') }}</p>
+  </div>
+  <div class="page-head__actions">
+    {{ status_badge(request.status) }}
+    <a href="{{ url_for('student.request_letter', request_id=request.id) }}"
+       class="btn btn-primary btn-pill no-print">
+      <i class="bi bi-file-earmark-text"></i> Letter
+    </a>
+    <a href="{{ url_for('faculty.dashboard') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="card-au mb-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-person-vcard"></i> Student Details</h2></div>
+      <div class="card-au__body">
+        <dl class="definition">
+          <dt>Full name</dt><dd class="fw-semibold">{{ student.name }}</dd>
+          <dt>Roll number</dt><dd>{{ roll(student.roll_number) }}</dd>
+          <dt>Phone number</dt><dd>{{ student.phone or '—' }}</dd>
+          <dt>Email</dt><dd>{{ student.email }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-text"></i> Request Details</h2></div>
+      <div class="card-au__body">
+        <dl class="definition">
+          <dt>Permission type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
+          <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
+          <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
+          <dt>Reason</dt><dd>{{ request.reason }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {% if request.status.value == 'PENDING' and user.is_lecturer %}
+    <div class="card-au" style="border-left:3px solid var(--au-primary)">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your Decision</h2></div>
+      <div class="card-au__body">
+        <form method="post" action="{{ url_for('faculty.action', request_id=request.id) }}">
+          {{ csrf_field() }}
+          <label for="remarks" class="form-label">
+            Remarks
+            <span class="text-muted fw-normal fw-normal">(required when rejecting)</span>
+          </label>
+          <textarea class="form-control mb-3" id="remarks" name="remarks" rows="3"
+                    placeholder="Add a note for the student and the HOD."></textarea>
+
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" name="decision" value="approve"
+                    class="btn btn-success btn-pill px-4"
+                    onclick="return confirm('Approve REQ-{{ '%04d' % request.id }} for {{ student.roll_number_display }}?');">
+              <i class="bi bi-check-circle"></i> Approve
+            </button>
+            <button type="submit" name="decision" value="reject"
+                    class="btn btn-danger btn-pill px-4"
+                    onclick="return confirm('Reject REQ-{{ '%04d' % request.id }} for {{ student.roll_number_display }}?');">
+              <i class="bi bi-x-circle"></i> Reject
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-12 col-lg-5">
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-paperclip"></i> Proof Document</h2>
+        {% if proofs %}<span class="badge-au badge-au--approved">Attached</span>{% endif %}
+      </div>
+      <div class="card-au__body">
+        {% if proofs %}
+          {% for proof in proofs %}
+          <div class="mb-3">
+            {{ proof_link(proof) }}
+            <div class="form-text mt-2">
+              {{ (proof.file_size / 1024) | round(1) }} KB &middot; {{ proof.file_type|upper }}
+            </div>
+            <iframe src="{{ url_for('faculty.download_proof', proof_id=proof.id) }}"
+                    class="proview mt-2"
+                    title="Preview of {{ proof.original_filename }}"></iframe>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p class="text-muted mb-0">No proof document attached.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if history %}
+    <div class="card-au">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-clock-history"></i> Review History</h2></div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for entry in history %}
+          <li class="border-bottom pb-2 mb-2">
+            <div class="fw-semibold small">{{ entry.action.value|title }} by {{ entry.faculty_name }}</div>
+            <div class="form-text mt-1">{{ entry.actioned_at.strftime('%d %b %Y, %I:%M %p') }}</div>
+            {% if entry.remarks %}<div class="small mt-1">{{ entry.remarks }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

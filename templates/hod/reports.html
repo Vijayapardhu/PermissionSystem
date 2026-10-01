@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import stat, roll, empty_state with context %}
+{% block title %}Analytics &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Department Analytics</h1>
+    <p class="page-head__sub">
+      Thirty day volume, faculty assignment and student activity.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+    <a href="{{ url_for('hod.print_report') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-file-earmark-text"></i> Daily Report
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('Total Requests', stats.total, 'journal-text', 'primary') }}
+  {{ stat('Approved', stats.approved, 'check-circle', 'success') }}
+  {{ stat('Rejected', stats.rejected, 'x-circle', 'danger') }}
+  {{ stat('Pending', stats.pending, 'hourglass-split', 'warning') }}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-12">
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-graph-up"></i> Requests Created &mdash; Last 30 Days</h2>
+        <span class="form-text">{{ trend.series | sum }} total</span>
+      </div>
+      <div class="card-au__body">
+        <canvas id="trendChart" height="240"
+                data-labels='{{ trend.labels | tojson }}'
+                data-values='{{ trend.series | tojson }}'></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-person-workspace"></i> Requests per Lecturer</h2>
+      </div>
+      {% if by_faculty %}
+      <div class="au-table-wrap">
+        <table class="table-au table-au--narrow">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Lecturer</th>
+              <th class="table-au__num">Assigned</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in by_faculty %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td>{{ row.faculty_name }}</td>
+              <td class="table-au__num">{{ row.assigned }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        {{ empty_state('person-workspace', 'No lecturers yet', 'Nothing has been assigned yet.') }}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-trophy"></i> Most Active Students</h2>
+        <span class="form-text">By requests submitted</span>
+      </div>
+      {% if top_students %}
+      <div class="au-table-wrap">
+        <table class="table-au table-au--narrow">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Student</th>
+              <th class="table-au__num">Total</th>
+              <th class="table-au__num">Approved</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in top_students %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td>
+                {{ roll(row.roll_number) }}
+                <span class="small text-muted ms-1">{{ row.name }}</span>
+              </td>
+              <td class="table-au__num">{{ row.total }}</td>
+              <td class="table-au__num text-success">{{ row.approved }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        {{ empty_state('inbox', 'No activity yet', 'Student activity appears here once requests are submitted.') }}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

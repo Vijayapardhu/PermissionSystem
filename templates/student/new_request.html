@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, roll with context %}
+{% block title %}New Permission Request &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Submit a Permission Request</h1>
+    <p class="page-head__sub">
+      Routed to a CSE lecturer for verification. You will be emailed once a decision is made.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('student.requests') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> My Requests
+    </a>
+  </div>
+</div>
+
+<form method="post" enctype="multipart/form-data" novalidate>
+  {{ csrf_field() }}
+
+  <div class="card-au mb-3">
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-toggle-on"></i> 1 &middot; Permission Type</h2></div>
+    <div class="card-au__body">
+      {% set chosen = form.get('permission_type') or default_type %}
+      <div class="pick-grid">
+        <div>
+          <input class="btn-check" type="radio" name="permission_type" id="typeLeave"
+                 value="LEAVE" {{ 'checked' if chosen == 'LEAVE' }}>
+          <label class="pick d-block" for="typeLeave">
+            <i class="bi bi-calendar-minus pick__icon"></i>
+            <div class="pick__title">Leave Permission</div>
+            <div class="pick__hint">Absent for a date range</div>
+          </label>
+        </div>
+        <div>
+          <input class="btn-check" type="radio" name="permission_type" id="typeClassroom"
+                 value="CLASSROOM" {{ 'checked' if chosen == 'CLASSROOM' }}>
+          <label class="pick d-block" for="typeClassroom">
+            <i class="bi bi-door-open pick__icon"></i>
+            <div class="pick__title">Classroom Permission</div>
+            <div class="pick__hint">Miss a single class or event</div>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-au mb-3">
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-person-vcard"></i> 2 &middot; Student Details</h2></div>
+    <div class="card-au__body">
+      <div class="row g-3">
+        <div class="col-md-5">
+          <label class="form-label">Full name</label>
+          <input class="form-control" value="{{ user.name }}" disabled>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Roll number</label>
+          <input class="form-control" value="{{ user.roll_number_display }}" disabled>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Phone number</label>
+          <input class="form-control" value="{{ user.phone or '—' }}" disabled>
+        </div>
+      </div>
+      <p class="form-text mt-3 mb-0">
+        <i class="bi bi-shield-check"></i>
+        Taken from your verified Microsoft account. These cannot be edited here.
+      </p>
+    </div>
+  </div>
+
+  <div class="card-au mb-3">
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-calendar-week"></i> 3 &middot; Schedule &amp; Reason</h2></div>
+    <div class="card-au__body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="start_date" class="form-label">From date <span class="text-danger">*</span></label>
+          <input type="date" class="form-control" id="start_date" name="start_date"
+                 min="{{ now_date }}" required value="{{ form.get('start_date', '') }}">
+        </div>
+        <div class="col-md-6">
+          <label for="end_date" class="form-label">To date <span class="text-danger">*</span></label>
+          <input type="date" class="form-control" id="end_date" name="end_date"
+                 min="{{ now_date }}" required value="{{ form.get('end_date', '') }}">
+        </div>
+        <div class="col-md-6">
+          <label for="start_time" class="form-label">From time <span class="text-muted fw-normal">(optional)</span></label>
+          <input type="time" class="form-control" id="start_time" name="start_time"
+                 value="{{ form.get('start_time', '') }}">
+        </div>
+        <div class="col-md-6">
+          <label for="end_time" class="form-label">To time <span class="text-muted fw-normal">(optional)</span></label>
+          <input type="time" class="form-control" id="end_time" name="end_time"
+                 value="{{ form.get('end_time', '') }}">
+        </div>
+        <div class="col-12">
+          <label for="reason" class="form-label">Reason <span class="text-danger">*</span></label>
+          <textarea class="form-control" id="reason" name="reason" rows="4" required
+                    minlength="10" maxlength="1000"
+                    placeholder="Explain why the permission is needed (at least 10 characters).">{{ form.get('reason', '') }}</textarea>
+          <div class="form-text">
+            Mention Medical, Personal, Family, Event, Club or Interview so the HOD
+            analytics can categorise it correctly.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-au mb-4">
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-paperclip"></i> 4 &middot; Proof Document</h2></div>
+    <div class="card-au__body">
+      <label for="proof" class="form-label">Supporting document <span class="text-danger">*</span></label>
+      <input type="file" class="form-control" id="proof" name="proof" accept=".pdf,.jpg,.jpeg,.png" required>
+      <div class="form-text">
+        PDF, JPG, JPEG or PNG, up to 5 MB. Stored on university servers; never shared externally.
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 flex-wrap">
+    <button type="submit" class="btn btn-primary btn-pill px-4">
+      <i class="bi bi-send"></i> Submit for Review
+    </button>
+    <a href="{{ url_for('student.dashboard') }}" class="btn btn-outline-secondary btn-pill">Cancel</a>
+  </div>
+</form>
+{% endblock %}

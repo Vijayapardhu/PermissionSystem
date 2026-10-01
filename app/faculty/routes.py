@@ -1,0 +1,769 @@
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
+
+from flask import (
+    Blueprint,
+    abort,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
+
+from app.models import (
+    ApprovalAction, PermissionType, RequestStatus, UserRole,
+)
+from app.models.classes import AttendanceModel, ClassModel, MemberModel
+from app.models.database import db
+from app.models.permission import ApprovalModel, PermissionModel, ProofModel
+from app.models.user import UserModel
+from app.permissions.service import ValidationError, act_on_request
+from app.utils.files import UploadError, resolve_on_disk
+from app.utils.roster import RosterError, parse_roster
+from app.utils.security import current_user, csrf_token, roles_required
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def db_cursor(dictionary=True):
+    with db.get_cursor(dictionary=dictionary) as cursor:
+        yield cursor
+
+
+def _parse_date(value, default):
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return default
+
+faculty_bp = Blueprint('faculty', __name__, url_prefix='/faculty')
+
+APP_ROOT = 'https://cse-permission.adityauniversity.in'
+
+
+@faculty_bp.route('/dashboard')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def dashboard():
+    user = current_user()
+    pending = PermissionModel.find_pending_for_faculty(user.id)
+    history = PermissionModel.find_all_for_hod(limit=50)
+
+    return render_template(
+        'faculty/dashboard.html',
+        user=user,
+        pending=pending,
+        recent=history,
+        pending_count=len(pending),
+    )
+
+
+@faculty_bp.route('/requests/<int:request_id>')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def request_detail(request_id: int):
+    user = current_user()
+    record = PermissionModel.find_by_id(request_id)
+    if record is None:
+        abort(404)
+
+    if user.is_lecturer and record.assigned_faculty_id != user.id:
+        abort(403)
+
+    student = UserModel.find_by_id(record.student_id)
+    proofs = ProofModel.find_by_request(request_id)
+    history = ApprovalModel.find_by_request(request_id)
+
+    return render_template(
+        'faculty/request_detail.html',
+        user=user,
+        request=record,
+        student=student,
+        proofs=proofs,
+        history=history,
+    )
+
+
+@faculty_bp.route('/requests/<int:request_id>/action', methods=['POST'])
+@roles_required(UserRole.LECTURER)
+def action(request_id: int):
+    user = current_user()
+    decision = request.form.get('decision', '').lower()
+    remarks = (request.form.get('remarks') or '').strip()
+
+    if decision not in ('approve', 'reject'):
+        flash('Choose approve or reject.', 'danger')
+        return redirect(url_for('faculty.request_detail', request_id=request_id))
+
+    if decision == 'reject' and len(remarks) < 5:
+        flash('Add a remark so the student understands the rejection.', 'danger')
+        return redirect(url_for('faculty.request_detail', request_id=request_id))
+
+    action_enum = (
+        ApprovalAction.APPROVED if decision == 'approve' else ApprovalAction.REJECTED
+    )
+
+    try:
+        act_on_request(
+            request_id=request_id,
+            faculty=user,
+            action=action_enum,
+            remarks=remarks,
+            base_url=APP_ROOT,
+        )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.request_detail', request_id=request_id))
+
+    verb = 'approved' if decision == 'approve' else 'rejected'
+    flash(f'Request #{request_id} {verb}.', 'success')
+    return redirect(url_for('faculty.dashboard'))
+
+
+@faculty_bp.route('/requests/<int:request_id>/reassign', methods=['POST'])
+@roles_required(UserRole.HOD)
+def reassign(request_id: int):
+    lecturer_id = request.form.get('lecturer_id', type=int)
+    record = PermissionModel.find_by_id(request_id)
+    if record is None:
+        abort(404)
+    if lecturer_id and UserModel.find_by_id(lecturer_id):
+        PermissionModel.update_status(
+            request_id, record.status, faculty_id=lecturer_id
+        )
+        flash(f'Reassigned to faculty #{lecturer_id}.', 'success')
+    return redirect(url_for('hod.dashboard'))
+
+
+@faculty_bp.route('/search')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def search():
+    """Find a student by roll number or name and list their permissions."""
+    user = current_user()
+    query = (request.args.get('q') or '').strip()
+
+    results = []
+    if len(query) >= 2:
+        results = _search_students(user, query)
+
+    return render_template(
+        'faculty/search.html',
+        user=user,
+        query=query,
+        results=results,
+    )
+
+
+def _search_students(viewer, query: str) -> list:
+    """Return students matching the query, with their permission summary.
+
+    A lecturer sees every student; both roles share the same department view so
+    a handover between lecturers still finds the record.
+    """
+    like = f'%{query}%'
+    needle = query.upper()
+
+    with db_cursor() as cursor:
+        cursor.execute(
+            """SELECT u.id, u.name, u.roll_number, u.email, u.phone,
+                      (SELECT COUNT(*) FROM permission_requests pr
+                        WHERE pr.student_id = u.id) AS total,
+                      (SELECT COUNT(*) FROM permission_requests pr
+                        WHERE pr.student_id = u.id AND pr.status = 'APPROVED') AS approved,
+                      (SELECT COUNT(*) FROM permission_requests pr
+                        WHERE pr.student_id = u.id AND pr.status = 'PENDING') AS pending
+               FROM users u
+               WHERE u.role = 'STUDENT' AND u.is_active = TRUE
+                 AND (u.roll_number LIKE %s OR u.name LIKE %s)
+               ORDER BY
+                 CASE WHEN u.roll_number = %s THEN 0
+                      WHEN u.roll_number LIKE %s THEN 1
+                      ELSE 2 END,
+                 u.roll_number
+               LIMIT 40""",
+            (like, like, needle, f'{needle}%'),
+        )
+        students = cursor.fetchall()
+
+    output = []
+    for row in students:
+        roll = (row.get('roll_number') or '').upper()
+        if needle and needle not in roll and needle not in (row.get('name') or '').upper():
+            continue
+        record = PermissionModel.find_by_student(row['id'], limit=25)
+        output.append({
+            'id': row['id'],
+            'name': row['name'],
+            'roll_number': roll,
+            'email': row['email'],
+            'phone': row.get('phone'),
+            'total': row['total'],
+            'approved': row['approved'],
+            'pending': row['pending'],
+            'requests': record,
+            'in_my_classes': _class_rolls_for(viewer, roll),
+        })
+    return output
+
+
+def _class_rolls_for(viewer, roll_number: str) -> list:
+    """Classes of the viewing lecturer that contain this roll number."""
+    if not roll_number:
+        return []
+    with db_cursor() as cursor:
+        cursor.execute(
+            """SELECT c.id, c.name FROM class_members m
+               JOIN class_groups c ON c.id = m.class_id
+               WHERE m.roll_number = %s AND c.faculty_id = %s""",
+            (roll_number, viewer.id),
+        )
+        return cursor.fetchall()
+
+
+@faculty_bp.route('/classes')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def classes():
+    """List the viewing lecturer's classes."""
+    user = current_user()
+    # Pick up any roster rows saved before those students first signed in.
+    linked_now = MemberModel.relink_unresolved()
+
+    owned = ClassModel.find_for_faculty(user.id)
+
+    return render_template(
+        'faculty/classes.html',
+        user=user,
+        classes=owned,
+        linked_now=linked_now,
+    )
+
+
+@faculty_bp.route('/classes/new', methods=['POST'])
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def create_class():
+    user = current_user()
+    name = (request.form.get('name') or '').strip()
+
+    if len(name) < 3:
+        flash('Give the class a name of at least 3 characters.', 'danger')
+        return redirect(url_for('faculty.classes'))
+
+    try:
+        group = ClassModel.create(
+            name=name,
+            faculty_id=user.id,
+            section_code=(request.form.get('section_code') or '').strip(),
+            academic_year=(request.form.get('academic_year') or '').strip(),
+        )
+    except Exception:
+        flash('The class could not be created. Please try again.', 'danger')
+        return redirect(url_for('faculty.classes'))
+
+    flash(f'Class "{group.name}" created. Upload a roster to add students.',
+          'success')
+    return redirect(url_for('faculty.class_detail', class_id=group.id))
+
+
+@faculty_bp.route('/classes/<int:class_id>')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def class_detail(class_id: int):
+    """Roster, and the permissions in force on a chosen date."""
+    user = current_user()
+    group = _owned_class(user, class_id)
+
+    view_date = _parse_date(request.args.get('date'), date.today())
+    members = MemberModel.find_by_class(class_id)
+
+    permissions_by_student, on_permission = _permissions_for_date(
+        members, view_date
+    )
+    attendance = AttendanceModel.find_by_class_date(class_id, view_date)
+
+    rows = []
+    for member in members:
+        if member.student_id:
+            status = attendance.get(member.student_id)
+        else:
+            status = None
+        records = permissions_by_student.get(member.student_id, [])
+        rows.append({
+            'member': member,
+            'permissions': records,
+            'has_permission': bool(records),
+            'attendance': status,
+        })
+
+    summary = {
+        'roster': len(members),
+        'linked': sum(1 for m in members if m.is_linked),
+        'unlinked': sum(1 for m in members if not m.is_linked),
+        'on_permission': sum(1 for r in rows if r['has_permission']),
+        'present': sum(1 for r in rows if r['attendance'] == 'PRESENT'),
+        'absent': sum(1 for r in rows if r['attendance'] == 'ABSENT'),
+    }
+
+    return render_template(
+        'faculty/class_detail.html',
+        user=user,
+        class_group=group,
+        members=members,
+        rows=rows,
+        view_date=view_date,
+        summary=summary,
+    )
+
+
+@faculty_bp.route('/classes/<int:class_id>/roster', methods=['POST'])
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def upload_roster(class_id: int):
+    """Bulk-add roll numbers from an Excel or CSV roster."""
+    user = current_user()
+    _owned_class(user, class_id)
+
+    upload = request.files.get('roster')
+    try:
+        rolls = parse_roster(upload)
+    except RosterError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+    result = MemberModel.add_members(class_id, rolls)
+
+    message = (
+        f'Added {result["added"]} roll number'
+        f'{"" if result["added"] == 1 else "s"} '
+        f'({result["linked"]} matched to student accounts).'
+    )
+    flash(message, 'success')
+
+    if result['unresolved']:
+        preview = ', '.join(result['unresolved'][:6])
+        more = '' if len(result['unresolved']) <= 6 else \
+            f' and {len(result["unresolved"]) - 6} more'
+        flash(
+            f'{len(result["unresolved"])} roll numbers have no student account '
+            f'yet ({preview}{more}). They will link automatically once those '
+            'students sign in.',
+            'warning',
+        )
+
+    return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+
+@faculty_bp.route('/classes/<int:class_id>/members/<int:member_id>/delete',
+                  methods=['POST'])
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def delete_member(class_id: int, member_id: int):
+    user = current_user()
+    _owned_class(user, class_id)
+
+    if MemberModel.delete_member(member_id):
+        flash('Student removed from the roster.', 'success')
+    return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+
+@faculty_bp.route('/classes/<int:class_id>/delete', methods=['POST'])
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def delete_class(class_id: int):
+    user = current_user()
+    group = _owned_class(user, class_id)
+
+    if ClassModel.delete(class_id):
+        flash(f'Class "{group.name}" deleted.', 'success')
+    return redirect(url_for('faculty.classes'))
+
+
+@faculty_bp.route('/classes/<int:class_id>/attendance', methods=['GET', 'POST'])
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def attendance(class_id: int):
+    """Mark attendance for the class on a given date."""
+    user = current_user()
+    _owned_class(user, class_id)
+
+    view_date = _parse_date(request.args.get('date'), date.today())
+    members = MemberModel.find_by_class(class_id)
+
+    if request.method == 'POST':
+        view_date = _parse_date(request.form.get('date'), view_date)
+        if view_date > date.today():
+            flash('Attendance cannot be marked for a future date.', 'danger')
+            return redirect(url_for('faculty.attendance', class_id=class_id,
+                                    date=view_date))
+
+        # Pre-mark students excused by an approved permission covering that day.
+        _, on_permission = _permissions_for_date(members, view_date)
+
+        records = []
+        for member in members:
+            if not member.is_linked:
+                continue
+            chosen = (request.form.get(f'att_{member.id}') or 'PRESENT').upper()
+            if chosen not in ('PRESENT', 'ABSENT', 'ON_PERMISSION'):
+                chosen = 'PRESENT'
+            if member.id in on_permission and chosen == 'PRESENT':
+                chosen = 'ON_PERMISSION'
+            records.append((member.student_id, chosen))
+
+        if records:
+            saved = AttendanceModel.save(class_id, records, user.id, view_date)
+            flash(f'Attendance saved for {saved} student'
+                  f'{"" if saved == 1 else "s"} on '
+                  f'{view_date.strftime("%d %B %Y")}.', 'success')
+        else:
+            flash('No students with a linked account to mark.', 'warning')
+
+        return redirect(url_for('faculty.attendance', class_id=class_id,
+                                date=view_date))
+
+    existing = AttendanceModel.find_by_class_date(class_id, view_date)
+    _, on_permission = _permissions_for_date(members, view_date)
+
+    summary = AttendanceModel.summary_by_date(class_id, view_date)
+
+    return render_template(
+        'faculty/attendance.html',
+        user=user,
+        class_group=_owned_class(user, class_id),
+        members=members,
+        existing=existing,
+        on_permission=on_permission,
+        view_date=view_date,
+        summary=summary,
+    )
+
+
+# ---------- helpers ----------
+
+def _owned_class(user, class_id: int):
+    """Fetch a class, guaranteeing the viewer owns it (admins may read any)."""
+    group = ClassModel.find_by_id(class_id)
+    if group is None:
+        abort(404)
+    if not user.is_hod and group.faculty_id != user.id:
+        abort(403)
+    return group
+
+
+def _permissions_for_date(members, on_date: date):
+    """Fetch approved permissions overlapping a date, grouped by student id.
+
+    Only students on the roster are considered, and only rows that span the date
+    are returned.
+    """
+    rolls = [m.roll_number for m in members if m.is_linked]
+    if not rolls:
+        return {}, set()
+
+    placeholders = ', '.join(['%s'] * len(rolls))
+    with db_cursor() as cursor:
+        cursor.execute(
+            f"""SELECT pr.*, u.name AS student_name, u.roll_number
+                FROM permission_requests pr
+                JOIN users u ON u.id = pr.student_id
+                WHERE pr.status = 'APPROVED'
+                  AND pr.start_date <= %s AND pr.end_date >= %s
+                  AND u.roll_number IN ({placeholders})
+                ORDER BY u.roll_number, pr.start_date""",
+            [on_date, on_date] + rolls,
+        )
+        rows = cursor.fetchall()
+
+    by_student = {}
+    excused_member_ids = set()
+    roll_to_member = {m.roll_number: m.id for m in members}
+
+    for row in rows:
+        student_id = row['student_id']
+        by_student.setdefault(student_id, []).append(
+            _row_to_request_with_student(row)
+        )
+        member_id = roll_to_member.get((row.get('roll_number') or '').upper())
+        if member_id:
+            excused_member_ids.add(member_id)
+
+    return by_student, excused_member_ids
+
+
+def _row_to_request_with_student(row):
+    """Wrap a raw join row as a PermissionRequest plus student/reviewer fields."""
+    from app.models import PermissionRequest
+    from app.models.permission import _to_time
+
+    record = PermissionRequest(
+        id=row['id'],
+        student_id=row['student_id'],
+        permission_type=row['permission_type'],
+        reason=row['reason'],
+        start_date=row['start_date'],
+        end_date=row['end_date'],
+        start_time=_to_time(row.get('start_time')),
+        end_time=_to_time(row.get('end_time')),
+        status=row['status'],
+        assigned_faculty_id=row.get('assigned_faculty_id'),
+        created_at=row.get('created_at'),
+        updated_at=row.get('updated_at'),
+    )
+    record.student_name = row.get('student_name')
+    record.student_roll_number = row.get('roll_number')
+    record.student_identifier = row.get('roll_number') or row.get('student_name')
+    record.faculty_name = row.get('faculty_name')
+    return record
+
+
+@faculty_bp.route('/requests')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def requests_browser():
+    """Browse every request in the department with filters."""
+    user = current_user()
+
+    status_filter = _status_filter(request.args.get('status'))
+    type_filter = _type_filter(request.args.get('type'))
+    date_from = _parse_date(request.args.get('from'), None)
+    date_to = _parse_date(request.args.get('to'), None)
+    search = (request.args.get('q') or '').strip()
+
+    records = _filtered_requests(status_filter, type_filter,
+                                 date_from, date_to, search, limit=300)
+
+    return render_template(
+        'faculty/requests.html',
+        user=user,
+        requests=records,
+        status_filter=status_filter,
+        type_filter=type_filter,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+    )
+
+
+@faculty_bp.route('/attendance')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def attendance_overview():
+    """Pick a class and a date to mark attendance for it."""
+    user = current_user()
+    classes = ClassModel.find_for_faculty(user.id)
+
+    selected = None
+    class_id = request.args.get('class_id', type=int)
+    if class_id:
+        try:
+            selected = _owned_class(user, class_id)
+        except Exception:
+            selected = None
+
+    if selected is not None:
+        return redirect(url_for('faculty.attendance', class_id=selected.id,
+                                date=request.args.get('date')))
+
+    return render_template(
+        'faculty/attendance_overview.html',
+        user=user,
+        classes=classes,
+        now_date=date.today(),
+    )
+
+
+@faculty_bp.route('/reports')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def reports():
+    """Workload and trend figures for the signed-in lecturer."""
+    user = current_user()
+    stats = _faculty_stats(user.id)
+
+    return render_template(
+        'faculty/reports.html',
+        user=user,
+        stats=stats,
+    )
+
+
+# ---------- aggregate helpers ----------
+
+def _faculty_stats(faculty_id: int) -> dict:
+    """Decision counts, type split, reason mix and a 7-day trend."""
+    with db_cursor() as cursor:
+        cursor.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM permission_requests
+                   WHERE assigned_faculty_id = %s AND status = 'PENDING') AS pending,
+                 (SELECT COUNT(*) FROM permission_requests
+                   WHERE assigned_faculty_id = %s AND status = 'APPROVED') AS approved,
+                 (SELECT COUNT(*) FROM permission_requests
+                   WHERE assigned_faculty_id = %s AND status = 'REJECTED') AS rejected,
+                 (SELECT COUNT(*) FROM approval_history
+                   WHERE faculty_id = %s) AS decisions""",
+            (faculty_id, faculty_id, faculty_id, faculty_id),
+        )
+        row = cursor.fetchone() or {}
+        stats = {k: int(v or 0) for k, v in row.items()}
+
+        stats['total'] = stats['approved'] + stats['rejected'] + stats['pending']
+
+        cursor.execute(
+            """SELECT permission_type, COUNT(*) AS n FROM permission_requests
+               WHERE assigned_faculty_id = %s GROUP BY permission_type""",
+            (faculty_id,),
+        )
+        types = {r['permission_type']: r['n'] for r in cursor.fetchall()}
+        stats['leave'] = types.get('LEAVE', 0)
+        stats['classroom'] = types.get('CLASSROOM', 0)
+
+        cursor.execute(
+            """SELECT reason, COUNT(*) AS n FROM permission_requests
+               WHERE assigned_faculty_id = %s GROUP BY reason ORDER BY n DESC
+               LIMIT 8""",
+            (faculty_id,),
+        )
+        stats['reasons'] = cursor.fetchall()
+
+    stats['trend'] = _trend_for(faculty_id)
+    stats['classes'] = ClassModel.find_for_faculty(faculty_id)
+    return stats
+
+
+def _trend_for(faculty_id: int, days: int = 7) -> dict:
+    start = date.today() - timedelta(days=days - 1)
+    labels, created, decided = [], [], []
+    with db_cursor() as cursor:
+        for offset in range(days):
+            day = start + timedelta(days=offset)
+            labels.append(day.strftime('%d %b'))
+            cursor.execute(
+                """SELECT COUNT(*) AS n FROM permission_requests
+                   WHERE assigned_faculty_id = %s AND DATE(created_at) = %s""",
+                (faculty_id, day),
+            )
+            created.append(cursor.fetchone()['n'])
+            cursor.execute(
+                """SELECT COUNT(*) AS n FROM approval_history
+                   WHERE faculty_id = %s AND DATE(actioned_at) = %s""",
+                (faculty_id, day),
+            )
+            decided.append(cursor.fetchone()['n'])
+    return {'labels': labels, 'created': created, 'decided': decided}
+
+
+def _status_filter(value):
+    if not value:
+        return None
+    try:
+        return RequestStatus(value.upper())
+    except ValueError:
+        return None
+
+
+def _type_filter(value):
+    if not value:
+        return None
+    try:
+        return PermissionType(value.upper())
+    except ValueError:
+        return None
+
+
+def _filtered_requests(status_filter, type_filter, date_from, date_to,
+                      search, limit=200, faculty_id=None):
+    """Shared filter query used by the faculty browser and HOD request list."""
+    clauses, params = [], []
+
+    if status_filter:
+        clauses.append('pr.status = %s')
+        params.append(status_filter.value)
+    if type_filter:
+        clauses.append('pr.permission_type = %s')
+        params.append(type_filter.value)
+    if date_from:
+        clauses.append('pr.end_date >= %s')
+        params.append(date_from)
+    if date_to:
+        clauses.append('pr.start_date <= %s')
+        params.append(date_to)
+    if search:
+        clauses.append('(u.roll_number LIKE %s OR u.name LIKE %s)')
+        params.extend([f'%{search}%', f'%{search}%'])
+    if faculty_id:
+        clauses.append('pr.assigned_faculty_id = %s')
+        params.append(faculty_id)
+
+    where = ('WHERE ' + ' AND '.join(clauses)) if clauses else ''
+
+    with db_cursor() as cursor:
+        cursor.execute(
+            f"""SELECT pr.*, u.name AS student_name, u.roll_number,
+                       f.name AS faculty_name
+                FROM permission_requests pr
+                JOIN users u ON u.id = pr.student_id
+                LEFT JOIN users f ON f.id = pr.assigned_faculty_id
+                {where}
+                ORDER BY pr.created_at DESC
+                LIMIT {int(limit)}""",
+            params,
+        )
+        return [_row_to_request_with_student(row) for row in cursor.fetchall()]
+
+
+@faculty_bp.route('/requests/<int:request_id>/letter')
+@roles_required(UserRole.LECTURER, UserRole.HOD)
+def request_letter(request_id: int):
+    """Formal letter for a request, addressed from the faculty portal."""
+    user = current_user()
+    record = PermissionModel.find_by_id(request_id)
+    if record is None:
+        abort(404)
+
+    if user.is_lecturer and record.assigned_faculty_id != user.id:
+        abort(403)
+
+    from flask import render_template
+
+    student = UserModel.find_by_id(record.student_id)
+    history = ApprovalModel.find_by_request(request_id)
+    faculty_name = '—'
+    decision = None
+    if history:
+        latest = history[-1]
+        faculty_name = getattr(latest, 'faculty_name', None) or '—'
+        decision = latest
+
+    return render_template(
+        'student/letter.html',
+        user=user,
+        request=record,
+        student=student,
+        proofs=ProofModel.find_by_request(request_id),
+        history=history,
+        faculty_name=faculty_name,
+        decision=decision,
+    )
+
+
+@faculty_bp.route('/proofs/<int:proof_id>/download')
+@roles_required(UserRole.LECTURER, UserRole.HOD, UserRole.STUDENT)
+def download_proof(proof_id: int):
+    proof = ProofModel.find_by_id(proof_id)
+    if proof is None:
+        abort(404)
+
+    record = PermissionModel.find_by_id(proof.request_id)
+    if record is None:
+        abort(404)
+
+    user = current_user()
+    if user.is_student and record.student_id != user.id:
+        abort(403)
+    if user.is_lecturer and record.assigned_faculty_id != user.id:
+        abort(403)
+
+    try:
+        absolute = resolve_on_disk(proof.file_path)
+    except UploadError:
+        abort(404)
+
+    return send_file(
+        absolute,
+        mimetype=f'application/{proof.file_type}',
+        as_attachment=False,
+        download_name=proof.original_filename,
+    )

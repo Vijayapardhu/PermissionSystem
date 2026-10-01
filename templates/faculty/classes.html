@@ -1,0 +1,138 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}My Classes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Classes</h1>
+    <p class="page-head__sub">
+      Group students into a class, load the roster from a spreadsheet, then view
+      permissions and mark attendance.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.search') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-search"></i> Search Students
+    </a>
+  </div>
+</div>
+
+{% if linked_now %}
+  <div class="alert alert-success">
+    <i class="bi bi-link-45deg"></i>
+    {{ linked_now }} roster {{ 'entry was' if linked_now == 1 else 'entries were' }}
+    linked to student accounts after their first sign-in.
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-12 col-lg-8">
+    {% if classes %}
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-people"></i> Class List</h2>
+        <span class="form-text">{{ classes | length }} class{{ '' if classes|length == 1 else 'es' }}</span>
+      </div>
+      <div class="au-table-wrap">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Class</th>
+              <th>Section</th>
+              <th>Year</th>
+              <th class="table-au__num">Students</th>
+              <th class="table-au__num">Linked</th>
+              <th class="table-au__actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for group in classes %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td class="table-au__strong">{{ group.name }}</td>
+              <td>{{ group.section_code or '—' }}</td>
+              <td>{{ group.academic_year or '—' }}</td>
+              <td class="table-au__num">{{ group.member_count }}</td>
+              <td class="table-au__num">
+                {% if group.linked_count == group.member_count %}
+                  <span class="badge-au badge-au--approved">{{ group.linked_count }}</span>
+                {% else %}
+                  <span class="badge-au badge-au--pending">{{ group.linked_count }}</span>
+                {% endif %}
+              </td>
+              <td class="table-au__actions">
+                <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+                   class="btn btn-sm btn-primary btn-pill">Open</a>
+                <a href="{{ url_for('faculty.attendance', class_id=group.id) }}"
+                   class="btn btn-sm btn-outline-secondary">Attendance</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-foot">
+        <span>Open a class to upload its roster and view permissions by date.</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="card-au">
+      {{ empty_state('people', 'No classes yet',
+                     'Create your first class on the right, then upload a spreadsheet of roll numbers.') }}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card-au">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-plus-circle"></i> Create Class</h2></div>
+      <div class="card-au__body">
+        <form method="post" action="{{ url_for('faculty.create_class') }}">
+          {{ csrf_field() }}
+          <div class="mb-3">
+            <label for="name" class="form-label">Class name <span class="text-danger">*</span></label>
+            <input class="form-control" id="name" name="name" required minlength="3"
+                   maxlength="120" placeholder="e.g. CSE Third Year &ndash; A">
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label for="section_code" class="form-label">Section</label>
+              <input class="form-control" id="section_code" name="section_code"
+                     maxlength="40" placeholder="A">
+            </div>
+            <div class="col-6">
+              <label for="academic_year" class="form-label">Academic year</label>
+              <input class="form-control" id="academic_year" name="academic_year"
+                     maxlength="20" placeholder="2026-27">
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-pill w-100">
+            <i class="bi bi-plus-lg"></i> Create class
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card-au mt-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-earmark-spreadsheet"></i> Roster Format</h2></div>
+      <div class="card-au__body">
+        <p class="small mb-2">
+          Upload an Excel workbook (<code>.xlsx</code>) or a CSV containing one
+          roll number per row. A header row is fine &mdash; it is skipped
+          automatically.
+        </p>
+        <pre class="small mb-2" style="background:var(--au-surface-panel);padding:.6rem;border-radius:6px;overflow-x:auto">Roll Number
+26B21CS058
+26B21CS059
+26B21CS060</pre>
+        <p class="small text-muted mb-0">
+          Roll numbers that have no student account yet are still stored, and
+          link automatically the first time that student signs in.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

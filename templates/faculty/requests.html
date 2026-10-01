@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% block title %}All Requests &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">All Requests</h1>
+    <p class="page-head__sub">Every permission request in the department.</p>
+  </div>
+  <div class="page-head__actions">
+    <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <form class="toolbar" method="get">
+    <div class="input-group input-group-sm" style="max-width:220px">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input type="search" class="form-control" name="q" value="{{ search }}"
+             placeholder="Roll no or name" aria-label="Search by roll number or name">
+    </div>
+
+    <select class="form-select form-select-sm" name="status" style="width:auto"
+            onchange="this.form.submit()" aria-label="Filter by status">
+      <option value="">All statuses</option>
+      {% for status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
+      <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
+      {% endfor %}
+    </select>
+
+    <select class="form-select form-select-sm" name="type" style="width:auto"
+            onchange="this.form.submit()" aria-label="Filter by type">
+      <option value="">All types</option>
+      {% for kind in ['LEAVE', 'CLASSROOM'] %}
+      <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
+      {% endfor %}
+    </select>
+
+    <input type="date" class="form-control form-control-sm" name="from"
+           value="{{ date_from or '' }}" style="width:auto"
+           title="From date" aria-label="From date">
+    <span class="text-muted small">to</span>
+    <input type="date" class="form-control form-control-sm" name="to"
+           value="{{ date_to or '' }}" style="width:auto"
+           title="To date" aria-label="To date">
+
+    <button type="submit" class="btn btn-sm btn-primary btn-pill">Apply</button>
+    {% if search or status_filter or type_filter or date_from or date_to %}
+    <a href="{{ url_for('faculty.requests') }}" class="btn btn-sm btn-outline-secondary btn-pill">
+      Clear
+    </a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-list-check"></i> Results</h2>
+    <span class="form-text">{{ requests | length }} request{{ '' if requests|length == 1 else 's' }}</span>
+  </div>
+
+  {% if requests %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Reviewer</th>
+          <th>Status</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in requests %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="small text-muted">{{ record.reason|truncate(44) }}</td>
+          <td class="small text-nowrap">{{ record.faculty_name or '—' }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>Showing up to {{ requests | length }} most recent matches.</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Approved
+        <strong>{{ requests | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
+      <span class="table-foot__stat">Pending
+        <strong>{{ requests | selectattr('status.value', 'equalto', 'PENDING') | list | length }}</strong></span>
+      <span class="table-foot__stat">Rejected
+        <strong>{{ requests | selectattr('status.value', 'equalto', 'REJECTED') | list | length }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('search', 'No requests match',
+                   'Adjust the filters, or clear them to see every request in the department.') }}
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,222 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, time_range, roll, stat, empty_state with context %}
+{% block title %}HOD Dashboard &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Department Analytics</h1>
+    <p class="page-head__sub">
+      {{ user.name }} &middot; Head of Department &nbsp;&middot;&nbsp; {{ now_date }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <button class="btn btn-outline-secondary btn-pill no-print" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+    <a href="{{ url_for('hod.print_report') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-file-earmark-text"></i> Daily Report
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('Total Requests', stats.total, 'journal-text', 'primary') }}
+  {{ stat('Approved', stats.approved, 'check-circle', 'success') }}
+  {{ stat('Rejected', stats.rejected, 'x-circle', 'danger') }}
+  {{ stat('Pending', stats.pending, 'hourglass-split', 'warning') }}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-pie-chart"></i> Decision Split</h2></div>
+      <div class="card-au__body">
+        <canvas id="statusChart" height="245"
+                data-labels='{{ status_chart.labels | tojson }}'
+                data-values='{{ status_chart.series | tojson }}'></canvas>
+      </div>
+      <div class="table-foot">
+        <span>Share of all {{ stats.total }} requests</span>
+        <span class="table-foot__stats">
+          {% for label, count in zip(status_chart.labels, status_chart.counts) %}
+          <span class="table-foot__stat">{{ label }} <strong>{{ count }}</strong></span>
+          {% endfor %}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-bar-chart"></i> Leave vs Classroom</h2></div>
+      <div class="card-au__body">
+        <canvas id="typeChart" height="245"
+                data-labels='{{ type_chart.labels | tojson }}'
+                data-values='{{ type_chart.series | tojson }}'></canvas>
+      </div>
+      <div class="table-foot">
+        <span>By request type</span>
+        <span class="table-foot__stats">
+          <span class="table-foot__stat">Leave <strong>{{ stats.leave_count }}</strong></span>
+          <span class="table-foot__stat">Classroom <strong>{{ stats.classroom_count }}</strong></span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-tags"></i> Reasons</h2></div>
+      <div class="card-au__body">
+        <canvas id="reasonChart" height="245"
+                data-labels='{{ reason_chart.labels | tojson }}'
+                data-values='{{ reason_chart.series | tojson }}'></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au h-100">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-graph-up-arrow"></i> Last 7 Days</h2></div>
+      <div class="card-au__body">
+        <canvas id="trendChart" height="245"
+                data-labels='{{ trend_chart.labels | tojson }}'
+                data-values='{{ trend_chart.series | tojson }}'></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card-au mb-4">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-check"></i> Active Today</h2>
+    <form method="get" class="d-flex flex-wrap gap-2">
+      <select class="form-select form-select-sm" name="status" onchange="this.form.submit()"
+              style="width:auto" aria-label="Filter by status">
+        <option value="">All statuses</option>
+        {% for status in ['PENDING', 'APPROVED', 'REJECTED'] %}
+        <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
+        {% endfor %}
+      </select>
+      <select class="form-select form-select-sm" name="type" onchange="this.form.submit()"
+              style="width:auto" aria-label="Filter by type">
+        <option value="">All types</option>
+        {% for kind in ['LEAVE', 'CLASSROOM'] %}
+        <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {% if approved_today %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Time</th>
+          <th>Reason</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in approved_today %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="small">{{ time_range(record.start_time, record.end_time) }}</td>
+          <td class="text-muted">{{ record.reason|truncate(38) }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{{ approved_today | length }} student{{ '' if approved_today|length == 1 else 's' }} with permission in effect today</span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Leave
+        <strong>{{ approved_today | selectattr('permission_type.value', 'equalto', 'LEAVE') | list | length }}</strong></span>
+      <span class="table-foot__stat">Classroom
+        <strong>{{ approved_today | selectattr('permission_type.value', 'equalto', 'CLASSROOM') | list | length }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('calendar-x', 'No permissions in effect today',
+                   'No student currently holds an approved permission for today.') }}
+  {% endif %}
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-list-ul"></i> All Requests</h2>
+    <span class="form-text">{{ records | length }} shown</span>
+  </div>
+
+  {% if records %}
+  <div class="table-responsive">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in records %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td>{{ status_badge(record.status) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      {% if status_filter %}Filtered by {{ status_filter.value|title }}{% else %}All statuses{% endif %}
+      &nbsp;&middot;&nbsp;
+      {% if type_filter %}{{ type_filter.value|title }}{% else %}All types{% endif %}
+    </span>
+    <span class="table-foot__stats">
+      <span class="table-foot__stat">Approved
+        <strong>{{ records | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
+      <span class="table-foot__stat">Pending
+        <strong>{{ records | selectattr('status.value', 'equalto', 'PENDING') | list | length }}</strong></span>
+      <span class="table-foot__stat">Rejected
+        <strong>{{ records | selectattr('status.value', 'equalto', 'REJECTED') | list | length }}</strong></span>
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('inbox', 'No requests match',
+                   'Adjust the status or type filter to see more records.') }}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

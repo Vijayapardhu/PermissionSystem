@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Permission Letter REQ-{{ '%04d' % request.id }} &middot; {{ UNIVERSITY_NAME }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='images/aditya-crest.png') }}">
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Georgia:serif&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+  <style>
+    /* Formal letter typography: serif body on a printed sheet. */
+    .letter-sheet {
+      max-width: 800px;
+      margin-inline: auto;
+      background: #fff;
+      padding: 2.75rem 3rem;
+      box-shadow: 0 16px 40px rgba(16, 24, 40, .16);
+      font-family: Georgia, 'Times New Roman', serif;
+      color: #1a202c;
+    }
+    .letter-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      border-bottom: 2px solid #004e92;
+      padding-bottom: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .letter-title { text-align: right; }
+    .letter-title h1 { font-size: .95rem; font-weight: 700; margin: 0; letter-spacing: .04em; }
+    .letter-title p { font-size: .74rem; margin: .15rem 0 0; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
+    .letter-ref { font-size: .74rem; color: #475569; margin: 0; text-align: right; }
+
+    .letter-status {
+      border: 2.5px solid;
+      border-radius: 6px;
+      padding: .85rem 1rem;
+      margin: 0 0 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: .9rem;
+      font-family: var(--au-font);
+    }
+    .letter-status__icon { font-size: 1.5rem; line-height: 1; }
+    .letter-status__label {
+      font-size: .68rem;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      font-weight: 700;
+      opacity: .8;
+      display: block;
+    }
+    .letter-status__value { font-size: 1.15rem; font-weight: 700; letter-spacing: .04em; }
+
+    .letter-status--approved  { border-color: #0f9d6e; background: #f0fdf6; color: #046c4e; }
+    .letter-status--rejected  { border-color: #dc2626; background: #fef2f2; color: #991b1b; }
+    .letter-status--pending   { border-color: #d97706; background: #fffbeb; color: #92400e; }
+    .letter-status--cancelled { border-color: #64748b; background: #f8fafc; color: #334155; }
+    .letter-status--expired   { border-color: #334155; background: #f1f5f9; color: #0f172a; }
+
+    .letter-body { font-size: .875rem; line-height: 1.75; }
+    .letter-body p { margin: 0 0 .9rem; }
+    .letter-table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.4rem; font-size: .82rem; }
+    .letter-table th, .letter-table td {
+      border: 1px solid #cbd5e1;
+      padding: .45rem .65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    .letter-table th { width: 34%; background: #f8fafc; font-weight: 700; }
+    .letter-status-note { font-weight: 700; }
+    .letter-remarks {
+      border-left: 3px solid #004e92;
+      background: #f8fafc;
+      padding: .7rem .9rem;
+      margin: 1rem 0;
+      font-size: .82rem;
+    }
+    .letter-foot {
+      margin-top: 2.25rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 2.5rem;
+      font-size: .78rem;
+    }
+    .letter-sign { flex: 1; text-align: center; }
+    .letter-sign .line { border-top: 1px solid #334155; margin-bottom: .3rem; }
+    .letter-sign small { color: #475569; }
+    .letter-note { font-size: .68rem; color: #64748b; margin-top: 1.5rem; border-top: 1px dashed #cbd5e1; padding-top: .6rem; }
+
+    @media print {
+      .letter-tools { display: none !important; }
+      .letter-shell { background: #fff !important; padding: 0 !important; }
+      .letter-sheet { box-shadow: none; max-width: none; padding: 0; }
+      @page { margin: 18mm; }
+    }
+  </style>
+</head>
+<body class="letter-shell" style="background:#eef1f5;padding:2rem 1rem;min-height:100vh">
+
+  <div class="letter-tools" style="max-width:800px;margin:0 auto 1rem;display:flex;gap:.5rem;flex-wrap:wrap">
+    <button class="btn btn-primary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print / Save as PDF
+    </button>
+    <a href="{{ url_for('student.request_detail', request_id=request.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to request
+    </a>
+    <a href="{{ url_for('student.requests') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-journal-text"></i> All requests
+    </a>
+  </div>
+
+  <article class="letter-sheet">
+    <header class="letter-head">
+      <img class="au-wordmark au-wordmark--letter"
+           src="{{ url_for('static', filename='images/aditya-logo.png') }}"
+           alt="{{ UNIVERSITY_NAME }}">
+      <div class="letter-title">
+        <h1>{{ UNIVERSITY_NAME|upper }}</h1>
+        <p>{{ DEPARTMENT_NAME }}</p>
+      </div>
+    </header>
+
+    {# ---- Prominent status, including cancelled ---- #}
+    {% set state = request.status.value|lower %}
+    {% set icons = {
+      'APPROVED': 'check-circle', 'REJECTED': 'x-circle', 'PENDING': 'hourglass-split',
+      'CANCELLED': 'slash-circle', 'EXPIRED': 'clock-history' } %}
+    <div class="letter-status letter-status--{{ state }}">
+      <i class="bi bi-{{ icons.get(request.status.value, 'question-circle') }} letter-status__icon"></i>
+      <div>
+        <span class="letter-status__label">Status of this request</span>
+        <span class="letter-status__value">
+          {% if request.status.value == 'APPROVED' %}APPROVED
+          {% elif request.status.value == 'REJECTED' %}REJECTED
+          {% elif request.status.value == 'PENDING' %}AWAITING VERIFICATION
+          {% elif request.status.value == 'CANCELLED' %}CANCELLED BY STUDENT
+          {% else %}{{ request.status.value }}
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    <div class="letter-ref">
+      Ref: <strong>REQ-{{ '%04d' % request.id }}</strong><br>
+      Issued: {{ request.created_at.strftime('%d %B %Y') }}
+    </div>
+
+    <div class="letter-body mt-3">
+      <p>To Whomsoever It May Concern,</p>
+
+      <p>
+        This is to certify that <strong>{{ student.name }}</strong>
+        {% if student.roll_number %}, Roll Number <strong>{{ student.roll_number }}</strong>,{% endif %}
+        Department of {{ student.department }},
+        has submitted a <strong>{{ request.permission_type.value|title }} Permission</strong>
+        request to this department.
+      </p>
+
+      <table class="letter-table">
+        <tr><th>Reference number</th><td>REQ-{{ '%04d' % request.id }}</td></tr>
+        <tr><th>Student name</th><td>{{ student.name }}</td></tr>
+        {% if student.roll_number %}
+        <tr><th>Roll number</th><td>{{ student.roll_number }}</td></tr>
+        {% endif %}
+        <tr><th>Permission type</th><td>{{ request.permission_type.value|title }} Permission</td></tr>
+        <tr>
+          <th>Period</th>
+          <td>
+            {{ request.start_date.strftime('%d %B %Y') }}
+            {% if request.end_date != request.start_date %}
+              to {{ request.end_date.strftime('%d %B %Y') }}
+            {% endif %}
+            {% if request.start_time and request.end_time %}
+              &nbsp;(<span style="font-family:var(--au-font)">{{ request.start_time.strftime('%I:%M %p') }} &ndash; {{ request.end_time.strftime('%I:%M %p') }}</span>)
+            {% else %}
+              &nbsp;(All day)
+            {% endif %}
+          </td>
+        </tr>
+        <tr><th>Reason</th><td>{{ request.reason }}</td></tr>
+        <tr>
+          <th>Current status</th>
+          <td><strong>{{ request.status.value|title }}</strong>
+            {% if request.status.value == 'CANCELLED' %}
+              <br><span style="font-weight:400">Withdrawn by the student on
+              {{ request.updated_at.strftime('%d %B %Y at %I:%M %p') }}.</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% if decision and decision.actioned_at %}
+        <tr>
+          <th>Reviewed by</th>
+          <td>{{ faculty_name }}, on {{ decision.actioned_at.strftime('%d %B %Y') }}</td>
+        </tr>
+        {% endif %}
+      </table>
+
+      {% if request.status.value == 'APPROVED' %}
+      <p class="letter-status-note">
+        This permission has been <strong>APPROVED</strong> by the faculty of the
+        Department of {{ student.department }}. The student is permitted to be
+        absent for the period stated above, subject to the conditions of the
+        institution.
+      </p>
+      {% elif request.status.value == 'REJECTED' %}
+      <p class="letter-status-note">
+        This permission has been <strong>REJECTED</strong> by the faculty of the
+        Department of {{ student.department }}. The student is not permitted to
+        be absent for the period stated above.
+      </p>
+      {% elif request.status.value == 'CANCELLED' %}
+      <p class="letter-status-note">
+        This request has been <strong>CANCELLED</strong> by the student and is no
+        longer under consideration. It confers no permission whatsoever.
+      </p>
+      {% elif request.status.value == 'PENDING' %}
+      <p class="letter-status-note">
+        This request is <strong>AWAITING VERIFICATION</strong> and has not yet
+        been approved or rejected. This document is not a grant of permission.
+      </p>
+      {% else %}
+      <p class="letter-status-note">
+        This request is <strong>{{ request.status.value }}</strong> and confers no
+        permission.
+      </p>
+      {% endif %}
+
+      {% if decision and decision.remarks %}
+      <div class="letter-remarks">
+        <strong>Remarks from the reviewing faculty:</strong><br>
+        {{ decision.remarks }}
+      </div>
+      {% endif %}
+
+      <p>Issued by the Department of {{ student.department }}, {{ UNIVERSITY_NAME }}.</p>
+    </div>
+
+    <footer class="letter-foot">
+      <div class="letter-sign">
+        <div class="line"></div>
+        <small>Faculty Signature</small>
+      </div>
+      <div class="letter-sign">
+        <div class="line"></div>
+        <small>Head of Department</small>
+      </div>
+    </footer>
+
+    <p class="letter-note">
+      This is a system-generated document from the CSE Permission &amp; Leave
+      Tracking System. Verify its authenticity by the reference number
+      REQ-{{ '%04d' % request.id }}.
+    </p>
+  </article>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
