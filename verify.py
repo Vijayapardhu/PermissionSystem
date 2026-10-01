@@ -919,9 +919,16 @@ print('=' * 70)
 import os as _os
 
 for required in ['setup.py', 'requirements.txt', '.env.example',
-                 'migrations/schema.sql', 'config.py', 'app.py', 'README.md',
+                 'migrations/schema.sql', 'config.py', 'wsgi.py', 'README.md',
                  'render.yaml', 'Procfile']:
     check(f'{required} present', _os.path.isfile(required))
+
+# A top-level app.py would be unreachable: the app/ package shadows it, so
+# gunicorn's app:app would fail with AppImportError. The entry point must be
+# named something else.
+check('no app.py shadows the app package', not _os.path.isfile('app.py'))
+check('no app.pyc shadows the app package',
+      not _os.path.isfile('app.pyc'))
 
 check('.env is not tracked by git',
       '.env' in open('.gitignore', encoding='utf-8').read())
@@ -962,15 +969,17 @@ check('.env.example carries no real credentials',
       not re.search(r'PASTE_[A-Z_]*HERE', _env_example)
       and 'CsePerm' not in _env_example)
 
-_app_py = open('app.py', encoding='utf-8').read()
-check('app.py reads host from the environment',
-      "os.environ.get('HOST'" in _app_py)
-check('app.py reads port from the environment',
-      "os.environ.get('PORT'" in _app_py)
-check('app.py reads debug from the environment',
-      "os.environ.get('FLASK_DEBUG'" in _app_py)
-check('app.py no longer hardcodes port 5000',
-      'port=5000' not in _app_py)
+_wsgi_py = open('wsgi.py', encoding='utf-8').read()
+check('wsgi.py reads host from the environment',
+      "os.environ.get('HOST'" in _wsgi_py)
+check('wsgi.py reads port from the environment',
+      "os.environ.get('PORT'" in _wsgi_py)
+check('wsgi.py reads debug from the environment',
+      "os.environ.get('FLASK_DEBUG'" in _wsgi_py)
+check('wsgi.py no longer hardcodes port 5000',
+      'port=5000' not in _wsgi_py)
+check('wsgi.py exposes a module-level app for the WSGI servers',
+      re.search(r'^app\s*=\s*create_app\(\)', _wsgi_py, re.M) is not None)
 
 # The README must document a complete install and the Render/Supabase deploy.
 _readme = open('README.md', encoding='utf-8').read()
@@ -982,7 +991,7 @@ for phrase in ['python setup.py', 'git clone', 'waitress', 'gunicorn',
 # The deployment entry points must agree with each other.
 _render_yaml = open('render.yaml', encoding='utf-8').read()
 check('render.yaml starts gunicorn',
-      'gunicorn' in _render_yaml and 'app:app' in _render_yaml)
+      'gunicorn' in _render_yaml and 'wsgi:app' in _render_yaml)
 check('render.yaml points the health check at /healthz',
       'healthCheckPath: /healthz' in _render_yaml)
 check('render.yaml takes DATABASE_URL from the environment, not a literal',
@@ -1004,8 +1013,10 @@ check('render.yaml leaves no service-role key inline',
 _procfile = open('Procfile', encoding='utf-8').read()
 check('Procfile binds to the port Render injects',
       '--bind 0.0.0.0:$PORT' in _procfile)
-check('Procfile serves app:app through gunicorn',
-      'app:app' in _procfile and 'gunicorn' in _procfile)
+check('Procfile serves wsgi:app through gunicorn',
+      'wsgi:app' in _procfile and 'gunicorn' in _procfile)
+check('Procfile targets the real module:app, not app:app',
+      'app:app' not in _procfile.replace('wsgi:app', ''))
 
 check('setup.py performs all install steps',
       all(step in open('setup.py', encoding='utf-8').read()

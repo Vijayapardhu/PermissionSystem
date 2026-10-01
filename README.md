@@ -189,7 +189,7 @@ up by hand with **New → Web Service**:
 |---|---|
 | Runtime | Python |
 | Build command | `pip install --upgrade pip && pip install -r requirements.txt` |
-| Start command | `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - app:app` |
+| Start command | `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - wsgi:app` |
 | Health check path | `/healthz` |
 
 `render.yaml` and `Procfile` hold the start command, so leave Render's field on
@@ -269,7 +269,7 @@ python setup.py
 #    SUPABASE_URL, SUPABASE_SECRET_KEY
 
 # 4. Start the app
-python app.py
+python wsgi.py
 ```
 
 Open **<http://127.0.0.1:5000>**. `setup.py` is safe to re-run: it skips
@@ -339,15 +339,21 @@ and cannot be used to bypass Microsoft.
 
 ### Serving on a shared machine or server
 
-`python app.py` runs the Flask development server, which is for testing only.
+`python wsgi.py` runs the Flask development server, which is for testing only.
 
 ```bash
 pip install waitress            # Windows
-waitress-serve --port=8080 app:app
+waitress-serve --port=8080 wsgi:app
 
 pip install gunicorn            # Linux / Render
-gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 app:app
+gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 wsgi:app
 ```
+
+The target is `wsgi:app`, not `app:app`. `wsgi.py` cannot be called `app.py`
+because the `app/` package would shadow it: Python resolves `import app` to the
+package directory, so gunicorn would load `app/__init__.py`, find no `app`
+attribute in it, and exit with
+`AppImportError: Failed to find attribute 'app' in 'app'`.
 
 Then in `.env`:
 
@@ -436,7 +442,7 @@ HOD
 ```
 config.py              Settings loaded from .env
 setup.py               Automated first-time setup
-app.py                 Entry point (development server)
+wsgi.py                 WSGI entry point (development server, gunicorn/waitress)
 requirements.txt       Pinned dependencies
 Procfile               gunicorn start command for Render
 render.yaml            Render blueprint (env vars, start command, health check)
