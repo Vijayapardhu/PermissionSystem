@@ -17,6 +17,12 @@ psycopg-pool==3.3.3
 # Storage rules with the service account, so the private key is a server-side
 # secret read from the environment. Imported lazily, so a deployment without
 # credentials still boots.
+#
+# The pin matters for the same reason psycopg's does. firebase-admin pulls
+# google-cloud-firestore, which pulls grpcio -- a native extension that only
+# installs where a matching wheel exists. An older firebase-admin resolves to a
+# grpcio with no wheel for the Python Render runs, and the build fails with
+# "No matching distribution found" rather than at runtime.
 firebase-admin==7.7.0
 
 # Microsoft Entra ID sign-in
