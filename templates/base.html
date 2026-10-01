@@ -109,13 +109,15 @@
         </a>
         {% endif %}
 
-        {# Sign-out is a POST form, always available in the header. #}
+        {# Sign-out is a POST form, always visible in the header for every role.
+           The label stays at all widths so it is never reduced to a
+           hard-to-spot icon. #}
         <form method="post" action="{{ url_for('auth.logout') }}" class="signout-form">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-sm btn-light btn-pill ms-1"
                   title="Sign out of the portal">
             <i class="bi bi-box-arrow-right"></i>
-            <span class="d-none d-xl-inline">Sign out</span>
+            <span>Sign out</span>
           </button>
         </form>
       </div>

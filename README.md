@@ -112,26 +112,176 @@ renders as `—` when the department has not recorded one.
 | Storage   | Local filesystem, year/month buckets          |
 | Email     | Outlook SMTP via Flask-Mail                   |
 
-## Setup
+## Install on a new computer
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.9 or newer | <https://www.python.org/downloads/> &mdash; tick **"Add Python to PATH"** on Windows |
+| MySQL Server | 8.0 or newer | <https://dev.mysql.com/downloads/installer/> |
+| A Git client | any | Or download this repository as a ZIP |
+
+You also need the department's Entra ID values, read from
+**Entra ID &rarr; App registrations &rarr; Aditya University Permission Portal**:
+
+| Value | Where it lives |
+|---|---|
+| `CLIENT_ID` | Overview |
+| `TENANT_ID` | Overview |
+| `CLIENT_SECRET` | Certificates &amp; secrets &rarr; New client secret (copy the **value**) |
+
+### Steps
 
 ```bash
-pip install -r requirements.txt
-copy .env.example .env
-```
+# 1. Get the code
+git clone https://github.com/Vijayapardhu/PermissionSystem.git
+cd PermissionSystem
 
-Import the schema, then seed accounts:
+# 2. Automated setup: virtual environment, dependencies, .env, upload folder
+python setup.py
 
-```bash
-mysql -u root -p < migrations/schema.sql
-```
+# 3. Enter the real values in .env
+#    CLIENT_ID, TENANT_ID, CLIENT_SECRET, MYSQL_USER, MYSQL_PASSWORD
 
-Run:
-
-```bash
+# 4. Start the app
 python app.py
 ```
 
-Open http://localhost:5000
+Open **<http://127.0.0.1:5000>**. `setup.py` is safe to re-run: it skips
+anything already in place.
+
+### Manual setup
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+copy .env.example .env      # Windows
+cp .env.example .env        # macOS / Linux
+```
+
+Then fill in `.env`, create the database (below), and run `python app.py`.
+
+### Create the database
+
+Use a dedicated account rather than `root`. In a MySQL console as an administrator:
+
+```sql
+CREATE DATABASE IF NOT EXISTS cse_permission_system
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS 'cse_permission'@'localhost'
+  IDENTIFIED BY 'choose-a-strong-password';
+
+GRANT ALL PRIVILEGES ON cse_permission_system.* TO 'cse_permission'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+Load the schema, which also creates the sample accounts:
+
+```bash
+# macOS / Linux
+mysql -u cse_permission -p cse_permission_system < migrations/schema.sql
+
+# Windows PowerShell has no `<` redirect, so pipe instead:
+Get-Content migrations\schema.sql -Raw | mysql -u cse_permission -p
+```
+
+MySQL Workbench works too: open the file and press the lightning bolt.
+
+Then set those credentials in `.env`:
+
+```env
+MYSQL_HOST=127.0.0.1
+MYSQL_USER=cse_permission
+MYSQL_PASSWORD=choose-a-strong-password
+MYSQL_DB=cse_permission_system
+MYSQL_PORT=3306
+```
+
+### Signing in
+
+While `DEV_MODE=true` the login page shows a **local account picker** using the
+same code path as real sign-in, so you can test everything before IT responds:
+
+| Role | Email |
+|---|---|
+| HOD | `hod.cse@adityauniversity.in` |
+| Lecturer | `lecturer1.cse@adityauniversity.in`, `lecturer2.cse@adityauniversity.in` |
+| Student | `26b21cs058@adityauniversity.in`, `26b21cs059@`, `25b21cs012@`, `24b21cs145@` |
+
+Once Outlook sign-in works, set `DEV_MODE=false`; `/auth/dev-login` then returns 404
+and cannot be used to bypass Microsoft.
+
+### Serving on a shared machine or server
+
+`python app.py` runs the Flask development server, which is for testing only.
+
+```bash
+pip install waitress            # Windows
+waitress-serve --port=8080 app:app
+
+pip install gunicorn            # Linux
+gunicorn -w 4 -b 0.0.0.0:8080 app:app
+```
+
+Then in `.env`:
+
+```env
+HOST=0.0.0.0
+PORT=8080
+FLASK_DEBUG=false
+SESSION_COOKIE_SECURE=true      # only once HTTPS is in front of the app
+```
+
+**Redirect URI.** Entra ID matches redirect URIs exactly. Serving from anywhere
+other than `localhost:5000` means adding that URL under
+**App registrations &rarr; your app &rarr; Authentication &rarr; Web &rarr; Redirect URIs**
+and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
+| `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
+| `Database connection pool not initialized` | MySQL not running, or `.env` credentials wrong |
+| `Error 1045 Access denied` | Wrong `MYSQL_USER` / `MYSQL_PASSWORD` |
+| Sign-in loops back to the login page | `REDIRECT_URI` does not match the registered redirect URI exactly |
+| `AADSTS50011` | Same redirect URI mismatch |
+| Sign-in fails immediately | `CLIENT_SECRET` wrong, expired, or still a placeholder |
+| Email never arrives | `MAIL_USERNAME` / `MAIL_PASSWORD` blank; the app logs it and continues |
+| Port already in use | Change `PORT` in `.env`, or stop whatever is using it |
+| `setup.py` cannot find `mysql` | Add MySQL's `bin` folder to PATH, or import the schema through Workbench |
+| Windows: no MySQL service | See below |
+
+**Windows MySQL note.** The standalone MySQL MSI copies the binaries but does not
+register a Windows service. Either register it from an elevated PowerShell:
+
+```powershell
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --install MySQL84 `
+   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data"
+Start-Service MySQL84
+```
+
+or run it directly, which needs no administrator rights:
+
+```powershell
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" `
+   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data" --port=3306 `
+   --bind-address=127.0.0.1 --console
+```
+
+Set a password once:
+
+```bash
+mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'your-password'; FLUSH PRIVILEGES;"
+```
 
 ## Authentication
 
@@ -178,24 +328,29 @@ HOD
   -> live charts, filterable approved list, print report
 ```
 
-## Layout
+## Project structure
 
 ```
 config.py              Settings loaded from .env
-app.py                 Entry point
+setup.py               Automated first-time setup
+app.py                 Entry point (development server)
+requirements.txt       Pinned dependencies
 app/__init__.py        Application factory, blueprints, error handlers
 app/auth/              MSAL client and sign-in routes
 app/models/            Dataclasses, MySQL pool, queries
 app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
-app/faculty/           Lecturer portal and proof download
-app/hod/               Analytics dashboard and printable report
-app/utils/             Security helpers, proof storage, email
+app/faculty/           Lecturer portal, classes, attendance, proof download
+app/hod/               Analytics, register, reports
+app/utils/             Security helpers, proof storage, roster parsing, email, navigation
 templates/             Jinja2 templates
-static/                CSS and Chart.js dashboard
+static/                CSS, Chart.js dashboard, Aditya logo assets
 storage/proofs/        Uploaded proofs (year/month buckets)
 migrations/schema.sql  Database schema and seed accounts
-verify.py              Test harness (158 checks)
+verify.py              Unit harness (321 checks, no database required)
+workflow_test.py       End-to-end over HTTP (59 checks)
+class_features_test.py Classes, roster and attendance (44 checks)
+sidebar_test.py        Every page for every role (68 checks)
 ```
 
 ## Security notes

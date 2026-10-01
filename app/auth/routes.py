@@ -63,6 +63,31 @@ def landing():
     return redirect(url_for('auth.login'))
 
 
+STUDENT_TAGLINE = (
+    'Submit leave and classroom permission requests, track your '
+    'approval status, and download an official permission letter.'
+)
+
+STUDENT_POINTS = [
+    'Request leave or classroom permission in a few steps',
+    'Upload supporting proof for every request',
+    'Track each decision from your lecturer',
+    'Download a formal permission letter',
+]
+
+FACULTY_TAGLINE = (
+    'Verify student permission requests, manage your classes and '
+    'attendance, and keep the department register accurate.'
+)
+
+FACULTY_POINTS = [
+    'Review and decide on assigned requests',
+    'Search any student record in the department',
+    'Build classes and import rosters from Excel',
+    'Mark attendance, excused by approved permission',
+]
+
+
 @auth.route('/auth/login')
 def login():
     if current_user():
@@ -81,6 +106,8 @@ def login():
     context = {
         'entra_available': microsoft.is_configured(),
         'dev_mode': current_app_dev_mode(),
+        'tagline': STUDENT_TAGLINE,
+        'points': STUDENT_POINTS,
     }
     if current_app_dev_mode():
         context['accounts'] = _dev_accounts()
@@ -103,6 +130,8 @@ def faculty_login():
         entra_available=microsoft.is_configured(),
         dev_mode=current_app_dev_mode(),
         faculty_accounts=_faculty_accounts(),
+        tagline=FACULTY_TAGLINE,
+        points=FACULTY_POINTS,
     )
 
 

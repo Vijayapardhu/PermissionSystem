@@ -13,3 +13,13 @@ storage/proofs/*
 Thumbs.db
 .idea/
 .vscode/
+
+# SSH keys and certificates must never be committed
+*.key
+*.pem
+*.ppk
+*.p12
+*.pfx
+*.pub
+id_rsa*
+id_ed25519*

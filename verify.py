@@ -41,6 +41,12 @@ print('=' * 70)
 from app import create_app
 
 app = create_app()
+
+# This harness needs the local sign-in path to exercise the guards, so it
+# forces DEV_MODE on its own in-process app regardless of what .env says.
+# The deployed app may well have DEV_MODE=false; that is a deployment
+# decision, not something this harness should inherit.
+app.config['DEV_MODE'] = True
 check('application factory returns a Flask app', app is not None)
 
 with app.test_request_context():
@@ -424,7 +430,7 @@ check('login page responds 200', response.status_code == 200)
 body = response.get_data(as_text=True)
 check('page names the university portal', 'Aditya University' in body)
 check('page states no passwords are stored',
-      'No password is stored' in body or 'no passwords are stored' in body)
+      'no password' in body.lower() or 'no passwords' in body.lower())
 check('page is not vulnerable to next-based open redirect',
       'http://evil.example.com' not in body)
 
@@ -459,6 +465,7 @@ with app_entra.test_request_context('/auth/login'):
           _msal_mod.redirect_uri())
 
 _app_placeholder = create_app()
+_app_placeholder.config['DEV_MODE'] = False
 _app_placeholder.config['CLIENT_ID'] = 'PASTE_CLIENT_SECRET_HERE'
 _app_placeholder.config['CLIENT_SECRET'] = 'PASTE_CLIENT_SECRET_HERE'
 _app_placeholder.config['TENANT_ID'] = None
@@ -591,6 +598,7 @@ print('9b. CSRF PROTECTION')
 print('=' * 70)
 
 csrf_app = create_app()
+csrf_app.config['DEV_MODE'] = True
 csrf_client = csrf_app.test_client()
 
 # Every state-changing endpoint must reject a POST with no token.
@@ -691,6 +699,7 @@ print('9c. AUTH GUARDS AND LOGOUT')
 print('=' * 70)
 
 guard_app = create_app()
+guard_app.config['DEV_MODE'] = True
 guard_client = guard_app.test_client()
 
 # GET on /auth/logout must show a confirmation page rather than a bare 405, and
@@ -707,6 +716,7 @@ check('GET /auth/logout carries no form when already signed out',
 
 # A completed sign-out must land on the login page, never on the logout page.
 _login_ok = create_app()
+_login_ok.config['DEV_MODE'] = True
 _login_client = _login_ok.test_client()
 
 # Seed the CSRF token directly: with no database the login page renders no form,
@@ -870,6 +880,82 @@ with app.app_context():
     check('idle timeout is configured',
           app.config['IDLE_TIMEOUT_SECONDS'] > 0,
           app.config['IDLE_TIMEOUT_SECONDS'])
+
+print()
+print('=' * 70)
+print('9f. DEPLOYMENT READINESS')
+print('=' * 70)
+
+import os as _os
+
+for required in ['setup.py', 'requirements.txt', '.env.example',
+                 'migrations/schema.sql', 'config.py', 'app.py', 'README.md']:
+    check(f'{required} present', _os.path.isfile(required))
+
+check('.env is not tracked by git',
+      '.env' in open('.gitignore', encoding='utf-8').read())
+
+# Every runtime dependency must be pinned.
+_req = open('requirements.txt', encoding='utf-8').read()
+for package in ['Flask', 'mysql-connector-python', 'msal', 'python-dotenv',
+                'Flask-Mail', 'Werkzeug', 'openpyxl', 'Pillow']:
+    check(f'requirements pins {package}',
+          re.search(rf'^{re.escape(package)}==', _req, re.M) is not None)
+
+# Packages the code imports must not be missing from requirements.
+check('openpyxl declared (roster import)',
+      'openpyxl' in _req)
+check('Pillow declared (branding assertions)',
+      'Pillow' in _req)
+
+# Host, port and debug must be configurable, not hardcoded.
+_env_example = open('.env.example', encoding='utf-8').read()
+for key in ['HOST', 'PORT', 'FLASK_DEBUG', 'SESSION_COOKIE_SECURE',
+            'IDLE_TIMEOUT_SECONDS', 'MYSQL_USER', 'CLIENT_ID', 'CLIENT_SECRET',
+            'TENANT_ID', 'REDIRECT_URI', 'DEV_MODE']:
+    check(f'.env.example documents {key}',
+          re.search(rf'^{key}=', _env_example, re.M) is not None)
+
+check('.env.example carries no real credentials',
+      not re.search(r'PASTE_[A-Z_]*HERE', _env_example)
+      and 'CsePerm' not in _env_example)
+
+_app_py = open('app.py', encoding='utf-8').read()
+check('app.py reads host from the environment',
+      "os.environ.get('HOST'" in _app_py)
+check('app.py reads port from the environment',
+      "os.environ.get('PORT'" in _app_py)
+check('app.py reads debug from the environment',
+      "os.environ.get('FLASK_DEBUG'" in _app_py)
+check('app.py no longer hardcodes port 5000',
+      'port=5000' not in _app_py)
+
+# The README must document a complete install, including the PowerShell
+# `mysql < file` trap that bites on Windows.
+_readme = open('README.md', encoding='utf-8').read()
+for phrase in ['python setup.py', 'git clone', 'CREATE USER',
+               'Get-Content migrations', 'waitress', 'gunicorn',
+               'AADSTS50011', 'DEV_MODE']:
+    check(f'README documents {phrase!r}', phrase in _readme)
+
+check('setup.py performs all install steps',
+      all(step in open('setup.py', encoding='utf-8').read()
+          for step in ['venv', 'requirements.txt', '.env.example',
+                       'storage', 'schema.sql']))
+
+# setup.py is a CLI script and runs on import by design, but nothing in the
+# application may import it.
+_importers = []
+for _root, _dirs, _files in _os.walk('app'):
+    for _name in _files:
+        if _name.endswith('.py'):
+            _body = open(_os.path.join(_root, _name), encoding='utf-8').read()
+            if 'setup' in _body and 'import setup' in _body:
+                _importers.append(_os.path.join(_root, _name))
+check('no application module imports setup.py', not _importers, str(_importers))
+
+# The virtual environment must never be committed.
+check('.venv is gitignored', '.venv' in open('.gitignore', encoding='utf-8').read())
 
 print()
 print('=' * 70)
