@@ -252,7 +252,7 @@ class Database:
         # "getaddrinfo failed", raised before a packet is even sent. If that is
         # the failure, the fix is IPv6 egress on this host or the pooler URI in
         # DATABASE_URL, not a guess made here at import time.
-self.target = describe_dsn(dsn)
+        self.target = describe_dsn(dsn)
         self._wait = float(app.config['DB_POOL_TIMEOUT'])
         self._attempts = max(1, int(app.config['DB_POOL_RETRIES']))
         connect_timeout = app.config['DB_CONNECT_TIMEOUT']
