@@ -259,21 +259,26 @@ a:hover { text-decoration: underline; }
 
   .au-app--sidebar .offcanvas-header { display: none; }
 
-  /* Content must start flush against the navigation column. The auto margins
-     and the max-width cap exist to centre a page that owns the full viewport;
-     once a sidebar owns the left edge they leave a band of empty background
-     between the column and the first element. The left padding goes for the
-     same reason -- the column already provides the left edge, so padding it
-     again reads as a gutter. The right padding stays so content never touches
-     the window edge. */
+  /* Content fills the whole column the sidebar leaves. The auto margins and the
+     max-width cap exist to centre a page that owns the full viewport; once a
+     sidebar owns the left edge they leave a band of empty background between
+     the column and the first element, and on a wide monitor they cap the page
+     well short of the window. Both go. The padding stays on every side so the
+     content breathes instead of touching the column. */
   .au-app--sidebar .au-content,
-  .au-app--sidebar .au-foot {
+  .au-app--sidebar .au-foot,
+  .au-app--sidebar .page-wrap,
+  .au-app--sidebar .page-wrap-narrow {
     max-width: none;
     margin-inline: 0;
-    padding-left: 0;
   }
 
-  .au-app--sidebar .app-topbar__inner { margin-inline: 0; }
+  /* The header row is capped and centred like the content it sits above, so
+     without this it stops matching the content's left edge on a wide screen. */
+  .au-app--sidebar .app-topbar__inner {
+    max-width: none;
+    margin-inline: 0;
+  }
 }
 
 /* Mobile drawer: Bootstrap drives the width, so set the variable it reads. */
