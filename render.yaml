@@ -29,15 +29,44 @@ services:
         value: "1"
       - key: SECRET_KEY
         generateValue: true
-      # Supabase Postgres, session-mode pooler on port 5432.
+      # Supabase Postgres, DIRECT connection: db.<ref>.supabase.co.
+      #
+      # Not the Supavisor pooler. Supavisor reaps and reschedules session
+      # connections underneath the client -- which is where the production log's
+      # "consuming input failed: SSL SYSCALL error: EOF detected" came from --
+      # and it shares one slot limit between everything pointed at the project.
+      # This app pools for itself, so there is nothing for Supavisor to pool.
+      #
+      # If the panel still holds the old aws-0-...pooler.supabase.com value that
+      # is fine: DB_POOLER_REGION below lets the app derive the direct host from
+      # whichever form is configured, try direct first, and fall back. Set
+      # DATABASE_URL to the direct URI to be explicit.
       - key: DATABASE_URL
         sync: false
-      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, which
-      # stays inside the Supabase session-pooler limit. It must stay at or above
-      # the --threads each worker serves, or a worker deadlocks against itself.
+      # Supabase project region. Non-empty enables the direct -> Supavisor
+      # fallback; set it to "" to pin DATABASE_URL exactly as written.
+      - key: DB_POOLER_REGION
+        value: "ap-southeast-2"
+      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, which is
+      # charged directly against the project's connection limit now that
+      # Supavisor is bypassed. Keep it inside that limit.
+      #
+      # MAX must exceed --threads, or a worker deadlocks against itself. MIN is
+      # what makes that survivable: the pool grows one connection at a time and
+      # only once a client is already queued, and a connect over the WAN costs
+      # over a second. At MIN=1, losing that one connection left the worker with
+      # nothing to serve and every request behind it timed out, which is exactly
+      # what the production log showed. MIN = --threads keeps a warm connection
+      # per thread.
       - key: DB_POOL_MAX
         value: "6"
       - key: DB_POOL_MIN
+        value: "4"
+      # Must match the gunicorn flags in startCommand. Read only to size the
+      # pool and to state the connection budget in the startup log.
+      - key: DB_WORKER_THREADS
+        value: "4"
+      - key: DB_WORKER_COUNT
         value: "2"
       # Kept separate and short on purpose. A single shared 10s value made every
       # request stall for ten seconds whenever the pool was saturated.
@@ -46,17 +75,19 @@ services:
       - key: DB_CONNECT_TIMEOUT
         value: "5"
       # Two attempts per request, and a pool that recycles its idle sockets
-      # every four minutes. Supavisor reaps a silent session after fifteen, and
-      # the Render-to-Supabase path can drop an idle flow with no error on
-      # either side, so a pooled socket can be dead while the pool still calls
-      # it usable. Without this the first request after an idle spell is the one
-      # that pays for it.
+      # every four minutes. Without the recycle the first request after an idle
+      # spell is the one that pays for a socket the server has already closed.
       - key: DB_POOL_RETRIES
         value: "2"
       - key: DB_POOL_MAX_IDLE
         value: "240"
       - key: DB_POOL_MAX_LIFETIME
         value: "1800"
+      # A socket dropped while idle still looks alive to libpq, so it is only
+      # found dead when a query goes out on it. This bounds how often a checkout
+      # re-verifies the connection with a SELECT 1 instead.
+      - key: DB_POOL_PING_INTERVAL
+        value: "30"
       - key: DB_POOL_RECONNECT_TIMEOUT
         value: "30"
       # Render polls /healthz continuously; without a cache each poll took a

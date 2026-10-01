@@ -18,8 +18,8 @@ from app.auth import microsoft
 from app.models import UserRole
 from app.models.user import UserModel
 from app.utils.security import (
-    csrf_token, current_user, is_university_email, is_valid_email, login_required,
-    rotate_csrf_token,
+    csrf_token, current_user, database_unavailable, is_university_email,
+    is_valid_email, login_required, rotate_csrf_token,
 )
 
 auth = Blueprint('auth', __name__)
@@ -108,8 +108,17 @@ def verify_letter(reference: str):
 
 @auth.route('/')
 def landing():
-    if current_user():
-        return redirect(route_for_role(current_user()))
+    user = current_user()
+    if user:
+        return redirect(route_for_role(user))
+    if database_unavailable():
+        # Signed out because the lookup could not be made, not because nobody is
+        # signed in. Saying so keeps the portal's front door from reading as a
+        # lost session every time the database is down.
+        abort(503, description=(
+            'The department records are temporarily unavailable. '
+            'Please try again in a moment.'
+        ))
     return redirect(url_for('auth.login'))
 
 

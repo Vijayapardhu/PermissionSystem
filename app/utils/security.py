@@ -10,6 +10,7 @@ from flask import abort, current_app, flash, g, request, session
 from werkzeug.utils import secure_filename
 
 from app.models import UserRole
+from app.models.database import DatabaseUnavailable
 from app.models.user import UserModel
 
 _EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
@@ -129,17 +130,41 @@ def relative_proof_dir(extension: str = '') -> tuple:
     return str(now.year), f'{now.month:02d}', extension
 
 
+def database_unavailable() -> bool:
+    """True when this request could not reach the database for its user lookup.
+
+    Set by `current_user`, and never cleared within the request: a pool that
+    cannot connect would otherwise be re-entered on every call, and every entry
+    costs a checkout against a budget that is already spent.
+    """
+    return bool(getattr(g, 'db_unavailable', False))
+
+
 def current_user():
     """Load the signed-in user from session once per request.
 
     Enforces the idle timeout: a session that has been left untouched is
     discarded rather than silently granting continued access.
+
+    Answers None rather than raising when the database is unreachable. It is the
+    one thing every template asks for, through the layout and the navigation, so
+    an exception here does not fail the page it is decorating -- it fails the
+    error page that was already being rendered, which is how a missing favicon
+    became a 500 with an empty body. `database_unavailable()` separates the two
+    cases for callers that must tell them apart.
+
+    Deliberately does not clear the session in that case. An unreachable database
+    says nothing about whose cookie is valid, and signing everyone out on an
+    outage throws away a half-filled permission request along with it.
     """
     if 'user' in g:
         return g.user
 
     user_id = session.get('user_id')
     if user_id is None:
+        # Stamped so a template asking a dozen times for the current user costs
+        # no more lookups than the one that found the key missing.
+        g.user = None
         return None
 
     last_seen = session.get('_last_seen')
@@ -148,12 +173,24 @@ def current_user():
     if last_seen and idle_limit and now - int(last_seen) > idle_limit:
         session.clear()
         rotate_csrf_token()
+        g.user = None
         return None
 
-    user = UserModel.find_by_id(user_id)
+    try:
+        user = UserModel.find_by_id(user_id)
+    except DatabaseUnavailable as exc:
+        g.db_unavailable = True
+        g.user = None
+        current_app.logger.warning(
+            'Cannot load the signed-in user for %s %s: %s',
+            request.method, request.path, exc,
+        )
+        return None
+
     if user is None or not user.is_active:
         session.clear()
         rotate_csrf_token()
+        g.user = None
         return None
 
     session['_last_seen'] = now
@@ -166,6 +203,16 @@ def login_required(view):
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
         if current_user() is None:
+            if database_unavailable():
+                # current_user() returned None because the lookup could not be
+                # made, not because nobody is signed in. Redirecting here would
+                # ask for credentials the user already has, and would read as a
+                # lost session -- which is also what a cleared session would
+                # have done, so the outage would look like a second fault.
+                abort(503, description=(
+                    'The department records are temporarily unavailable. '
+                    'Please try again in a moment.'
+                ))
             from flask import redirect, url_for
             if session.get('_expired'):
                 session.pop('_expired', None)

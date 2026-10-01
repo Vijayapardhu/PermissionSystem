@@ -383,6 +383,11 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 | `could not translate host name` / `Connection refused` | Wrong pooler host or port. Use Session mode on 5432, not 6543 |
 | `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
 | `too many connections` | `DB_POOL_MAX` x gunicorn `--workers` exceeds the plan limit. Free Supabase allows 15 |
+| "The user directory is temporarily unavailable" on sign-in | The pool could not get a connection. Search the log for `Postgres checkout failed` — it names the host, the last driver error and the pool stats, which distinguishes "the database is unreachable" from "the pool was full" |
+| The log says `couldn't get a connection after 5.00 sec` repeatedly | Every request is queueing. `DB_POOL_MAX` must be at least the `--threads` one worker serves, or the worker deadlocks against itself |
+| The log says `connection timeout expired` on connect | Render cannot route to the pooler host. Check `DATABASE_URL` (Session mode on **5432**, not 6543) and that the host is IPv4-reachable |
+| The log says `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
+| `/healthz` reports `"database": "unreachable"` | Postgres is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
 | `relation "users" does not exist` | `migrations/schema.sql` was never loaded |
 | `The requested path is invalid` on upload | Bucket is not called `proofs`, or `SUPABASE_STORAGE_BUCKET` is wrong |
 | `row-level security` error | The app is connecting with the `anon` role. Use the project owner DSN |
@@ -457,8 +462,10 @@ app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
 app/faculty/           Lecturer portal, classes, attendance, proof download
 app/hod/               Analytics, register, reports
-app/utils/             Security helpers, Supabase Storage, roster parsing, email, navigation
+app/utils/             Security helpers, Supabase Storage, roster parsing, email, navigation, letter QR codes
 templates/             Jinja2 templates
+templates/student/letter.html    Formal A4 permission letter, one page, with its QR code
+templates/auth/verify.html        Public, account-free page a letter's QR code opens
 static/                CSS, Chart.js dashboard, Aditya logo assets
 migrations/schema.sql  Database schema and seed accounts
 verify.py              Unit harness, no database required
@@ -506,8 +513,31 @@ the private Supabase Storage bucket under `<year>/<month>/<uuid>.<ext>`, and
 | Redirects | `next` restricted to same-site relative paths |
 | Database | RLS enabled with no `anon`/`authenticated` policy on all seven tables |
 | Proof storage | Private Supabase bucket, fetched through an authorised route |
+| Letter verification | `/verify/<ref>.<signature>` is public and read-only; the signature is derived from `SECRET_KEY`, so a link cannot be forged and a reference number cannot be walked |
 
 Set `SESSION_COOKIE_SECURE=true` and serve over HTTPS before going live.
+
+## Verifying a letter by QR code
+
+Every permission letter carries a QR code in its header. Scanning it opens
+`/verify/<ref>.<signature>`, which works **without an account** — a gatekeeper, a
+class representative or an employer can open it on a phone. The page shows the
+PIN, the reference number, the student's name and department, the permission
+type and period, the reason stated, the status, the reviewing faculty, the
+decision date and any remarks. The letter states the same URL in writing, so it
+still verifies if the code is smudged.
+
+The signature in the URL is the access control, and it is there for a specific
+reason: a bare `/verify/REQ-0001` would let anyone walk the whole department, and
+these records carry medical reasons. The signature is produced by this app from
+`SECRET_KEY` and is deliberately **not** timestamped, so a reprint of a letter
+produces the same code and a letter already in circulation keeps verifying. The
+trade-off is that rotating `SECRET_KEY` invalidates every letter already printed.
+
+The page is a read-only receipt: no form, no session, and no data that only staff
+can see. A link that does not verify returns 404, the same as a record that does
+not exist, so the endpoint cannot be used to test which reference numbers are
+real.
 
 ### Signing out
 

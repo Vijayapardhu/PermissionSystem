@@ -18,6 +18,7 @@
        line onto a second sheet, and `break-inside: avoid` stops any single block
        from being split. */
     .letter-sheet {
+      position: relative;
       width: 100%;
       max-width: 210mm;
       margin-inline: auto;
@@ -27,32 +28,45 @@
       font-family: Georgia, 'Times New Roman', serif;
       color: #1a202c;
     }
+
+    /* The mark is a seal on the page, not a letterhead: it sits behind the text
+       at the optical centre of the sheet, which frees the whole header for the
+       QR code. `position: relative` on every other child keeps the body text
+       above it, and the faint opacity keeps it from touching legibility. */
+    .letter-watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 56%;
+      max-width: 300px;
+      opacity: .06;
+      margin: 0;
+      z-index: 0;
+      pointer-events: none;
+      user-select: none;
+    }
+    .letter-sheet > *:not(.letter-watermark) { position: relative; z-index: 1; }
+
     .letter-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 1.25rem;
+      justify-content: flex-end;
       border-bottom: 2px solid #004e92;
       padding-bottom: .85rem;
       margin-bottom: 1rem;
     }
-    .letter-title { text-align: right; }
-    .letter-title h1 { font-size: .9rem; font-weight: 700; margin: 0; letter-spacing: .04em; }
-    .letter-title p { font-size: .7rem; margin: .1rem 0 0; color: #475569; text-transform: uppercase; letter-spacing: .07em; }
 
-    /* The code sits in the header so it costs no vertical space of its own, and
-       a scan opens the public verification page rather than a dead link. */
-    .letter-qr { flex: 0 0 auto; display: flex; align-items: center; gap: .6rem; }
+    /* The code owns the header outright now that the university and department
+       lines are gone, and the caption that used to sit beside it has moved into
+       the body, so the mark can be as large as the page allows. Sized in mm so
+       the printed sheet and the on-screen sheet are the same mark, and 48mm is
+       well clear of the ~25mm a phone needs to lock on from an angle. */
+    .letter-qr { flex: 0 0 auto; display: flex; align-items: center; }
     .letter-qr img {
-      width: 78px; height: 78px; display: block; image-rendering: pixelated;
+      width: 48mm; height: 48mm; display: block; image-rendering: pixelated;
       border: 1px solid #cbd5e1; padding: 3px; background: #fff;
     }
-    .letter-qr figcaption {
-      max-width: 11rem; font-family: var(--au-font); font-size: .62rem;
-      line-height: 1.4; color: #475569; margin: 0;
-    }
-    .letter-qr figcaption strong { display: block; color: #1a202c; font-size: .68rem; }
-    .letter-qr figcaption code { font-size: .66rem; word-break: break-all; }
 
     .letter-status {
       border: 2.5px solid;
@@ -153,26 +167,20 @@
   </div>
 
   <article class="letter-sheet">
+    {# The mark moved to a watermark on the paper: the header now belongs to the
+       QR code, and the university, department and reference are all stated in
+       the body below, so nothing is lost by dropping the letterhead text. #}
+    <img class="au-wordmark letter-watermark"
+         src="{{ asset('images/aditya-logo.png') }}"
+         alt="{{ UNIVERSITY_NAME }}"
+         aria-hidden="true">
+    {% if qr and qr.image %}
     <header class="letter-head">
-      <img class="au-wordmark au-wordmark--letter"
-           src="{{ asset('images/aditya-logo.png') }}"
-           alt="{{ UNIVERSITY_NAME }}">
-      <div class="letter-title">
-        <h1>{{ UNIVERSITY_NAME|upper }}</h1>
-        <p>{{ DEPARTMENT_NAME }}</p>
-      </div>
-      {% if qr and qr.image %}
       <figure class="letter-qr">
         <img src="{{ qr.image }}" alt="QR code to verify {{ qr.reference }} online">
-        <figcaption>
-          <strong>Scan to verify</strong>
-          Opens the department record for this letter, showing the PIN,
-          the status and the approving faculty.
-          <br><code>{{ qr.reference }}</code>
-        </figcaption>
       </figure>
-      {% endif %}
     </header>
+    {% endif %}
 
     {# ---- Prominent status, including cancelled ---- #}
     {% set state = request.status.value|lower %}

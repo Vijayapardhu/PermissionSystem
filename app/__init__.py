@@ -5,6 +5,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
+from markupsafe import escape
 
 from config import Config
 
@@ -25,6 +26,7 @@ def create_app(config_object=Config) -> Flask:
     _register_extensions(app)
     _register_blueprints(app)
     _register_health_check(app)
+    _register_favicon(app)
     _register_static_cachebusting(app)
     _register_jinja_globals(app)
     _register_request_hooks(app)
@@ -115,6 +117,24 @@ def _register_static_cachebusting(app: Flask) -> None:
             return url_for('static', filename=filename, v=version or None)
 
         return {'asset': asset}
+
+
+def _register_favicon(app: Flask) -> None:
+    """Answer the browser's automatic /favicon.ico request.
+
+    The layout declares a <link rel="icon">, but a browser asked for the root
+    path anyway -- it is a default, not a preference -- and every miss rendered a
+    404 page. That page is not free: it runs the same template context as any
+    other, so each favicon miss loaded the signed-in user's row to draw the
+    navigation for a response nobody looks at.
+    """
+    from flask import send_from_directory
+
+    @app.route('/favicon.ico')
+    def favicon():
+        return send_from_directory(
+            app.static_folder, 'images/aditya-crest.png', mimetype='image/png'
+        )
 
 
 def _register_jinja_globals(app: Flask) -> None:
@@ -229,16 +249,46 @@ def _register_template_helpers(app: Flask) -> None:
         }
 
 
+def _error_page(app: Flask, code: int, message: str, status: int):
+    """Render the styled error page, degrading to plain HTML if that fails.
+
+    Every error page inherits the same layout as the rest of the site, and the
+    layout asks for the current user and the navigation. That is safe now only
+    because `current_user` answers None instead of raising when the database is
+    unreachable -- but a page whose failure mode is "shows a blank screen when
+    the thing it depends on breaks" is worth one more layer. This is the last
+    code to run before the response is written, so if the template cannot be
+    rendered at all the answer still has to be a document a person can read.
+    """
+    try:
+        return render_template(
+            'errors/error.html', code=code, message=message
+        ), status
+    except Exception:
+        app.logger.exception('Error page %s could not be rendered', code)
+        html = (
+            '<!doctype html><html lang="en"><meta charset="utf-8">'
+            f'<title>{code}</title>'
+            '<body style="font-family:system-ui,sans-serif;margin:4rem auto;'
+            'max-width:32rem;line-height:1.6">'
+            f'<h1>{code}</h1><p>{escape(message)}</p>'
+            '<p><a href="/">Return to the portal</a></p>'
+            '</body></html>'
+        )
+        return html, status
+
+
 def _register_error_handlers(app: Flask) -> None:
-    from werkzeug.exceptions import HTTPException
+    from app.models.database import DatabaseUnavailable
 
     @app.errorhandler(400)
     def bad_request(error):
-        return render_template(
-            'errors/error.html', code=400,
-            message=getattr(error, 'description', None) or
-                    'The request could not be understood.',
-        ), 400
+        return _error_page(
+            app, 400,
+            getattr(error, 'description', None) or
+            'The request could not be understood.',
+            400,
+        )
 
     @app.errorhandler(405)
     def method_not_allowed(error):
@@ -248,33 +298,50 @@ def _register_error_handlers(app: Flask) -> None:
         message = 'This action is not available with that method.'
         if allowed:
             message += f' Allowed: {allowed}.'
-        return render_template('errors/error.html', code=405, message=message), 405
+        return _error_page(app, 405, message, 405)
 
     @app.errorhandler(403)
     def forbidden(error):
-        return render_template(
-            'errors/error.html', code=403,
-            message='You do not have permission to view this page.',
-        ), 403
+        return _error_page(
+            app, 403, 'You do not have permission to view this page.', 403
+        )
 
     @app.errorhandler(404)
     def not_found(error):
-        return render_template(
-            'errors/error.html', code=404,
-            message='The page you requested could not be found.',
-        ), 404
+        return _error_page(
+            app, 404, 'The page you requested could not be found.', 404
+        )
 
     @app.errorhandler(413)
     def too_large(error):
-        return render_template(
-            'errors/error.html', code=413,
-            message='The uploaded file is larger than the 5 MB limit.',
-        ), 413
+        return _error_page(
+            app, 413, 'The uploaded file is larger than the 5 MB limit.', 413
+        )
+
+    @app.errorhandler(DatabaseUnavailable)
+    @app.errorhandler(503)
+    def unavailable(error):
+        # The one status that is genuinely the user's next move: the records are
+        # unreachable, nothing was lost, and the same URL will work shortly. Both
+        # spellings land here -- `abort(503)` from a guard that knows why, and
+        # the pool's own exception from a view whose query could not run.
+        #
+        # The description is a sentence written for them, and Retry-After tells
+        # any client or proxy in front of them when to try again on its own.
+        # Neither carries the host, the pool stats or the driver message: those
+        # are in the log, where they belong.
+        message = (
+            getattr(error, 'description', None)
+            or 'The department records are temporarily unavailable. '
+               'Please try again in a moment.'
+        )
+        response, status = _error_page(app, 503, message, 503)
+        retry_after = getattr(error, 'retry_after', None)
+        return response, status, {'Retry-After': str(retry_after or 5)}
 
     @app.errorhandler(500)
     def server_error(error):  # pragma: no cover
         app.logger.exception('Unhandled server error')
-        return render_template(
-            'errors/error.html', code=500,
-            message='An unexpected error occurred.',
-        ), 500
+        return _error_page(
+            app, 500, 'An unexpected error occurred.', 500
+        )

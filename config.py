@@ -9,21 +9,57 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
 
-    # Database: Supabase Postgres.
-    # Use the Session-mode pooler (port 5432), not the transaction-mode pooler
-    # (6543). psycopg promotes statements to server-side prepared statements,
-    # which transaction mode discards between transactions.
+    # Database: Supabase Postgres, DIRECT connection.
+    #
+    # The direct host is db.<ref>.supabase.co, not aws-0-<region>.pooler... The
+    # pooler reaps and reschedules session connections underneath the client,
+    # which is what produced the production log's "consuming input failed: SSL
+    # SYSCALL error: EOF detected", and it shares one slot limit between every
+    # client pointed at the project. This app pools for itself, so it has nothing
+    # for Supavisor to pool.
+    #
+    # db.<ref>.supabase.co is published as an IPv6-only AAAA record. On an
+    # IPv4-only network the name does not resolve at all, so DB_POOLER_REGION
+    # below is what keeps the site up when that is the case: with it set, the app
+    # tries direct first and falls back to Supavisor, logging which one answered.
     DATABASE_URL = os.environ.get('DATABASE_URL') or ''
 
+    # Supabase project region, e.g. ap-southeast-2. Non-empty enables the direct
+    # -> Supavisor fallback; set it to "" to use DATABASE_URL verbatim with no
+    # startup probe. Both endpoints are derived from one DSN (the project ref
+    # appears in both the pooler username and the direct hostname), so this is
+    # the only extra value a fallback needs.
+    DB_POOLER_REGION = os.environ.get('DB_POOLER_REGION', 'ap-southeast-2')
+
     # Sizing: the pool is per gunicorn worker process, so the total is
-    # DB_POOL_MAX x workers. It must also be at least the number of --threads
-    # that worker serves, or a worker deadlocks against itself: every thread
-    # holds a connection while a query runs, and the pool checkout then blocks
-    # forever. The default of 2 workers x 4 threads = 8 concurrent requests
-    # against 6 connections per process, which leaves headroom for the health
-    # probe and for the second connection a sign-in needs in sequence.
-    DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN') or 2)
+    # DB_POOL_MAX x workers, and it is charged against the Supabase project's
+    # connection limit because the direct endpoint bypasses Supavisor's own
+    # pool. It must also be at least the number of --threads that worker serves,
+    # or a worker deadlocks against itself: every thread holds a connection
+    # while a query runs, and the pool checkout then blocks forever.
+    #
+    # DB_POOL_MIN is what makes that survivable rather than merely unlikely.
+    # It is the number of connections the pool holds ready, and the pool grows
+    # only one at a time, on demand, once a client is already queued. Over a
+    # WAN a single connect costs well over a second, so a pool that starts at
+    # one and loses that one has nothing to serve for the whole connect, and
+    # every request behind it times out against DB_POOL_TIMEOUT. Sitting at
+    # min = --threads means each thread finds a warm connection instead of
+    # queueing behind a dial. The pool raises a floor set below --threads up to
+    # --threads itself and logs that it did, because the value actually running
+    # is whatever the dashboard says.
+    #
+    # 2 workers x 4 threads, so 4 warm and 6 available per process: 12 at the
+    # top end. Keep DB_POOL_MAX x DB_WORKER_COUNT inside the project's
+    # connection limit, or lower --threads rather than raising the limit.
+    DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN') or 4)
     DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX') or 6)
+
+    # What one worker serves, and how many there are. Read by the pool only to
+    # size itself and to state the resulting connection budget in the startup
+    # log. These must match the gunicorn flags in Procfile / render.yaml.
+    DB_WORKER_THREADS = int(os.environ.get('DB_WORKER_THREADS') or 4)
+    DB_WORKER_COUNT = int(os.environ.get('DB_WORKER_COUNT') or 2)
 
     # These are deliberately different, and both short.
     #
@@ -42,12 +78,17 @@ class Config:
     # inside the gunicorn request timeout.
     DB_POOL_RETRIES = int(os.environ.get('DB_POOL_RETRIES') or 2)
 
-    # Pool housekeeping. Supavisor reaps a session-mode connection after 15
-    # minutes of silence, and the path between Render and it can drop an idle
-    # flow with no error on either side. Retiring idle connections after four
-    # minutes means the pool only ever hands out a socket the server still has.
+    # Pool housekeeping. Retiring an idle connection after four minutes means the
+    # pool only ever hands out a socket the server still has.
     DB_POOL_MAX_IDLE = float(os.environ.get('DB_POOL_MAX_IDLE') or 240)
     DB_POOL_MAX_LIFETIME = float(os.environ.get('DB_POOL_MAX_LIFETIME') or 1800)
+    # How long a pooled connection may be handed out without being verified
+    # against the server. A socket dropped while idle still looks alive to libpq
+    # -- closed is False, status is IDLE -- so it is only found dead when a query
+    # goes out on it. This bounds how often that check can catch it. Thirty
+    # seconds costs one SELECT 1 per idle gap and none at all on a hot path; set
+    # it to 0 to fall back to libpq's own view, which cannot see a severed flow.
+    DB_POOL_PING_INTERVAL = float(os.environ.get('DB_POOL_PING_INTERVAL') or 30)
     # How long the background worker keeps retrying to refill the pool to
     # min_size after a failure. Short, so the site recovers on its own once
     # Supabase does, instead of staying broken until the next deploy.

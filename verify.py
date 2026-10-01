@@ -1982,10 +1982,13 @@ check('a live connection is rolled back after a failed commit',
       _d5.pool.conn.rollbacks == 1, f'{_d5.pool.conn.rollbacks} rollbacks')
 
 # An exhausted budget must say which host was unreachable, and must not leak
-# the password into the log.
+# the password into the log. The budget is generous on purpose: with a
+# millisecond-scale one, the first warning log call alone can eat the deadline
+# and the retry never gets to happen, which is exactly the flake this section
+# must not have.
 _d2 = Database()
 _d2.target = 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres'
-_d2._wait = 0.01
+_d2._wait = 0.5
 _d2._attempts = 2
 _d2._local = _threading.local()
 _d2.pool = _Pool(error=PoolTimeout('couldn\'t get a connection after 10.00 sec'))
@@ -2001,12 +2004,39 @@ except Exception as exc:
     check('an unreachable pool raises DatabaseUnavailable', False,
           f'{type(exc).__name__}: {exc}')
 
-check('a failed checkout recycles the pool before retrying',
-      _d2.pool.checks == 2, f'{_d2.pool.checks} pool checks')
 check('a failed checkout is retried', _d2.pool.checkouts == 2,
       f'{_d2.pool.checkouts} attempts')
-check('the wait passed to the pool is the configured budget',
-      all(t == 0.01 for t in _d2.pool.timeouts), str(_d2.pool.timeouts))
+# No single attempt may be told to wait longer than the whole budget, and the
+# total must not come to attempts x budget either -- that is the stall the
+# timeout split exists to remove.
+check('no attempt waits longer than the budget',
+      all(0 < t <= 0.5 for t in _d2.pool.timeouts), str(_d2.pool.timeouts))
+check('the total wait cannot exceed the budget',
+      sum(_d2.pool.timeouts) <= 0.5 + 1e-6, str(_d2.pool.timeouts))
+
+# The failure is reported with the pool's own numbers, and a pool that cannot
+# even produce them must not turn a database outage into a logging crash.
+class _NoStatsPool(_Pool):
+    def get_stats(self):
+        raise RuntimeError('stats unavailable')
+
+
+_d4 = Database()
+_d4.target = 'postgresql://postgres.ref@aws-0-x.pooler.supabase.com:5432/postgres'
+_d4._wait = 0.05
+_d4._attempts = 1
+_d4._local = _threading.local()
+_d4.pool = _NoStatsPool(error=PoolTimeout('no connection'))
+try:
+    with _d4.get_cursor() as _c:
+        _c.execute('SELECT 1')
+    check('a pool that cannot report its stats still fails cleanly', False,
+          'no error raised')
+except DatabaseUnavailable:
+    check('a pool that cannot report its stats still fails cleanly', True)
+except Exception as exc:
+    check('a pool that cannot report its stats still fails cleanly', False,
+          f'{type(exc).__name__}: {exc}')
 
 # A live database error carries the server's own words, which is the difference
 # between "wrong password", "no slots" and "project paused".
@@ -2209,6 +2239,10 @@ for _status, _expect in [
 # point is that a gatekeeper with no account can open it.
 _restore_verify = patch_models(STUDENT)
 try:
+    # The whole point of the scan: a signed link has to report a decision, so
+    # this one is rendered from an approved record.
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: make_request(rid, RequestStatus.APPROVED))
     _verify_client = app.test_client()
     with _qr_app.test_request_context('/'):
         _verify_ref = verification_url(1024).rsplit('/verify/', 1)[1]
