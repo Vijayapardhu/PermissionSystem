@@ -77,31 +77,29 @@ for role, email in ROLES.items():
         check(f'{path:36s} {status}', status == 200 and clean,
               f'status {status} clean={clean}')
 
-    # Sidebar / nav must be present and active-state aware.
+    # Every role gets the same shell, so the sidebar assertions apply to all of
+    # them. Students used to be kept on a compact top navigation instead.
     status, html = get(op, PAGES[role][0])
-    if role in ('LECTURER', 'HOD'):
-        check('sidebar rendered', 'au-side__nav' in html)
-        check('wordmark appears once', html.count('aditya-logo.png') == 1, html.count('aditya-logo.png'))
-        check('no gold accent in sidebar', 'ffd166' not in html)
-        check('sidebar has sections', 'au-side__group' in html)
-        check('sidebar active state applied', 'au-side__item is-active' in html)
-        check('sidebar signout is a POST form',
-              re.search(r'<form method="post" action="/auth/logout"', html) is not None)
-        check('off-canvas wrapper for mobile', 'offcanvas' in html)
-        check('mobile menu button present', 'data-bs-target="#auSidebar"' in html)
-        check('wordmark sits on the navigation only',
-              html.count('aditya-logo.png') == 1 and 'au-side__top' in html,
-              f"{html.count('aditya-logo.png')} occurrences")
-        header = html.split('app-topbar', 1)[-1].split('</header>', 1)[0]
-        check('no wordmark in the header', 'aditya-logo.png' not in header)
-        check('header sign-out is the right-most control',
-              0 < header.find('app-topbar__spacer') < header.find('action="/auth/logout"'))
-        check('footer carries no sign-out button', 'logout-all' not in html)
-        check('sign-out offered in both header and nav',
-              bool(re.search(r'action="/auth/logout"', header)) and 'au-side__out' in html)
-        check('no white logo plate', 'au-logo-plate' not in html)
-    else:
-        check('student keeps top navigation', 'app-nav__link' in html)
+    check('sidebar rendered', 'au-side__nav' in html)
+    check('wordmark appears once', html.count('aditya-logo.png') == 1, html.count('aditya-logo.png'))
+    check('no gold accent in sidebar', 'ffd166' not in html)
+    check('sidebar active state applied', 'au-side__item is-active' in html)
+    check('sidebar signout is a POST form',
+          re.search(r'<form method="post" action="/auth/logout"', html) is not None)
+    check('off-canvas wrapper for mobile', 'offcanvas' in html)
+    check('mobile menu button present', 'data-bs-target="#auSidebar"' in html)
+    check('wordmark sits on the navigation only',
+          html.count('aditya-logo.png') == 1 and 'au-side__top' in html,
+          f"{html.count('aditya-logo.png')} occurrences")
+    header = html.split('app-topbar', 1)[-1].split('</header>', 1)[0]
+    check('no wordmark in the header', 'aditya-logo.png' not in header)
+    check('header sign-out is the right-most control',
+          0 < header.find('app-topbar__spacer') < header.find('action="/auth/logout"'))
+    check('footer carries no sign-out button', 'logout-all' not in html)
+    check('sign-out offered in both header and nav',
+          bool(re.search(r'action="/auth/logout"', header)) and 'au-side__out' in html)
+    check('no white logo plate', 'au-logo-plate' not in html)
+    check('no inline top navigation', 'app-nav__link' not in html)
 
     # Logout must be reachable from the header.
     check('header sign-out present',
@@ -143,7 +141,7 @@ with op.open(req, timeout=25) as r:
     landed = r.read().decode('utf-8', 'replace')
 check('sign-out lands on the login page',
       'Sign in with University Outlook' in landed)
-check('sign-out confirms itself', 'signed out' in landed.lower())
+check('sign-out shows no toast', 'signed out' not in landed.lower())
 
 status, html = get(op, '/faculty/dashboard')
 check('portal is locked after sign-out',

@@ -68,24 +68,10 @@ STUDENT_TAGLINE = (
     'approval status, and download an official permission letter.'
 )
 
-STUDENT_POINTS = [
-    'Request leave or classroom permission in a few steps',
-    'Upload supporting proof for every request',
-    'Track each decision from your lecturer',
-    'Download a formal permission letter',
-]
-
 FACULTY_TAGLINE = (
     'Verify student permission requests, manage your classes and '
     'attendance, and keep the department register accurate.'
 )
-
-FACULTY_POINTS = [
-    'Review and decide on assigned requests',
-    'Search any student record in the department',
-    'Build classes and import rosters from Excel',
-    'Mark attendance, excused by approved permission',
-]
 
 
 @auth.route('/auth/login')
@@ -93,21 +79,12 @@ def login():
     if current_user():
         return redirect(route_for_role(current_user()))
 
-    # Explain why the user is back here after Microsoft signed them out.
-    signedout = request.args.get('signedout')
-    if signedout == 'all':
-        flash('You have been signed out of the portal and your Microsoft '
-              'account sessions.', 'success')
-    elif signedout == 'portal':
-        flash('You have been signed out.', 'success')
-
     # csrf_token comes from the app context processor as a callable; passing a
     # snapshot string here would shadow it and break csrf_token() in templates.
     context = {
         'entra_available': microsoft.is_configured(),
         'dev_mode': current_app_dev_mode(),
         'tagline': STUDENT_TAGLINE,
-        'points': STUDENT_POINTS,
     }
     if current_app_dev_mode():
         context['accounts'] = _dev_accounts()
@@ -131,7 +108,6 @@ def faculty_login():
         dev_mode=current_app_dev_mode(),
         faculty_accounts=_faculty_accounts(),
         tagline=FACULTY_TAGLINE,
-        points=FACULTY_POINTS,
     )
 
 
@@ -279,17 +255,15 @@ def logout():
         return render_template('auth/confirm_logout.html')
 
     session.clear()
-    flash('You have been signed out.', 'success')
-    return redirect(url_for('auth.login', signedout='portal'))
+    return redirect(url_for('auth.login'))
 
 
 @auth.route('/auth/logout-all', methods=['POST'])
 def logout_all():
     """Sign out of this app *and* end the Microsoft Entra session.
 
-    Microsoft returns the user to the login page (not to /auth/logout, which
-    would only show an "already signed out" notice), with a marker so the login
-    page can confirm what happened.
+    Microsoft returns the user straight to the login page. No confirmation
+    toast: signing out is unambiguous, and the banner only crowded the panel.
     """
     from app.auth import microsoft
 
@@ -297,7 +271,7 @@ def logout_all():
 
     if tenant and microsoft.is_configured():
         session.clear()
-        login_url = url_for('auth.login', _external=True, signedout='all')
+        login_url = url_for('auth.login', _external=True)
         microsoft_logout = (
             f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/logout'
             f'?post_logout_redirect_uri={quote(login_url, safe="")}'
@@ -305,7 +279,6 @@ def logout_all():
         return redirect(microsoft_logout)
 
     session.clear()
-    flash('You have been signed out of the portal.', 'success')
     return redirect(url_for('auth.login'))
 
 

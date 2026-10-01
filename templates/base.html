@@ -46,51 +46,19 @@
 {% if user %}
 <header class="app-topbar no-print">
   <div class="app-topbar__inner">
-    {% if show_sidebar %}
+    {# Drawer toggle. From lg up the column is permanent, so the button goes. #}
     <button class="navbar-toggler border-0 p-1 d-lg-none" type="button"
             data-bs-toggle="offcanvas" data-bs-target="#auSidebar"
             aria-controls="auSidebar" aria-label="Open navigation">
       <i class="bi bi-list text-white" style="font-size:1.6rem"></i>
     </button>
-    {% endif %}
 
-    {# The wordmark belongs to the navigation column. It is only repeated here
-       for roles that have no sidebar (students), so it never appears twice. #}
-    {% if not show_sidebar %}
-    <button class="navbar-toggler border-0 p-1 d-lg-none ms-auto" type="button"
-            data-bs-toggle="collapse" data-bs-target="#appNav"
-            aria-controls="appNav" aria-expanded="false" aria-label="Toggle navigation">
-      <i class="bi bi-list text-white" style="font-size:1.6rem"></i>
-    </button>
-
-    <a class="app-brand" href="{{ url_for('auth.landing') }}">
-      <img class="au-wordmark au-wordmark--bar au-wordmark--invert"
-           src="{{ url_for('static', filename='images/aditya-logo.png') }}"
-           alt="Aditya University">
-      <span class="d-none d-sm-block">
-        <span class="app-brand__name d-block">CSE Permission Portal</span>
-        <span class="app-brand__sub">Digital Services</span>
-      </span>
-    </a>
-    {% endif %}
-
-    {# With a sidebar the header holds only the right-hand controls, so it must
-       be a flex row that fills the bar -- otherwise they stack on the left. #}
-    <div class="{{ 'd-flex align-items-center gap-2 flex-grow-1 justify-content-end'
-                      if show_sidebar else 'collapse navbar-collapse' }}"
+    {# Every role uses this same header. It holds only the right-hand controls,
+       so it must be a flex row that fills the bar -- otherwise they stack on the
+       left. The wordmark and the links live in the navigation column, never here,
+       and the signed-in identity lives at the foot of that column. #}
+    <div class="d-flex align-items-center gap-2 flex-grow-1 justify-content-end"
          id="appNav">
-      {% if not show_sidebar %}
-      <nav class="app-nav">
-        {% for section, entries in nav_sections %}
-          {% for entry in entries %}
-          {% set target = url_for(entry.endpoint) %}
-          <a class="app-nav__link {{ 'is-active' if current_path == target }}"
-             href="{{ target }}"><i class="bi {{ entry.icon }}"></i> {{ entry.label }}</a>
-          {% endfor %}
-        {% endfor %}
-      </nav>
-      {% endif %}
-
       <div class="app-topbar__spacer"></div>
 
       {# Sign-out sits at the far right of the header. #}
@@ -100,18 +68,9 @@
           <i class="bi bi-moon-stars"></i>
         </button>
 
-        {% if not show_sidebar %}
-        <a href="{{ url_for('auth.profile') }}" class="app-user__id text-white text-decoration-none d-none d-md-block">
-          <span class="d-block">
-            {% if user.is_student %}{{ user.roll_number_display }}{% else %}{{ user.name }}{% endif %}
-          </span>
-          <span class="app-user__role">{{ user.role.value }}</span>
-        </a>
-        {% endif %}
-
-        {# Sign-out is a POST form, always visible in the header for every role.
-           The label stays at all widths so it is never reduced to a
-           hard-to-spot icon. #}
+        {# The real sign-out is a POST form, so a link, an image tag or a
+           prefetch can never end the session. The label stays at all widths so
+           it is never reduced to a hard-to-spot icon. #}
         <form method="post" action="{{ url_for('auth.logout') }}" class="signout-form">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-sm btn-light btn-pill ms-1"

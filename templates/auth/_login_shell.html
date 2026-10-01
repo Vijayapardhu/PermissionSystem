@@ -6,14 +6,14 @@
    no Bootstrap, no style.css, hence a completely unstyled page. Extending the
    base template is what pulls the stylesheet in.
 
-   Left: the brand panel on the Aditya navy gradient, carrying the wordmark and
-   the campus illustration inside a white plate. The artwork is navy line art
-   with a transparent background, so it needs a light plate to read correctly.
+   Left: the brand panel on the Aditya navy gradient. Deliberately spare -- the
+   wordmark, the department name and one line of copy, centred in the column.
+   The campus illustration and the feature list were removed to keep the panel
+   calm, so .auth-split__art centres whatever it is given.
 
    Right: the form on a plain white surface.
 
-   Below the lg breakpoint the two stack, and the artwork is dropped so the form
-   is not pushed below the fold on a phone.
+   Below the lg breakpoint the two stack.
 #}
 {% extends 'base.html' %}
 
@@ -26,24 +26,12 @@
 
   <section class="auth-split__art">
     <div class="auth-split__brand">
-      <img class="au-wordmark au-wordmark--invert au-wordmark--card d-block"
+      <img class="au-wordmark au-wordmark--invert au-wordmark--card d-block mx-auto"
            src="{{ url_for('static', filename='images/aditya-logo.png') }}"
            alt="Aditya University">
       <h2 class="auth-split__title">{{ DEPARTMENT_NAME }}</h2>
       <p class="auth-split__lede">{{ tagline }}</p>
     </div>
-
-    <div class="auth-split__plate">
-      <img src="{{ url_for('static', filename='images/campus.png') }}"
-           alt="Students with books in front of the university building"
-           loading="lazy">
-    </div>
-
-    <ul class="auth-split__points">
-      {% for point in points %}
-      <li><i class="bi bi-check2"></i> {{ point }}</li>
-      {% endfor %}
-    </ul>
   </section>
 
   <section class="auth-split__form">

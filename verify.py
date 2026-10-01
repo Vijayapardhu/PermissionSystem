@@ -439,6 +439,58 @@ for path in sorted(template_files):
             check(f'{rel} imports macros with context',
                   'with context' in line, line.strip()[:80])
 
+# Every page must resolve to a full HTML document. A template that extends a
+# bare fragment -- one with no <!DOCTYPE anywhere up its chain -- renders a
+# naked <div> with no <head> and no stylesheet link, which is exactly how the
+# sign-in pages shipped unstyled. Templates that are only ever pulled in with
+# {% include %} are exempt.
+_EXTENDS = re.compile(r"\{%-?\s*extends\s+['\"]([^'\"]+)['\"]")
+# A partial is anything pulled into another template rather than rendered as a
+# page: {% include %} and {% from ... import ... %}.
+_PULLS_IN = re.compile(r"\{%-?\s*(?:include|from)\s+['\"]([^'\"]+)['\"]")
+_DOCTYPE = re.compile(r'<!DOCTYPE', re.I)
+
+_sources = {}
+for _path in sorted(template_files):
+    _rel = os.path.relpath(_path, 'templates').replace('\\', '/')
+    with open(_path, encoding='utf-8') as _fh:
+        _sources[_rel] = _fh.read()
+
+_included = set()
+for _body in _sources.values():
+    _included.update(_PULLS_IN.findall(_body))
+
+
+def reaches_document(rel, seen=None):
+    """True if rel inherits from a template that declares a doctype."""
+    seen = seen if seen is not None else set()
+    if rel in seen:
+        return False
+    seen.add(rel)
+    body = _sources.get(rel)
+    if body is None or _DOCTYPE.search(body):
+        return bool(body is not None and _DOCTYPE.search(body))
+    parent = _EXTENDS.search(body)
+    return reaches_document(parent.group(1), seen) if parent else False
+
+
+for _rel, _body in sorted(_sources.items()):
+    if _rel in _included:
+        continue
+    check(f'{_rel} renders a full HTML document', reaches_document(_rel))
+
+# The sign-in split is edge-to-edge, so it must opt out of the padded content
+# column, and that opt-out has to exist in the stylesheet.
+_shell = _sources.get('auth/_login_shell.html', '')
+_style = open('static/css/style.css', encoding='utf-8').read()
+check('the sign-in shell extends base.html',
+      _EXTENDS.search(_shell)
+      and _EXTENDS.search(_shell).group(1) == 'base.html')
+check('the sign-in shell overrides the padded content column',
+      'au-content--flush' in _shell)
+check('style.css defines .au-content--flush',
+      re.search(r'\.au-content--flush', _style) is not None)
+
 print()
 print('=' * 70)
 print('8. LOGIN PAGE RENDERING')
@@ -762,8 +814,9 @@ check('  -> and points at the login page',
       _r.headers.get('Location', ''))
 
 _follow = _login_client.get(_r.headers.get('Location'))
-check('  -> login page confirms the sign-out',
-      'signed out' in _follow.get_data(as_text=True).lower())
+check('  -> login page shows no sign-out toast',
+      'signed out' not in _follow.get_data(as_text=True).lower(),
+      'the sign-out banner was removed from the login page')
 
 # Signing out of all Microsoft sessions must also return to the login page, not
 # back to /auth/logout (which would only show an "already signed out" notice).
@@ -787,8 +840,9 @@ check('  -> returns the user to the login page, not /auth/logout',
 
 _landing = _login_ok.test_client().get(_back)
 _text = _landing.get_data(as_text=True)
-check('  -> landing page explains the Microsoft sign-out',
-      'Microsoft' in _text and 'signed out' in _text.lower())
+check('  -> landing page shows no sign-out toast',
+      'signed out' not in _text.lower(),
+      'the Microsoft sign-out banner was removed from the login page')
 
 # Signed in: the page must offer a CSRF-protected POST, and GET must still not
 # sign the user out. Stub the user lookup because this harness has no database.
@@ -845,6 +899,37 @@ try:
         sess.clear()
 finally:
     _umod.UserModel.find_by_id = _real_find
+
+# Every role must get the same shell: the sidebar column, and a header whose
+# right-hand controls are never collapsed. A role that fell back to Bootstrap's
+# .collapse in #appNav would lose the nav links, the theme toggle and the
+# sign-out button from 992px upwards, because the hamburger that reveals it is
+# d-lg-none and therefore gone by then.
+_base = open('templates/base.html', encoding='utf-8').read()
+check('every role uses the same header, with no per-role branch',
+      'show_sidebar' not in _base.split('{% if user %}', 1)[1].split('</header>', 1)[0],
+      'the header still branches on show_sidebar')
+check('the header controls row is never collapsed',
+      'app-topbar__nav' not in _base and 'collapse navbar-collapse' not in _base)
+check('base.html has no inline top navigation left',
+      'app-nav__link' not in _base and 'app-brand' not in _base,
+      'the links and the wordmark belong to the navigation column')
+
+# The sidebar allowlist is derived from ROLE_NAV, so a role cannot be added
+# without also getting a navigation column.
+_nav_py = open('app/utils/nav.py', encoding='utf-8').read()
+check('every role with a nav also gets the sidebar',
+      re.search(r'SIDEBAR_ROLES\s*=\s*tuple\(ROLE_NAV\)', _nav_py) is not None,
+      'a hand-written tuple goes stale the moment a role is added')
+
+# Jinja compiles a template once and keeps it for the life of the process,
+# while static files are read fresh on every request. Serving old markup
+# against new CSS looks exactly like a broken layout.
+_config_py = open('config.py', encoding='utf-8').read()
+check('template auto-reload is configurable',
+      'TEMPLATES_AUTO_RELOAD' in _config_py)
+check('template auto-reload is documented in .env.example',
+      'TEMPLATES_AUTO_RELOAD' in open('.env.example', encoding='utf-8').read())
 
 # The real sign-out is POST, and still CSRF-protected.
 response = guard_client.post('/auth/logout', data={})
@@ -1430,12 +1515,27 @@ if os.path.isfile(logo_path) and os.path.isfile(crest_path) and Image:
                 crops.append(f'{path}: {line.strip()[:60]}')
     check('no template crops the wordmark', not crops, '; '.join(crops))
 
-    # The top bar must render the logo through the white filter.
+    # The wordmark lives on the navigation column and nowhere else. It used to
+    # also sit in the top bar, filtered white for the navy header; a duplicate
+    # logo is what that check used to guard against, and now the top bar must
+    # simply not carry one.
     base = open('templates/base.html', encoding='utf-8').read()
-    check('top bar uses the inverted wordmark',
-          'au-wordmark--invert' in base, 'top bar logo is not filtered white')
+    check('top bar carries no wordmark', 'aditya-logo' not in base,
+          'the logo belongs to the navigation column, not the header')
     check('no white plate remains in the top bar',
           'au-logo-plate' not in base, 'white plate still wrapped around the logo')
+
+    # Sidebar content must sit against the column edge. The auto margins that
+    # centre a full-width page leave a visible band of empty background between
+    # the navigation and the first element once a sidebar owns the left edge.
+    _css_all = open('static/css/style.css', encoding='utf-8').read()
+    check('sidebar pages align content to the column edge',
+          re.search(r'\.au-app--sidebar \.au-content,[^}]*margin-inline:\s*0',
+                    _css_all, re.S) is not None,
+          'content is auto-centred, leaving a gap beside the sidebar')
+    check('top bar and page content share the same left edge',
+          re.search(r'\.au-app--sidebar \.app-topbar__inner\s*\{[^}]*margin-inline:\s*0',
+                    _css_all, re.S) is not None)
 
     # Responsive rules must exist for small screens and coarse pointers.
     for token in ('@media (max-width: 991px)', '@media (max-width: 767px)',

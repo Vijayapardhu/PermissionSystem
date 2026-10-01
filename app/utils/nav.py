@@ -47,8 +47,11 @@ ROLE_NAV = {
     'STUDENT': STUDENT_NAV,
 }
 
-# Sidebar is used by staff; students keep the compact top navigation.
-SIDEBAR_ROLES = ('LECTURER', 'HOD')
+# Every role that has a nav also gets the sidebar, so the shell is identical for
+# all of them: a permanent column from lg up, an off-canvas drawer below it.
+# Derived from ROLE_NAV rather than listed by hand -- a hand-written tuple drifts
+# the moment a role is added, and that role silently loses its navigation.
+SIDEBAR_ROLES = tuple(ROLE_NAV)
 
 
 def nav_for(role_value):

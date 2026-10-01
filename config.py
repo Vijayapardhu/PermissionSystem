@@ -89,3 +89,15 @@ class Config:
     # system can be exercised before IT provisions the app registration.
     DEV_MODE = os.environ.get('DEV_MODE', 'true').lower() == 'true'
     DEV_ALLOWED_DOMAIN = os.environ.get('DEV_ALLOWED_DOMAIN', 'adityauniversity.in')
+
+    # Development convenience, off in production.
+    #
+    # Without this, Jinja compiles each template once and keeps it for the life
+    # of the process, while static files are read from disk on every request.
+    # Editing a template then leaves the server serving old markup against new
+    # CSS, which looks exactly like a broken layout and is very hard to spot.
+    # TEMPLATES_AUTO_RELOAD makes the template loader re-check mtime, so a save
+    # is picked up without a restart.
+    TEMPLATES_AUTO_RELOAD = os.environ.get(
+        'TEMPLATES_AUTO_RELOAD', 'false'
+    ).lower() == 'true'
