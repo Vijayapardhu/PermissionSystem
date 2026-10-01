@@ -13,13 +13,11 @@ gunicorn==23.0.0
 psycopg[binary]==3.2.13
 psycopg-pool==3.3.3
 
-# Cloudflare R2, for uploaded proof documents. R2 speaks the S3 API, so this is
-# the standard client pointed at <account>.r2.cloudflarestorage.com rather than
-# AWS itself. Imported lazily, so a deployment without R2 credentials still boots.
-boto3==1.43.107
-
-# Supabase Storage, kept for a deployment still holding proofs there
-supabase==2.18.1
+# Firebase Storage, for uploaded proof documents. firebase-admin bypasses
+# Storage rules with the service account, so the private key is a server-side
+# secret read from the environment. Imported lazily, so a deployment without
+# credentials still boots.
+firebase-admin==7.7.0
 
 # Microsoft Entra ID sign-in
 msal==1.39.0

@@ -109,13 +109,13 @@ renders as `—` when the department has not recorded one.
 | Backend   | Python 3, Flask 3, Jinja2                     |
 | Auth      | Microsoft Entra ID (MSAL, authorization code) |
 | Database  | Postgres (Supabase, `psycopg` 3, pooled)     |
-| Storage   | Cloudflare R2 (S3 API, boto3), private bucket, year/month keys |
+| Storage   | Firebase Storage (`firebase-admin`), private bucket, year/month keys |
 | Email     | Outlook SMTP via Flask-Mail                   |
 | Hosting   | Render (web service, gunicorn)                |
 
 ## Deploy to Render
 
-The app runs on Render and keeps its database and proof storage in Supabase.
+The app runs on Render, keeps its database in Supabase and its proofs in Firebase Storage.
 
 ### 1. Supabase: database
 
@@ -148,49 +148,44 @@ running the app needs IPv6 egress to resolve it at all. The pool opens in the
 background rather than failing the boot, so an unresolvable host still starts and
 recovers on its own once egress exists.
 
-### 2. Cloudflare: proof bucket
+### 2. Firebase: proof bucket
 
-**R2 → Create bucket**, name it `proofs`, and leave **public access off**.
+**Storage → Get started**, create a bucket, and leave **public access off**.
 
 Proofs are medical and identity documents. A public bucket would hand every
 object to anyone with the URL; the app instead fetches each object through
 `/faculty/proofs/<id>/download`, which authorises the request first.
 
-Then **R2 → Manage R2 API Tokens → Create Account API token** with *Object Read &
-Write* on that bucket, and record:
+Then **Project settings → Service accounts → Generate new private key**, save the
+JSON, and record:
 
 | Value | Used for |
 |---|---|
-| `R2_ACCOUNT_ID` | R2 overview, right-hand side |
-| `R2_ACCESS_KEY_ID` | Server-side only |
-| `R2_SECRET_ACCESS_KEY` | Server-side only |
+| `FIREBASE_PROJECT_ID` | Project settings → General |
+| `FIREBASE_STORAGE_BUCKET` | Storage, the bucket you created |
+| `FIREBASE_CREDENTIALS_PATH` | Server-side only. Path to that JSON. |
 
-These are R2 credentials, not AWS ones. The token bypasses every bucket policy,
-so it is a server-side secret: never put it in a template, a JavaScript file, or
-any client-side code, and rotate it if it is ever committed or pasted somewhere
-it should not be. Uploads fail with a plain error on the form if it is missing,
-not at startup.
+`firebase-admin` bypasses Storage rules with that key, so it is a server-side
+secret: never put it in a template, a JavaScript file, or any client-side code,
+and rotate it if it is ever committed or pasted somewhere it should not be.
+Uploads fail with a plain error on the form if it is missing, not at startup.
 
-`STORAGE_BACKEND` is `r2` by default. Set it to `supabase` and fill in
-`SUPABASE_URL` / `SUPABASE_SECRET_KEY` to keep storing proofs in Supabase
-Storage instead; the Supabase keys are otherwise unused.
+Render has no key file on disk, so paste the JSON itself into
+`FIREBASE_CREDENTIALS_JSON` there and leave the path unset. The two are mutually
+exclusive, and the JSON wins when both are set.
 
 ### 3. Supabase: keys
 
-**Project Settings → API Keys** gives you:
+Proofs live in Firebase, so this app needs no Supabase service-role key. Two
+values from **Project Settings → API Keys** are worth knowing anyway:
 
 | Value | Used for |
 |---|---|
-| `SUPABASE_URL` | Project URL, only for `STORAGE_BACKEND=supabase` |
-| `SUPABASE_SECRET_KEY` | Server-side only. Bypasses RLS. |
 | `SUPABASE_PUBLISHABLE_KEY` | Not used by this app. |
 
-`SUPABASE_SECRET_KEY` is the renamed service-role key, and it is only read when
-proofs are stored in Supabase rather than R2. Never put it in a template, a
-JavaScript file, or any client-side code, and rotate it if it is ever committed
-or pasted somewhere it should not be. Projects created before the rename publish
-the same privilege under `SUPABASE_SERVICE_ROLE_KEY`; the app accepts either
-name.
+If an older deployment still carries a service-role key, it is now unused:
+never put it in a template, a JavaScript file, or any client-side code, and
+rotate it if it is ever committed or pasted somewhere it should not be.
 
 ### 4. Entra ID
 
@@ -233,10 +228,8 @@ Environment variables to set on the service:
 | `SECRET_KEY` | Render's **Generate** button |
 | `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
 | `REDIRECT_URI` | `https://permissionsystem.onrender.com/auth/callback` |
-| `STORAGE_BACKEND` | `r2` |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |
-| `R2_BUCKET` | `proofs` |
-| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Only if `STORAGE_BACKEND=supabase` |
+| `FIREBASE_STORAGE_BUCKET` | Firebase → Storage |
+| `FIREBASE_CREDENTIALS_JSON` | The service account key, pasted in (Render has no key file) |
 | `SESSION_COOKIE_SECURE` | `true` (Render terminates TLS) |
 | `DEV_MODE` | `false` |
 | `FLASK_DEBUG` | `false` |
@@ -280,7 +273,7 @@ sessions.
 | A Git client | any | Or download this repository as a ZIP |
 | psql | 14 or newer | Optional. Only needed to load the schema from the command line |
 | A Supabase project | any | The database |
-| A Cloudflare account | any | The proof bucket and its R2 API token |
+| A Firebase project | any | The proof bucket and its service account key |
 
 You also need the department's Entra ID values, read from
 **Entra ID &rarr; App registrations &rarr; Aditya University Permission Portal**:
@@ -303,7 +296,7 @@ python setup.py
 
 # 3. Enter the real values in .env
 #    CLIENT_ID, TENANT_ID, CLIENT_SECRET, DATABASE_URL,
-#    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+#    FIREBASE_PROJECT_ID, FIREBASE_STORAGE_BUCKET, FIREBASE_CREDENTIALS_PATH
 
 # 4. Start the app
 python wsgi.py
@@ -356,10 +349,10 @@ DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
 
 ### Create the proof bucket
 
-In the Cloudflare dashboard: **R2 → Create bucket**, name `proofs`, public access
-off, then **Manage R2 API Tokens → Create Account API token** (Object Read &
-Write) and put the three values in `.env`. Nothing is written to the local
-filesystem any more, so there is no `storage/proofs/` directory to create.
+In the Firebase console: **Storage → Get started**, create a bucket with public
+access off, then **Project settings → Service accounts → Generate new private
+key** and point `FIREBASE_CREDENTIALS_PATH` at the JSON. Nothing is written to the
+local filesystem any more, so there is no `storage/proofs/` directory to create.
 
 ### Signing in
 
@@ -423,7 +416,7 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 | The log says `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
 | `/healthz` reports `"database": "unreachable"` | Postgres is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
 | `relation "users" does not exist` | `migrations/schema.sql` was never loaded |
-| `The requested path is invalid` on upload | Bucket is not called `proofs`, or `SUPABASE_STORAGE_BUCKET` is wrong |
+| `The requested path is invalid` on upload | Bucket name is wrong, or `FIREBASE_STORAGE_BUCKET` does not match it |
 | `row-level security` error | The app is connecting with the `anon` role. Use the project owner DSN |
 | Upload fails with a storage error | Bucket set to Public? It must be private |
 | No email ever arrives on Render | Free plan blocks ports 25/465/587. See "Two Render constraints" |
@@ -496,7 +489,7 @@ app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
 app/faculty/           Lecturer portal, classes, attendance, proof download
 app/hod/               Analytics, register, reports
-app/utils/             Security helpers, Cloudflare R2 proof storage, roster parsing, email, navigation, letter QR codes
+app/utils/             Security helpers, Firebase Storage proofs, roster parsing, email, navigation, letter QR codes
 templates/             Jinja2 templates
 templates/student/letter.html    Formal A4 permission letter, one page, with its QR code
 templates/auth/verify.html        Public, account-free page a letter's QR code opens
@@ -509,7 +502,7 @@ sidebar_test.py        Every page for every role
 ```
 
 Nothing is written to the local filesystem at runtime. Uploaded proofs live in
-the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
+the private Firebase Storage bucket under `<year>/<month>/<uuid>.<ext>`, and
 `proof_documents.file_path` holds that object key.
 
 ## Security notes
@@ -520,7 +513,7 @@ the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
 - Stored object keys are random UUIDs; original names are kept only in Postgres.
 - Object keys are validated, refusing absolute paths, `..` segments and anything
   that would resolve outside the bucket root.
-- The R2 bucket is private. Proofs are served only through an authorised
+- The Firebase bucket is private. Proofs are served only through an authorised
   route, never by guessing a URL.
 - Row Level Security is enabled on every table with no `anon` or `authenticated`
   policy, so roll numbers and reasons are unreachable through the Data API even
@@ -546,7 +539,7 @@ the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
 | Authorisation | Role guards per route; students see only their own requests, lecturers only assigned ones |
 | Redirects | `next` restricted to same-site relative paths |
 | Database | RLS enabled with no `anon`/`authenticated` policy on all seven tables |
-| Proof storage | Private R2 bucket, fetched through an authorised route |
+| Proof storage | Private Firebase bucket, fetched through an authorised route |
 | Letter verification | `/verify/<ref>.<signature>` is public and read-only; the signature is derived from `SECRET_KEY`, so a link cannot be forged and a reference number cannot be walked |
 
 Set `SESSION_COOKIE_SECURE=true` and serve over HTTPS before going live.
@@ -651,7 +644,7 @@ The first three all pass. The last three need the server running **and**
 `BASE` in each at the server if it is not on `http://localhost:5000`.
 
 `verify.py` covers app construction, role enforcement, sign-in failure modes,
-upload security against an in-memory fake of the R2 S3 API, request
+upload security against an in-memory fake of the Firebase Storage API, request
 validation, `TIME` normalisation, CSRF and logout redirects, proof-key
 containment, branding assets, responsive CSS rules, deployment settings in
 `render.yaml` and `Procfile`, template compilation (including the
@@ -688,8 +681,8 @@ double-actioning, cross-role isolation, and HOD analytics and reporting.
 ## Local setup notes
 
 There is no local database or object store to install. Supabase hosts the
-database and Cloudflare R2 holds the proofs, so local development uses the same
-two services as production.
+database and Firebase holds the proofs, so local development uses the same two
+services as production.
 
 Importing the schema with `psql -f` works everywhere; the PowerShell `<`
 redirect trap no longer applies:
