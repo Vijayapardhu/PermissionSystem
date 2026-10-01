@@ -1705,8 +1705,15 @@ try:
     check('letter carries a reference number', 'REQ-1024' in page)
     check('letter states the student roll number', '26B21CS058' in page)
     check('letter has a status block', 'Status of this request' in page)
-    check('letter includes faculty signature block',
-          'Faculty Signature' in page and 'Head of Department' in page)
+    # The department attests to the record, so the letter carries the reviewing
+    # lecturer's name and no signature blocks. The blocks were also what pushed
+    # it onto a second sheet.
+    check('letter names the reviewing faculty',
+          LECTURER.name in page)
+    check('letter has no signature blocks',
+          'Faculty Signature' not in page
+          and 'Head of Department' not in page
+          and 'letter-sign' not in page)
     check('letter has print affordance', 'window.print()' in page)
     check('letter is a formal document', 'To Whomsoever It May Concern' in page)
 
@@ -1808,6 +1815,9 @@ class _PoolConn:
         self.log = []
         self.commits = 0
         self.rollbacks = 0
+        # psycopg reports a connection the network dropped as closed, and that
+        # is the flag the settle path keys off, so the stand-in carries it.
+        self.closed = False
 
     def cursor(self, row_factory=None):
         return _PoolCursor(self)
@@ -1889,6 +1899,87 @@ check('a failing block still returns its connection',
       f'checkouts={_p.checkouts} returns={_p.returns}')
 check('a failing block rolls back', _p.conn.rollbacks == 1,
       f'{_p.conn.rollbacks} rollbacks')
+
+
+# A severed TLS flow is the one failure where the rollback is more dangerous
+# than the failure it is cleaning up after. psycopg marks the connection BAD,
+# and its rollback() then reads pgconn without checking, so it raises "the
+# connection is lost" from inside the except block. Nothing catches that, so it
+# replaces the real error and a 404 rendered through a template context
+# processor becomes an unexplained 500 whose cause is buried one frame deeper.
+class _DeadCursor(_PoolCursor):
+    def execute(self, sql, params=None):
+        self.conn.log.append(sql)
+        self.conn.closed = True
+        raise OperationalError(
+            'consuming input failed: SSL SYSCALL error: EOF detected')
+
+
+class _DeadConn(_PoolConn):
+    def cursor(self, row_factory=None):
+        return _DeadCursor(self)
+
+    def rollback(self):
+        # psycopg's behaviour on a BAD connection: no guard, straight to pgconn.
+        if self.closed:
+            raise OperationalError('the connection is lost')
+        super().rollback()
+
+
+_d4 = Database()
+_d4.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
+_d4._wait = 0.01
+_d4._attempts = 1
+_d4._local = _threading.local()
+_d4.pool = _Pool(conn=_DeadConn())
+
+try:
+    with _d4.get_cursor() as _c:
+        _c.execute('SELECT 1')
+    check('a dropped connection surfaces the query failure', False, 'no error')
+except OperationalError as exc:
+    check('a dropped connection surfaces the query failure',
+          'SSL SYSCALL error' in str(exc), str(exc))
+    check('  -> the rollback does not mask it with "connection is lost"',
+          'the connection is lost' not in str(exc), str(exc))
+except Exception as exc:
+    check('a dropped connection surfaces the query failure', False,
+          f'{type(exc).__name__}: {exc}')
+
+check('a dropped connection is still handed back for the pool to discard',
+      _d4.pool.returns == 1, f'{_d4.pool.returns} returns')
+check('a dead connection is never rolled back over the socket',
+      _d4.pool.conn.rollbacks == 0,
+      f'{_d4.pool.conn.rollbacks} rollbacks against a dead socket')
+check('the thread-local handle is cleared after a dropped connection',
+      getattr(_d4._local, 'conn', None) is None)
+
+# A healthy connection has no such excuse: the rollback still has to run, and a
+# commit that genuinely fails must still raise so a constraint violation is not
+# swallowed.
+_d5 = Database()
+_d5.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
+_d5._wait = 0.01
+_d5._attempts = 1
+_d5._local = _threading.local()
+_d5.pool = _Pool()
+
+
+class _FailingCommitConn(_PoolConn):
+    def commit(self):
+        raise OperationalError('duplicate key value violates unique constraint')
+
+
+_d5.pool.conn = _FailingCommitConn()
+try:
+    with _d5.get_cursor() as _c:
+        _c.execute('INSERT INTO users (email) VALUES (%s)', ('a@b.in',))
+    check('a failed commit still raises', False, 'no error')
+except OperationalError as exc:
+    check('a failed commit still raises', 'unique constraint' in str(exc),
+          str(exc))
+check('a live connection is rolled back after a failed commit',
+      _d5.pool.conn.rollbacks == 1, f'{_d5.pool.conn.rollbacks} rollbacks')
 
 # An exhausted budget must say which host was unreachable, and must not leak
 # the password into the log.
@@ -2066,70 +2157,82 @@ with _qr_app.test_request_context('/student/requests/1/letter'):
 check('requirements pins the QR encoder',
       re.search(r'^qrcode==', _req, re.M) is not None)
 
-# The letter, rendered for every status that can reach a printer.
+# The letter, rendered for every status that can reach a printer. patch_models
+# is the file's own helper, so current_user() resolves to a student instead of
+# reaching for a database this harness does not have.
 for _status, _expect in [
     (RequestStatus.APPROVED, 'APPROVED'),
     (RequestStatus.REJECTED, 'REJECTED'),
     (RequestStatus.CANCELLED, 'CANCELLED'),
     (RequestStatus.PENDING, 'AWAITING VERIFICATION'),
 ]:
+    _restore_status = patch_models(STUDENT)
     perm_mod.PermissionModel.find_by_id = staticmethod(
         lambda rid, s=_status: make_request(rid, s))
-    perm_mod.ApprovalModel.find_by_request = staticmethod(
-        lambda rid: [make_history(3)])
+    try:
+        with client.session_transaction() as sess:
+            sess['user_id'] = 1
+            sess['_last_seen'] = int(datetime.now().timestamp())
+        _page = client.get('/student/requests/1024/letter')
+        _html = _page.get_data(as_text=True)
 
-    with client.session_transaction() as sess:
-        sess['user_id'] = 1
-        sess['_last_seen'] = int(datetime.now().timestamp())
-    _page = client.get('/student/requests/1024/letter')
-    _html = _page.get_data(as_text=True)
-
-    check(f'letter renders for {_status.value}', _page.status_code == 200,
-          f'got {_page.status_code}')
-    check(f'  -> {_status.value} letter carries a QR code',
-          'data:image/png;base64,' in _html)
-    check(f'  -> {_status.value} letter states the PIN',
-          STUDENT.roll_number in _html)
-    check(f'  -> {_status.value} letter states the status',
-          _expect in _html, _expect)
-    check(f'  -> {_status.value} letter names the reviewing faculty',
-          LECTURER.name in _html)
-    # The signature blocks were replaced by a single name line. Leaving them in
-    # is what pushed the letter onto a second sheet.
-    check(f'  -> {_status.value} letter has no signature blocks',
-          'Faculty Signature' not in _html
-          and 'letter-sign' not in _html
-          and 'Head of Department</small>' not in _html)
-    check(f'  -> {_status.value} letter prints as one A4 page',
-          'size: A4 portrait' in _html
-          and 'break-inside: avoid' in _html)
-    check(f'  -> {_status.value} letter has no template errors',
-          'Traceback' not in _html and 'UndefinedError' not in _html)
-    with client.session_transaction() as sess:
-        sess.clear()
+        check(f'letter renders for {_status.value}', _page.status_code == 200,
+              f'got {_page.status_code}')
+        check(f'  -> {_status.value} letter carries a QR code',
+              'data:image/png;base64,' in _html)
+        check(f'  -> {_status.value} letter states the PIN',
+              STUDENT.roll_number in _html)
+        check(f'  -> {_status.value} letter states the status',
+              _expect in _html, _expect)
+        check(f'  -> {_status.value} letter names the reviewing faculty',
+              LECTURER.name in _html)
+        check(f'  -> {_status.value} letter attests by name, not by signature',
+              ('Approved by' in _html) == (_status is RequestStatus.APPROVED)
+              and 'letter-sign' not in _html)
+        # The signature blocks were replaced by a single name line. Leaving them
+        # in is what pushed the letter onto a second sheet.
+        check(f'  -> {_status.value} letter has no signature blocks',
+              'Faculty Signature' not in _html
+              and 'letter-sign' not in _html
+              and 'Head of Department</small>' not in _html)
+        check(f'  -> {_status.value} letter prints as one A4 page',
+              'size: A4 portrait' in _html
+              and 'break-inside: avoid' in _html)
+        check(f'  -> {_status.value} letter has no template errors',
+              'Traceback' not in _html and 'UndefinedError' not in _html)
+        with client.session_transaction() as sess:
+            sess.clear()
+    finally:
+        _restore_status()
 
 # The page behind the code. A fresh client, and no session in it: the whole
 # point is that a gatekeeper with no account can open it.
-_verify_client = app.test_client()
-with _qr_app.test_request_context('/'):
-    _verify_ref = verification_url(1024).rsplit('/verify/', 1)[1]
+_restore_verify = patch_models(STUDENT)
+try:
+    _verify_client = app.test_client()
+    with _qr_app.test_request_context('/'):
+        _verify_ref = verification_url(1024).rsplit('/verify/', 1)[1]
 
-_response = _verify_client.get('/verify/' + _verify_ref)
-_body = _response.get_data(as_text=True)
-check('a signed link opens without signing in', _response.status_code == 200,
-      f'got {_response.status_code}')
-check('  -> the page shows the PIN', STUDENT.roll_number in _body)
-check('  -> the page shows the status', 'APPROVED' in _body)
-check('  -> the page names the reviewing faculty', LECTURER.name in _body)
-check('  -> the page shows the period', 'October' in _body)
-check('  -> the page is not indexable', 'noindex' in _body)
-# It is a read-only receipt, so it must offer no way to change anything.
-check('  -> the page exposes no form', '<form' not in _body.lower())
-check('  -> the page leaks no connection detail',
-      'postgres' not in _body.lower() and 'psycopg' not in _body.lower())
+    _response = _verify_client.get('/verify/' + _verify_ref)
+    _body = _response.get_data(as_text=True)
+    check('a signed link opens without signing in', _response.status_code == 200,
+          f'got {_response.status_code}')
+    check('  -> the page shows the PIN', STUDENT.roll_number in _body)
+    check('  -> the page shows the status', 'APPROVED' in _body)
+    check('  -> the page names the reviewing faculty', LECTURER.name in _body)
+    check('  -> the page shows the period', 'October' in _body)
+    check('  -> the page is not indexable', 'noindex' in _body)
+    # It is a read-only receipt, so it must offer no way to change anything.
+    check('  -> the page exposes no form', '<form' not in _body.lower())
+    check('  -> the page leaks no connection detail',
+          'postgres' not in _body.lower() and 'psycopg' not in _body.lower())
 
-check('a forged link 404s', _verify_client.get('/verify/REQ-1024.forged').status_code == 404)
-check('a bare reference 404s', _verify_client.get('/verify/REQ-0001').status_code == 404)
+    check('a forged link 404s',
+          _verify_client.get('/verify/REQ-1024.forged').status_code == 404)
+    check('a bare reference 404s',
+          _verify_client.get('/verify/REQ-0001').status_code == 404)
+finally:
+    _restore_verify()
 
 print()
 print('=' * 70)

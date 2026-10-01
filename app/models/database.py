@@ -22,6 +22,9 @@ here:
   connection. With one gunicorn thread per pool slot, checking out a second
   connection could starve the pool against itself and turn any slow query into
   a hard ten-second stall.
+* The connection dies mid-query. The query's own error is the useful one, so the
+  rollback that follows it must not be allowed to raise over the top; see
+  `settle`.
 """
 
 import logging
@@ -79,6 +82,32 @@ def reject_dead_connection(conn) -> None:
         raise OperationalError('pooled connection is already closed')
     if conn.pgconn.transaction_status == TransactionStatus.UNKNOWN:
         raise OperationalError('pooled connection is no longer usable')
+
+
+def settle(conn, commit: bool) -> None:
+    """Commit or roll back a transaction, tolerating a connection already dead.
+
+    Both calls reach the socket, and psycopg's `rollback()` reads `pgconn`
+    without first checking whether it is still there: on a connection the
+    server or a middlebox has dropped it raises `OperationalError('the
+    connection is lost')` from inside the call. In the rollback path that error
+    would escape the `except` block and replace the failure the caller is
+    actually trying to diagnose -- an ordinary 404 becoming an opaque 500, with
+    the real cause buried one frame deeper in the log.
+
+    A dead connection has no transaction left to abandon, so there is nothing
+    lost by skipping the round trip. `putconn` discards it and the pool opens a
+    replacement, which is the `discarding closed connection` warning in the log.
+    Skipping lets the original exception propagate as the real one, while a
+    commit on a healthy connection still raises on its own, so a genuine
+    constraint violation is not swallowed.
+    """
+    if conn.closed:
+        return
+    if commit:
+        conn.commit()
+    else:
+        conn.rollback()
 
 
 class Database:
@@ -177,9 +206,9 @@ class Database:
             try:
                 with conn.cursor(row_factory=dict_row) as cursor:
                     yield cursor
-                conn.commit()
+                settle(conn, commit=True)
             except Exception:
-                conn.rollback()
+                settle(conn, commit=False)
                 raise
             finally:
                 self._local.conn = None
