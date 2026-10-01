@@ -6,9 +6,12 @@ dependencies, prepares .env and loads the database schema.
     python setup.py
 
 Re-running is safe: it skips anything already in place.
+
+Storage is Supabase, not the local filesystem, so there is no upload folder to
+create here. Create the bucket in the Supabase dashboard (Storage -> New bucket,
+Public off) before the first upload.
 """
 
-import getpass
 import os
 import platform
 import secrets
@@ -19,7 +22,6 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(ROOT, '.env')
 EXAMPLE = os.path.join(ROOT, '.env.example')
 SCHEMA = os.path.join(ROOT, 'migrations', 'schema.sql')
-PROOF_DIR = os.path.join(ROOT, 'storage', 'proofs')
 
 MIN_PYTHON = (3, 9)
 
@@ -57,16 +59,16 @@ if sys.version_info < MIN_PYTHON:
 else:
     ok.append(f'Python {platform.python_version()}')
 
-if have('mysql'):
-    ok.append('MySQL client (mysql) found on PATH')
+if have('psql'):
+    ok.append('Postgres client (psql) found on PATH')
 else:
     warn.append(
-        'mysql command not found. Install the MySQL server, then re-run, or '
-        'import migrations/schema.sql from a MySQL Workbench / phpMyAdmin session.'
+        'psql not found. You can still load the schema from the Supabase SQL '
+        'editor: paste migrations/schema.sql and run it once.'
     )
 
-if platform.system() == 'Windows' and not have('mysql'):
-    say('       Windows installer: https://dev.mysql.com/downloads/installer/')
+if platform.system() == 'Windows' and not have('psql'):
+    say('       Install PostgreSQL: https://www.postgresql.org/download/windows/')
 
 # ---------------------------------------------------------------- 2
 step(2, 'Virtual environment')
@@ -123,50 +125,53 @@ say('    Fill these in before signing in with Microsoft:')
 say('      CLIENT_ID      Entra ID -> App registrations -> Overview')
 say('      TENANT_ID      Entra ID -> App registrations -> Overview')
 say('      CLIENT_SECRET  Certificates & secrets -> New client secret')
-say('      MYSQL_USER / MYSQL_PASSWORD   the database account')
+say('      DATABASE_URL   Supabase -> Project Settings -> Database -> URI')
+say('      SUPABASE_URL / SUPABASE_SECRET_KEY   Supabase -> Project Settings -> API Keys')
 say('')
 say('    Leave DEV_MODE=true to use the local account picker while testing.')
 say('    Set DEV_MODE=false once Outlook sign-in works.')
 
 # ---------------------------------------------------------------- 4
-step(4, 'Upload folder')
+step(4, 'Storage bucket')
 
-os.makedirs(PROOF_DIR, exist_ok=True)
-gitkeep = os.path.join(PROOF_DIR, '.gitkeep')
-if not os.path.isfile(gitkeep):
-    open(gitkeep, 'w').close()
-ok.append('storage/proofs ready (uploaded proofs land here)')
+say('')
+say('    Proof documents live in Supabase Storage, not on this machine.')
+say('    Create the bucket once, in the Supabase dashboard:')
+say('      Storage -> New bucket -> name it "proofs" -> Public: OFF')
+say('')
+say('    The bucket must stay private. Proofs carry medical and identity')
+say('    documents and are only ever served through an authorised route.')
+ok.append('storage: Supabase bucket "proofs" (create it in the dashboard)')
 
 # ---------------------------------------------------------------- 5
 step(5, 'Database schema')
 
-if not have('mysql'):
-    warn.append('skipped: mysql client not on PATH')
+if not have('psql'):
+    warn.append('skipped: psql client not on PATH')
 else:
-    answer = input('    Load migrations/schema.sql into MySQL now? [y/N] ').strip().lower()
+    answer = input('    Load migrations/schema.sql into Supabase now? [y/N] ').strip().lower()
     if answer in ('y', 'yes'):
-        user = os.environ.get('MYSQL_USER') or input('    MySQL user [root]: ').strip() or 'root'
-        host = os.environ.get('MYSQL_HOST') or '127.0.0.1'
-        password = os.environ.get('MYSQL_PASSWORD') or getpass.getpass('    MySQL password: ')
-
-        # Read defaults from .env so the answer is not asked twice.
-        if os.path.isfile(ENV_FILE):
+        dsn = os.environ.get('DATABASE_URL', '')
+        if not dsn and os.path.isfile(ENV_FILE):
             for line in open(ENV_FILE, encoding='utf-8'):
-                if line.startswith('MYSQL_PASSWORD='):
-                    password = password or line.split('=', 1)[1].strip()
+                if line.startswith('DATABASE_URL='):
+                    dsn = line.split('=', 1)[1].strip()
+                    break
 
-        args = ['mysql', '-u', user, '-h', host]
-        if password:
-            args.append(f'-p{password}')
-
-        with open(SCHEMA, encoding='utf-8') as fh:
-            payload = fh.read()
-
-        proc = subprocess.run(args, input=payload, capture_output=True, text=True)
-        if proc.returncode == 0:
-            ok.append('schema loaded (tables created, sample accounts added)')
+        if not dsn:
+            fail.append('DATABASE_URL is not set; cannot load the schema')
         else:
-            fail.append(f'schema import failed: {proc.stderr.strip()[-300:]}')
+            with open(SCHEMA, encoding='utf-8') as fh:
+                payload = fh.read()
+
+            proc = subprocess.run(
+                ['psql', dsn, '-v', 'ON_ERROR_STOP=1', '-f', '-'],
+                input=payload, capture_output=True, text=True,
+            )
+            if proc.returncode == 0:
+                ok.append('schema loaded (tables created, sample accounts added)')
+            else:
+                fail.append(f'schema import failed: {proc.stderr.strip()[-300:]}')
     else:
         warn.append('skipped: answer was not "y"')
 
@@ -188,8 +193,8 @@ if fail:
     sys.exit(1)
 
 say('Next steps:')
-say('  1. Edit .env and enter CLIENT_ID, TENANT_ID, CLIENT_SECRET and the')
-say('     MySQL credentials.')
+say('  1. Edit .env and enter CLIENT_ID, TENANT_ID, CLIENT_SECRET,')
+say('     DATABASE_URL and the Supabase API keys.')
 say('  2. Start the app:')
 say('       Windows   .venv\\Scripts\\activate     then  python app.py')
 say('       mac/Linux source .venv/bin/activate   then  python app.py')

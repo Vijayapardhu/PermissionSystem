@@ -121,13 +121,13 @@ class UserModel:
                 """INSERT INTO users
                    (microsoft_id, email, name, role, roll_number, phone,
                     department, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING *""",
                 (microsoft_id, email.lower(), name, role.value,
                  roll_number or derive_roll_number(email, name), phone, department,
                  datetime.now(), datetime.now())
             )
-            user_id = cursor.lastrowid
-            return UserModel.find_by_id(user_id)
+            return UserModel._row_to_user(cursor.fetchone())
 
     @staticmethod
     def update(user: User) -> User:
@@ -135,12 +135,18 @@ class UserModel:
             cursor.execute(
                 """UPDATE users SET microsoft_id = %s, email = %s, name = %s,
                    role = %s, roll_number = %s, phone = %s, department = %s, updated_at = %s
-                   WHERE id = %s""",
+                   WHERE id = %s
+                   RETURNING *""",
                 (user.microsoft_id, user.email, user.name, user.role.value,
                  user.roll_number, user.phone, user.department,
                  datetime.now(), user.id)
             )
-            return UserModel.find_by_id(user.id)
+            # RETURNING rather than a follow-up find_by_id(): the update is not
+            # committed until get_cursor() exits, so a second read in another
+            # transaction would return the pre-update row. This path runs on
+            # every single sign-in.
+            row = cursor.fetchone()
+            return UserModel._row_to_user(row) if row else None
 
     @staticmethod
     def set_role(user_id: int, role: UserRole) -> User:

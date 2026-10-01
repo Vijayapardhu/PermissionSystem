@@ -5,11 +5,11 @@ from typing import Optional, List, Tuple
 
 
 def _to_time(value):
-    """Normalise a MySQL TIME column to datetime.time.
+    """Normalise a TIME column to datetime.time.
 
-    mysql-connector returns TIME as datetime.timedelta, which has no
-    strftime and no hour/minute attributes. Normalising here keeps every
-    consumer (templates, reports, emails) working with one type.
+    psycopg already hands back a datetime.time, so the first branch is the one
+    that runs in production. The timedelta and string branches are kept so the
+    shape stays enforced for any other driver or for a raw CSV import.
     """
     if value is None:
         return None
@@ -37,16 +37,19 @@ class PermissionModel:
                end_time: time = None, assigned_faculty_id: int = None) -> PermissionRequest:
         with db.get_cursor() as cursor:
             cursor.execute(
-                """INSERT INTO permission_requests 
-                   (student_id, permission_type, reason, start_date, end_date, start_time, end_time, 
-                    assigned_faculty_id, status, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (student_id, permission_type.value, reason, start_date, end_date, 
+                """INSERT INTO permission_requests
+                   (student_id, permission_type, reason, start_date, end_date, start_time, end_time,
+                     assigned_faculty_id, status, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING *""",
+                (student_id, permission_type.value, reason, start_date, end_date,
                  start_time, end_time, assigned_faculty_id, RequestStatus.PENDING.value,
                  datetime.now(), datetime.now())
             )
-            request_id = cursor.lastrowid
-            return PermissionModel.find_by_id(request_id)
+            # Map the RETURNING row rather than re-reading with find_by_id(). A
+            # second read would run in a different transaction and could not see
+            # this INSERT, which is only committed when get_cursor() exits.
+            return PermissionModel._row_to_request(cursor.fetchone())
 
     @staticmethod
     def find_by_id(request_id: int) -> Optional[PermissionRequest]:
@@ -166,14 +169,17 @@ class PermissionModel:
             cursor.execute("SELECT COUNT(*) as classroom_count FROM permission_requests WHERE permission_type = 'CLASSROOM'")
             stats['classroom_count'] = cursor.fetchone()['classroom_count']
             
+            # ILIKE, not LIKE. The MySQL build ran under a case-insensitive
+            # collation, so "Medical appointment" matched '%medical%'. Postgres
+            # LIKE is case-sensitive and would silently empty this chart.
             cursor.execute(
-                """SELECT 
-                    SUM(CASE WHEN reason LIKE '%medical%' OR reason LIKE '%health%' OR reason LIKE '%doctor%' THEN 1 ELSE 0 END) as medical,
-                    SUM(CASE WHEN reason LIKE '%personal%' OR reason LIKE '%family%' THEN 1 ELSE 0 END) as personal,
-                    SUM(CASE WHEN reason LIKE '%event%' OR reason LIKE '%workshop%' OR reason LIKE '%seminar%' OR reason LIKE '%conference%' THEN 1 ELSE 0 END) as event,
-                    SUM(CASE WHEN reason NOT LIKE '%medical%' AND reason NOT LIKE '%health%' AND reason NOT LIKE '%doctor%' 
-                              AND reason NOT LIKE '%personal%' AND reason NOT LIKE '%family%'
-                              AND reason NOT LIKE '%event%' AND reason NOT LIKE '%workshop%' AND reason NOT LIKE '%seminar%' AND reason NOT LIKE '%conference%' THEN 1 ELSE 0 END) as other
+                """SELECT
+                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%medical%', '%health%', '%doctor%'])) AS medical,
+                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%personal%', '%family%'])) AS personal,
+                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%event%', '%workshop%', '%seminar%', '%conference%'])) AS event,
+                    COUNT(*) FILTER (WHERE reason NOT ILIKE ANY (ARRAY['%medical%', '%health%', '%doctor%',
+                                                                   '%personal%', '%family%',
+                                                                   '%event%', '%workshop%', '%seminar%', '%conference%'])) AS other
                    FROM permission_requests"""
             )
             reasons = cursor.fetchone()
@@ -216,11 +222,11 @@ class ProofModel:
             cursor.execute(
                 """INSERT INTO proof_documents 
                    (request_id, original_filename, stored_filename, file_path, file_type, file_size, uploaded_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   RETURNING *""",
                 (request_id, original_filename, stored_filename, file_path, file_type, file_size, datetime.now())
             )
-            proof_id = cursor.lastrowid
-            return ProofModel.find_by_id(proof_id)
+            return ProofModel._row_to_proof(cursor.fetchone())
 
     @staticmethod
     def find_by_id(proof_id: int) -> Optional[ProofDocument]:
@@ -259,11 +265,11 @@ class ApprovalModel:
         with db.get_cursor() as cursor:
             cursor.execute(
                 """INSERT INTO approval_history (request_id, faculty_id, action, remarks, actioned_at)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING *""",
                 (request_id, faculty_id, action.value, remarks, datetime.now())
             )
-            history_id = cursor.lastrowid
-            return ApprovalModel.find_by_id(history_id)
+            return ApprovalModel._row_to_history(cursor.fetchone())
 
     @staticmethod
     def find_by_id(history_id: int) -> Optional[ApprovalHistory]:

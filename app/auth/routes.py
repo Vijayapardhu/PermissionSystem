@@ -143,7 +143,7 @@ def _faculty_accounts():
             cursor.execute(
                 """SELECT email, name, role FROM users
                    WHERE role IN ('LECTURER', 'HOD') AND is_active = TRUE
-                   ORDER BY FIELD(role, 'HOD', 'LECTURER'), name"""
+                   ORDER BY CASE role WHEN 'HOD' THEN 0 ELSE 1 END, name"""
             )
             return cursor.fetchall()
     except Exception:
@@ -352,7 +352,9 @@ def _dev_accounts():
             cursor.execute(
                 """SELECT email, name, role, roll_number FROM users
                    WHERE is_active = TRUE
-                   ORDER BY FIELD(role, 'HOD', 'LECTURER', 'STUDENT'),
+                   ORDER BY CASE role WHEN 'HOD' THEN 0
+                                       WHEN 'LECTURER' THEN 1
+                                       ELSE 2 END,
                             roll_number IS NULL, roll_number
                    LIMIT 12"""
             )

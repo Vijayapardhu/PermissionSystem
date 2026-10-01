@@ -1,8 +1,9 @@
 """Verification harness for the CSE Permission System.
 
-Covers what can be checked without a running MySQL instance: application
+Covers what can be checked without a reachable Postgres instance: application
 construction, route wiring, access control, template compilation, and the
-pure validation/security helpers.
+pure validation/security helpers. Proof storage is exercised against an
+in-memory fake of the Supabase Storage API.
 """
 
 import io
@@ -12,8 +13,17 @@ import sys
 
 os.environ.setdefault('SECRET_KEY', 'test-secret')
 os.environ.setdefault('DEV_MODE', 'true')
-os.environ.setdefault('MYSQL_USER', 'nonexistent-user')
-os.environ.setdefault('MYSQL_PASSWORD', 'nonexistent-password')
+# Force an unroutable DSN. setdefault would not help here: with a populated
+# .env this harness would open real pools against Supabase and exhaust the
+# connection limit. Every create_app() below makes its own pool.
+os.environ['DATABASE_URL'] = 'postgresql://nobody:nobody@127.0.0.1:1/nobody'
+# Keep pool waits to a second. DB_CONNECT_TIMEOUT also governs how long
+# /healthz blocks before reporting the database down, and this harness has no
+# database to wait for.
+os.environ['DB_CONNECT_TIMEOUT'] = '1'
+os.environ.setdefault('SUPABASE_URL', 'https://fake.supabase.co')
+os.environ.setdefault('SUPABASE_SECRET_KEY', 'sb_secret_fake')
+os.environ.setdefault('SUPABASE_STORAGE_BUCKET', 'proofs')
 
 failures = []
 passes = []
@@ -154,7 +164,7 @@ print('=' * 70)
 print('4. ROLE ENFORCEMENT')
 print('=' * 70)
 
-# Simulate authenticated sessions per role without touching MySQL.
+# Simulate authenticated sessions per role without touching the database.
 from app.utils.security import current_user
 
 
@@ -221,15 +231,24 @@ for role_name, path, needs_db, expected in matrix:
             session['_user_id'] = '1'
             session['_fresh'] = True
 
-        response = client.get(path)
+        # The app is created with testing=True, so Flask re-raises view
+        # exceptions instead of converting them to a 500 response. A route that
+        # reaches the database with no database available therefore raises here
+        # rather than returning 500, and the "DB error is expected" case has to
+        # be handled as an exception, not a status code.
+        try:
+            response = client.get(path)
+            status = response.status_code
+        except Exception:
+            status = 500 if expected is None else 'raised'
+
         if expected is None:
             # Route is role-allowed; a DB error here is expected and fine.
-            ok = response.status_code in (200, 500)
-            check(f'{role_name} can reach {path}', ok,
-                  f'status {response.status_code}')
+            check(f'{role_name} can reach {path}', status in (200, 500),
+                  f'status {status}')
         else:
             check(f'{role_name} -> {path} returns {expected}',
-                  response.status_code == expected, f'got {response.status_code}')
+                  status == expected, f'got {status}')
 
         with client.session_transaction() as session:
             session.clear()
@@ -307,7 +326,7 @@ check('email without @ rejected', not is_valid_email('abc'))
 
 print()
 print('=' * 70)
-print('4b. MySQL TIME COLUMN NORMALISATION')
+print('4b. TIME COLUMN NORMALISATION')
 print('=' * 70)
 
 from datetime import date as _date, datetime as _dt, time as _time, timedelta as _td
@@ -570,27 +589,38 @@ print('=' * 70)
 print('9. PROOF PATH CONTAINMENT')
 print('=' * 70)
 
-from app.utils.files import UploadError, resolve_on_disk
+from app.utils.files import UploadError, normalise_key
 
 with app.app_context():
-    escaped = False
-    for evil in ['../../../../etc/passwd', '/etc/passwd',
-                 '..\\..\\windows\\win.ini']:
+    EVIL_KEYS = [
+        '../../../../etc/passwd',
+        '/etc/passwd',
+        '..\\..\\windows\\win.ini',
+        '2026/../../secret.pdf',
+        '2026//10/abc.pdf',
+        './2026/10/abc.pdf',
+        'https://evil.example.com/abc.pdf',
+        'C:/Windows/win.ini',
+        '',
+        None,
+    ]
+    accepted = []
+    for evil in EVIL_KEYS:
         try:
-            resolved = resolve_on_disk(evil)
-            if '..' in evil and os.path.commonpath(
-                [os.path.abspath(resolved),
-                 app.config['UPLOAD_FOLDER']]
-            ) != os.path.abspath(app.config['UPLOAD_FOLDER']):
-                escaped = True
+            key = normalise_key(evil)
+            # A key that survives must be a plain relative POSIX path.
+            if key.startswith('/') or '..' in key.split('/') or ':' in key:
+                accepted.append(evil)
         except UploadError:
             pass
-    check('traversal proof paths are refused', not escaped)
+    check('traversal and absolute proof keys are refused', not accepted,
+          str(accepted))
 
-    safe = resolve_on_disk('2026/10/abc123.pdf')
-    check('legitimate proof path resolves under the storage root',
-          safe.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])),
-          safe)
+    check('legitimate proof key is accepted',
+          normalise_key('2026/10/abc123.pdf') == '2026/10/abc123.pdf',
+          normalise_key('2026/10/abc123.pdf'))
+    check('backslash separators are normalised to POSIX',
+          normalise_key('2026\\10\\abc.pdf') == '2026/10/abc.pdf')
 
 print()
 print('=' * 70)
@@ -889,7 +919,8 @@ print('=' * 70)
 import os as _os
 
 for required in ['setup.py', 'requirements.txt', '.env.example',
-                 'migrations/schema.sql', 'config.py', 'app.py', 'README.md']:
+                 'migrations/schema.sql', 'config.py', 'app.py', 'README.md',
+                 'render.yaml', 'Procfile']:
     check(f'{required} present', _os.path.isfile(required))
 
 check('.env is not tracked by git',
@@ -897,10 +928,19 @@ check('.env is not tracked by git',
 
 # Every runtime dependency must be pinned.
 _req = open('requirements.txt', encoding='utf-8').read()
-for package in ['Flask', 'mysql-connector-python', 'msal', 'python-dotenv',
+for package in ['Flask', 'msal', 'python-dotenv', 'gunicorn',
                 'Flask-Mail', 'Werkzeug', 'openpyxl', 'Pillow']:
     check(f'requirements pins {package}',
           re.search(rf'^{re.escape(package)}==', _req, re.M) is not None)
+
+# The database driver and storage client pin with extras, so a plain
+# "package==" match would miss them.
+check('requirements pins the Postgres driver',
+      re.search(r'^psycopg\[binary,pool\]==', _req, re.M) is not None)
+check('requirements pins the Supabase client',
+      re.search(r'^supabase==', _req, re.M) is not None)
+check('requirements no longer pulls the MySQL driver',
+      'mysql' not in _req.lower())
 
 # Packages the code imports must not be missing from requirements.
 check('openpyxl declared (roster import)',
@@ -911,8 +951,10 @@ check('Pillow declared (branding assertions)',
 # Host, port and debug must be configurable, not hardcoded.
 _env_example = open('.env.example', encoding='utf-8').read()
 for key in ['HOST', 'PORT', 'FLASK_DEBUG', 'SESSION_COOKIE_SECURE',
-            'IDLE_TIMEOUT_SECONDS', 'MYSQL_USER', 'CLIENT_ID', 'CLIENT_SECRET',
-            'TENANT_ID', 'REDIRECT_URI', 'DEV_MODE']:
+            'IDLE_TIMEOUT_SECONDS', 'DATABASE_URL', 'SUPABASE_URL',
+            'SUPABASE_SECRET_KEY', 'SUPABASE_STORAGE_BUCKET',
+            'CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID',
+            'REDIRECT_URI', 'DEV_MODE']:
     check(f'.env.example documents {key}',
           re.search(rf'^{key}=', _env_example, re.M) is not None)
 
@@ -930,18 +972,45 @@ check('app.py reads debug from the environment',
 check('app.py no longer hardcodes port 5000',
       'port=5000' not in _app_py)
 
-# The README must document a complete install, including the PowerShell
-# `mysql < file` trap that bites on Windows.
+# The README must document a complete install and the Render/Supabase deploy.
 _readme = open('README.md', encoding='utf-8').read()
-for phrase in ['python setup.py', 'git clone', 'CREATE USER',
-               'Get-Content migrations', 'waitress', 'gunicorn',
-               'AADSTS50011', 'DEV_MODE']:
+for phrase in ['python setup.py', 'git clone', 'waitress', 'gunicorn',
+               'AADSTS50011', 'DEV_MODE', 'Supabase', 'Render',
+               'psql', 'healthz']:
     check(f'README documents {phrase!r}', phrase in _readme)
+
+# The deployment entry points must agree with each other.
+_render_yaml = open('render.yaml', encoding='utf-8').read()
+check('render.yaml starts gunicorn',
+      'gunicorn' in _render_yaml and 'app:app' in _render_yaml)
+check('render.yaml points the health check at /healthz',
+      'healthCheckPath: /healthz' in _render_yaml)
+check('render.yaml takes DATABASE_URL from the environment, not a literal',
+      re.search(r'- key: DATABASE_URL\s*\n\s*sync: false', _render_yaml)
+      is not None)
+check('render.yaml declares no database instance (Supabase hosts it)',
+      'type: postgres' not in _render_yaml and not re.search(
+          r'^databases:', _render_yaml, re.M))
+check('render.yaml ships DEV_MODE false',
+      re.search(r'- key: DEV_MODE\s*\n\s*value: "false"', _render_yaml)
+      is not None)
+check('render.yaml turns on secure cookies',
+      re.search(
+          r'- key: SESSION_COOKIE_SECURE\s*\n\s*value: "true"', _render_yaml
+      ) is not None)
+check('render.yaml leaves no service-role key inline',
+      'eyJ' not in _render_yaml)
+
+_procfile = open('Procfile', encoding='utf-8').read()
+check('Procfile binds to the port Render injects',
+      '--bind 0.0.0.0:$PORT' in _procfile)
+check('Procfile serves app:app through gunicorn',
+      'app:app' in _procfile and 'gunicorn' in _procfile)
 
 check('setup.py performs all install steps',
       all(step in open('setup.py', encoding='utf-8').read()
           for step in ['venv', 'requirements.txt', '.env.example',
-                       'storage', 'schema.sql']))
+                       'schema.sql']))
 
 # setup.py is a CLI script and runs on import by design, but nothing in the
 # application may import it.
@@ -1171,16 +1240,55 @@ finally:
 
 print()
 print('=' * 70)
-print('11. FILE STORAGE ROUND TRIP')
+print('11. SUPABASE STORAGE ROUND TRIP')
 print('=' * 70)
-
-import shutil
 
 from werkzeug.datastructures import FileStorage
 
-from app.utils.files import UploadError, delete_proof, validate_and_store
+import app.utils.files as files_mod
+from app.utils.files import UploadError, delete_proof, fetch_proof, validate_and_store
 
-shutil.rmtree(app.config['UPLOAD_FOLDER'], ignore_errors=True)
+
+class _FakeBucket:
+    """In-memory stand-in for supabase-py's storage.from_(...) handle."""
+
+    def __init__(self):
+        self.objects = {}
+
+    def upload(self, key, payload, options=None):
+        if not (options or {}).get('upsert') == 'false' and key in self.objects:
+            return type('R', (), {'error': 'Asset already exists'})()
+        self.objects[key] = bytes(payload)
+        return type('R', (), {'error': None})()
+
+    def download(self, key):
+        if key not in self.objects:
+            raise KeyError(key)
+        return self.objects[key]
+
+    def remove(self, keys):
+        for key in keys:
+            self.objects.pop(key, None)
+        return keys
+
+
+class _FakeStorage:
+    def __init__(self, bucket):
+        self._bucket = bucket
+
+    def from_(self, name):
+        return self._bucket
+
+
+class _FakeClient:
+    def __init__(self, bucket):
+        self.storage = _FakeStorage(bucket)
+
+
+_FAKE = _FakeBucket()
+
+_real_storage_client = files_mod.storage_client
+files_mod.storage_client = lambda: _FakeClient(_FAKE)
 
 
 def store(name, payload):
@@ -1195,12 +1303,18 @@ with app.test_request_context():
     meta = validate_and_store(real_pdf)
     check('valid PDF stored', meta['file_type'] == 'pdf', str(meta))
     check('original filename recorded', meta['original_filename'] == 'doctor-letter.pdf')
-    check('stored path is year/month bucketed',
-          meta['file_path'].startswith('2026/10/'), meta['file_path'])
-    check('stored file exists on disk',
-          os.path.isfile(resolve_on_disk(meta['file_path'])))
+    _now = datetime.now()
+    _expected_prefix = f'{_now.year}/{_now.month:02d}/'
+    check('stored key is year/month bucketed',
+          meta['file_path'].startswith(_expected_prefix), meta['file_path'])
+    check('stored object is in the bucket',
+          meta['file_path'] in _FAKE.objects, str(list(_FAKE.objects)))
+    check('stored bytes round-trip',
+          fetch_proof(meta['file_path']) == b'%PDF-1.7\n' + b'0' * 2048)
     check('stored size recorded', meta['file_size'] == len(b'%PDF-1.7\n') + 2048,
           str(meta['file_size']))
+    check('stored key never leaks the original filename',
+          'doctor-letter' not in meta['file_path'], meta['file_path'])
 
     renamed = store('holiday.png', b'%PDF-1.7\n' + b'0' * 100)
     try:
@@ -1217,12 +1331,20 @@ with app.test_request_context():
         check('disallowed extension is rejected', 'accepted' in str(exc), str(exc))
 
     empty = store('blank.pdf', b'')
-    os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], '2026', '10'), exist_ok=True)
     try:
         validate_and_store(empty)
         check('empty upload is rejected', False, 'accepted empty file')
     except UploadError as exc:
         check('empty upload is rejected', 'empty' in str(exc).lower(), str(exc))
+
+    oversize = store('huge.pdf', b'%PDF-1.7\n' + b'0' * (5 * 1024 * 1024 + 1))
+    try:
+        validate_and_store(oversize)
+        check('oversize upload is rejected', False, 'accepted >5MB')
+    except UploadError as exc:
+        check('oversize upload is rejected', '5 MB' in str(exc), str(exc))
+    check('oversize upload stored nothing',
+          len(_FAKE.objects) == 1, str(list(_FAKE.objects)))
 
     none_file = FileStorage(stream=io.BytesIO(b''), filename='')
     try:
@@ -1231,14 +1353,15 @@ with app.test_request_context():
     except UploadError as exc:
         check('missing filename is rejected', 'required' in str(exc).lower(), str(exc))
 
-    check('delete_proof removes the file',
-          delete_proof(meta['file_path']))
-    check('file is gone after delete',
-          not os.path.isfile(resolve_on_disk(meta['file_path'])))
+    check('delete_proof removes the object', delete_proof(meta['file_path']))
+    check('object is gone after delete', meta['file_path'] not in _FAKE.objects)
+    try:
+        fetch_proof(meta['file_path'])
+        check('fetching a deleted proof raises', False, 'returned bytes')
+    except UploadError:
+        check('fetching a deleted proof raises', True)
 
-shutil.rmtree(app.config['UPLOAD_FOLDER'], ignore_errors=True)
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
+files_mod.storage_client = _real_storage_client
 
 
 print()

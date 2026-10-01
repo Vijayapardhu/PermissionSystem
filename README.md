@@ -1,6 +1,6 @@
 # CSE Permission & Leave Tracking System
 
-Flask + MySQL permission tracker for the Department of Computer Science & Engineering,
+Flask + Postgres permission tracker for the Department of Computer Science & Engineering,
 built to the SRS: Microsoft Entra ID sign-in, Leave and Classroom permission requests,
 proof upload, lecturer verification, and an HOD analytics dashboard with printable reports.
 
@@ -108,9 +108,131 @@ renders as `—` when the department has not recorded one.
 | Frontend  | HTML5, Bootstrap 5.3, Bootstrap Icons, Chart.js 4 |
 | Backend   | Python 3, Flask 3, Jinja2                     |
 | Auth      | Microsoft Entra ID (MSAL, authorization code) |
-| Database  | MySQL 8 (`mysql-connector-python`, pooled)    |
-| Storage   | Local filesystem, year/month buckets          |
+| Database  | Postgres (Supabase, `psycopg` 3, pooled)     |
+| Storage   | Supabase Storage, private bucket, year/month keys |
 | Email     | Outlook SMTP via Flask-Mail                   |
+| Hosting   | Render (web service, gunicorn)                |
+
+## Deploy to Render
+
+The app runs on Render and keeps its database and proof storage in Supabase.
+
+### 1. Supabase: database
+
+Create a project, then open **SQL Editor** and paste `migrations/schema.sql`.
+Run it once. It drops and recreates every table, so never re-run it against a
+database that holds real data.
+
+Then copy **Project Settings → Database → Connection string → URI**. Use the
+**Session mode** pooler on port **5432**:
+
+```
+postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+Two things about this URI:
+
+- Port 6543 is the transaction-mode pooler. Do not use it. psycopg promotes
+  statements to server-side prepared statements, and transaction mode discards
+  them between transactions.
+- A password containing `@ / : #` must be percent-encoded, or the DSN silently
+  parses up to the wrong separator.
+
+### 2. Supabase: storage bucket
+
+**Storage → New bucket**, name it `proofs`, and set **Public bucket: off**.
+
+Proofs are medical and identity documents. A public bucket would hand every
+object to anyone with the URL; the app instead fetches each object through
+`/faculty/proofs/<id>/download`, which authorises the request first.
+
+### 3. Supabase: keys
+
+**Project Settings → API Keys** gives you:
+
+| Value | Used for |
+|---|---|
+| `SUPABASE_URL` | Project URL |
+| `SUPABASE_SECRET_KEY` | Server-side only. Bypasses RLS. |
+| `SUPABASE_PUBLISHABLE_KEY` | Not used by this app. |
+
+`SUPABASE_SECRET_KEY` is the renamed service-role key. Never put it in a
+template, a JavaScript file, or any client-side code, and rotate it if it is
+ever committed or pasted somewhere it should not be. Projects created before
+the rename publish the same privilege under `SUPABASE_SERVICE_ROLE_KEY`; the
+app accepts either name.
+
+### 4. Entra ID
+
+Under **App registrations → your app → Authentication → Web**, add the exact
+redirect URI. Entra matches character for character, so paste it rather than
+typing it:
+
+```
+https://<your-render-service>.onrender.com/auth/callback
+```
+
+Set the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
+
+### 5. Render
+
+The repository carries a `render.yaml` blueprint:
+
+```bash
+render blueprint launch
+```
+
+It creates the web service and prompts for each `sync: false` value. Or set it
+up by hand with **New → Web Service**:
+
+| Setting | Value |
+|---|---|
+| Runtime | Python |
+| Build command | `pip install --upgrade pip && pip install -r requirements.txt` |
+| Start command | `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - app:app` |
+| Health check path | `/healthz` |
+
+`render.yaml` and `Procfile` hold the start command, so leave Render's field on
+its default and let it read the blueprint.
+
+Environment variables to set on the service:
+
+| Variable | Source |
+|---|---|
+| `DATABASE_URL` | Supabase, Session-mode pooler URI |
+| `SECRET_KEY` | Render's **Generate** button |
+| `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
+| `REDIRECT_URI` | `https://<service>.onrender.com/auth/callback` |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Supabase API Keys |
+| `SUPABASE_STORAGE_BUCKET` | `proofs` |
+| `SESSION_COOKIE_SECURE` | `true` (Render terminates TLS) |
+| `DEV_MODE` | `false` |
+| `FLASK_DEBUG` | `false` |
+
+### Two Render constraints worth knowing
+
+**Free plans block outbound SMTP.** Ports 25, 465 and 587 are blocked, and
+`smtp.office365.com` needs 587. On the free plan the app still works, but every
+notification is silently suppressed — `app/utils/email.py` logs the failure and
+continues so a student's request is never lost. `render.yaml` therefore targets
+the `starter` plan. To stay on free, leave `MAIL_USERNAME` empty and accept that
+no email is sent.
+
+**Sessions are signed cookies, not files.** Render's filesystem is ephemeral and
+is wiped on every deploy and every 15-minute idle spin-down, so a filesystem
+session store would sign everyone out on a schedule. The cookie store needs no
+extra service and survives both, provided `SECRET_KEY` is set — if it is not, the
+app falls back to a hardcoded development value and every deploy invalidates all
+sessions.
+
+### Deploy-time settings that matter
+
+- `--workers 2` rather than 4: `DB_POOL_MAX` is per process, and the connection
+  limit is what runs out first on the free Supabase plan.
+- `--timeout 120`: uploads run to 5 MB and the permission letter renders inline,
+  which is tight against gunicorn's 30-second default.
+- `/healthz` pings Postgres, because Render restarts the service when the health
+  check fails and a container that cannot reach the database is genuinely broken.
 
 ## Install on a new computer
 
@@ -119,8 +241,9 @@ renders as `—` when the department has not recorded one.
 | Requirement | Version | Notes |
 |---|---|---|
 | Python | 3.9 or newer | <https://www.python.org/downloads/> &mdash; tick **"Add Python to PATH"** on Windows |
-| MySQL Server | 8.0 or newer | <https://dev.mysql.com/downloads/installer/> |
 | A Git client | any | Or download this repository as a ZIP |
+| psql | 14 or newer | Optional. Only needed to load the schema from the command line |
+| A Supabase project | any | The database and the proof bucket |
 
 You also need the department's Entra ID values, read from
 **Entra ID &rarr; App registrations &rarr; Aditya University Permission Portal**:
@@ -138,11 +261,12 @@ You also need the department's Entra ID values, read from
 git clone https://github.com/Vijayapardhu/PermissionSystem.git
 cd PermissionSystem
 
-# 2. Automated setup: virtual environment, dependencies, .env, upload folder
+# 2. Automated setup: virtual environment, dependencies, .env, schema
 python setup.py
 
 # 3. Enter the real values in .env
-#    CLIENT_ID, TENANT_ID, CLIENT_SECRET, MYSQL_USER, MYSQL_PASSWORD
+#    CLIENT_ID, TENANT_ID, CLIENT_SECRET, DATABASE_URL,
+#    SUPABASE_URL, SUPABASE_SECRET_KEY
 
 # 4. Start the app
 python app.py
@@ -165,44 +289,39 @@ copy .env.example .env      # Windows
 cp .env.example .env        # macOS / Linux
 ```
 
-Then fill in `.env`, create the database (below), and run `python app.py`.
+Then fill in `.env` and create the storage bucket and database (below).
 
 ### Create the database
 
-Use a dedicated account rather than `root`. In a MySQL console as an administrator:
-
-```sql
-CREATE DATABASE IF NOT EXISTS cse_permission_system
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE USER IF NOT EXISTS 'cse_permission'@'localhost'
-  IDENTIFIED BY 'choose-a-strong-password';
-
-GRANT ALL PRIVILEGES ON cse_permission_system.* TO 'cse_permission'@'localhost';
-FLUSH PRIVILEGES;
-```
-
-Load the schema, which also creates the sample accounts:
+The app creates no tables itself. Load the schema once, either by pasting
+`migrations/schema.sql` into the Supabase **SQL Editor**, or:
 
 ```bash
 # macOS / Linux
-mysql -u cse_permission -p cse_permission_system < migrations/schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/schema.sql
 
 # Windows PowerShell has no `<` redirect, so pipe instead:
-Get-Content migrations\schema.sql -Raw | mysql -u cse_permission -p
+Get-Content migrations\schema.sql -Raw | psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1
 ```
 
-MySQL Workbench works too: open the file and press the lightning bolt.
+`ON_ERROR_STOP=1` matters: without it psql reports success even when an earlier
+statement failed, and you end up with half a schema.
 
-Then set those credentials in `.env`:
+The script is **not incremental**. It drops and recreates the tables, which
+deletes every user, request and attendance mark. Load it once against an empty
+project and never again.
+
+Then set the connection string in `.env`:
 
 ```env
-MYSQL_HOST=127.0.0.1
-MYSQL_USER=cse_permission
-MYSQL_PASSWORD=choose-a-strong-password
-MYSQL_DB=cse_permission_system
-MYSQL_PORT=3306
+DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
 ```
+
+### Create the storage bucket
+
+In the Supabase dashboard: **Storage → New bucket**, name `proofs`, **Public
+bucket: off**. Nothing is written to the local filesystem any more, so there is
+no `storage/proofs/` directory to create.
 
 ### Signing in
 
@@ -226,8 +345,8 @@ and cannot be used to bypass Microsoft.
 pip install waitress            # Windows
 waitress-serve --port=8080 app:app
 
-pip install gunicorn            # Linux
-gunicorn -w 4 -b 0.0.0.0:8080 app:app
+pip install gunicorn            # Linux / Render
+gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 app:app
 ```
 
 Then in `.env`:
@@ -250,38 +369,22 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 |---|---|
 | `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
 | `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
-| `Database connection pool not initialized` | MySQL not running, or `.env` credentials wrong |
-| `Error 1045 Access denied` | Wrong `MYSQL_USER` / `MYSQL_PASSWORD` |
+| `DATABASE_URL is not set` | `.env` missing the connection string, or the service has no env vars |
+| `could not translate host name` / `Connection refused` | Wrong pooler host or port. Use Session mode on 5432, not 6543 |
+| `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
+| `too many connections` | `DB_POOL_MAX` x gunicorn `--workers` exceeds the plan limit. Free Supabase allows 15 |
+| `relation "users" does not exist` | `migrations/schema.sql` was never loaded |
+| `The requested path is invalid` on upload | Bucket is not called `proofs`, or `SUPABASE_STORAGE_BUCKET` is wrong |
+| `row-level security` error | The app is connecting with the `anon` role. Use the project owner DSN |
+| Upload fails with a storage error | Bucket set to Public? It must be private |
+| No email ever arrives on Render | Free plan blocks ports 25/465/587. See "Two Render constraints" |
 | Sign-in loops back to the login page | `REDIRECT_URI` does not match the registered redirect URI exactly |
 | `AADSTS50011` | Same redirect URI mismatch |
 | Sign-in fails immediately | `CLIENT_SECRET` wrong, expired, or still a placeholder |
-| Email never arrives | `MAIL_USERNAME` / `MAIL_PASSWORD` blank; the app logs it and continues |
 | Port already in use | Change `PORT` in `.env`, or stop whatever is using it |
-| `setup.py` cannot find `mysql` | Add MySQL's `bin` folder to PATH, or import the schema through Workbench |
-| Windows: no MySQL service | See below |
-
-**Windows MySQL note.** The standalone MySQL MSI copies the binaries but does not
-register a Windows service. Either register it from an elevated PowerShell:
-
-```powershell
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --install MySQL84 `
-   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data"
-Start-Service MySQL84
-```
-
-or run it directly, which needs no administrator rights:
-
-```powershell
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" `
-   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data" --port=3306 `
-   --bind-address=127.0.0.1 --console
-```
-
-Set a password once:
-
-```bash
-mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'your-password'; FLUSH PRIVILEGES;"
-```
+| `setup.py` cannot find `psql` | Paste `migrations/schema.sql` into the Supabase SQL Editor instead |
+| `/healthz` returns 503 | Postgres unreachable. Check `DATABASE_URL` and Render's private-network access |
+| Proof download returns 404 | Object missing from the bucket, or `file_path` in the database no longer matches |
 
 ## Authentication
 
@@ -335,35 +438,46 @@ config.py              Settings loaded from .env
 setup.py               Automated first-time setup
 app.py                 Entry point (development server)
 requirements.txt       Pinned dependencies
-app/__init__.py        Application factory, blueprints, error handlers
+Procfile               gunicorn start command for Render
+render.yaml            Render blueprint (env vars, start command, health check)
+app/__init__.py        Application factory, blueprints, /healthz, error handlers
 app/auth/              MSAL client and sign-in routes
-app/models/            Dataclasses, MySQL pool, queries
+app/models/            Dataclasses, Postgres pool, queries
 app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
 app/faculty/           Lecturer portal, classes, attendance, proof download
 app/hod/               Analytics, register, reports
-app/utils/             Security helpers, proof storage, roster parsing, email, navigation
+app/utils/             Security helpers, Supabase Storage, roster parsing, email, navigation
 templates/             Jinja2 templates
 static/                CSS, Chart.js dashboard, Aditya logo assets
-storage/proofs/        Uploaded proofs (year/month buckets)
 migrations/schema.sql  Database schema and seed accounts
-verify.py              Unit harness (321 checks, no database required)
-workflow_test.py       End-to-end over HTTP (59 checks)
-class_features_test.py Classes, roster and attendance (44 checks)
-sidebar_test.py        Every page for every role (68 checks)
+verify.py              Unit harness, no database required
+workflow_test.py       End-to-end over HTTP
+class_features_test.py Classes, roster and attendance
+sidebar_test.py        Every page for every role
 ```
+
+Nothing is written to the local filesystem at runtime. Uploaded proofs live in
+the private Supabase Storage bucket under `<year>/<month>/<uuid>.<ext>`, and
+`proof_documents.file_path` holds that object key.
 
 ## Security notes
 
 - No local passwords; identities come from Microsoft.
 - Proof uploads are validated by extension **and** magic bytes, so a renamed
   `.exe` or script is rejected.
-- Stored filenames are random UUIDs; original names are kept only in MySQL.
-- Path resolution refuses any path escaping the storage root (traversal defence).
+- Stored object keys are random UUIDs; original names are kept only in Postgres.
+- Object keys are validated, refusing absolute paths, `..` segments and anything
+  that would resolve outside the bucket root.
+- The Storage bucket is private. Proofs are served only through an authorised
+  route, never by guessing a URL.
+- Row Level Security is enabled on every table with no `anon` or `authenticated`
+  policy, so roll numbers and reasons are unreachable through the Data API even
+  if the publishable key leaks.
 - Proof downloads are authorised: a student sees only their own, a lecturer only
   their assigned requests.
 - `next` redirects are restricted to same-site relative paths.
-- Files live under `storage/proofs/<year>/<month>/`, never in the database.
+- The service-role key is read from the environment only, never rendered.
 
 ## Security
 
@@ -377,9 +491,11 @@ sidebar_test.py        Every page for every role (68 checks)
 | Cookies | `HttpOnly`, `SameSite=Lax`, custom name; add `SESSION_COOKIE_SECURE=true` under HTTPS |
 | Headers | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `COOP`, `Permissions-Policy` |
 | Caching | `Cache-Control: no-store` on `/student`, `/faculty`, `/hod` pages |
-| Uploads | Extension **and** magic-byte validation, 5 MB cap, random filenames, path-traversal refusal |
+| Uploads | Extension **and** magic-byte validation, 5 MB cap, random object keys, key-traversal refusal |
 | Authorisation | Role guards per route; students see only their own requests, lecturers only assigned ones |
 | Redirects | `next` restricted to same-site relative paths |
+| Database | RLS enabled with no `anon`/`authenticated` policy on all seven tables |
+| Proof storage | Private Supabase bucket, fetched through an authorised route |
 
 Set `SESSION_COOKIE_SECURE=true` and serve over HTTPS before going live.
 
@@ -450,60 +566,62 @@ ever applied when an **approved** request actually spans that date.
 ## Tests
 
 ```bash
-python verify.py              # 321 checks, no database required
-python workflow_test.py       #  59 checks, end-to-end over HTTP
-python class_features_test.py #  44 checks, classes / roster / attendance
-python sidebar_test.py        #  68 checks, every page for every role
+python verify.py              # 392 checks, no database required
+python workflow_test.py       # end-to-end over HTTP
+python class_features_test.py # classes / roster / attendance
+python sidebar_test.py        # every page for every role
 ```
 
-All four pass. The last three need the server and MySQL running.
+The first three all pass. The last three need the server running **and**
+`DATABASE_URL` set, because they assert against real database state. Point
+`BASE` in each at the server if it is not on `http://localhost:5000`.
 
 `verify.py` covers app construction, role enforcement, sign-in failure modes,
-upload security, request validation, MySQL `TIME` normalisation, CSRF and
-logout redirects, branding assets, responsive CSS rules, template compilation
-(including the `with context` requirement for macros and the ban on
-`request.path`, which child templates shadow), and full page rendering.
+upload security against an in-memory fake of the Supabase Storage API, request
+validation, `TIME` normalisation, CSRF and logout redirects, proof-key
+containment, branding assets, responsive CSS rules, deployment settings in
+`render.yaml` and `Procfile`, template compilation (including the
+`with context` requirement for macros and the ban on `request.path`, which child
+templates shadow), and full page rendering.
 
 `workflow_test.py` drives the running server over HTTP and then asserts database
 state: real sign-in, submission with a genuine PDF upload, rejection of a `.php`
 upload and of a `.pdf` containing script, lecturer approve/reject rules, blocked
 double-actioning, cross-role isolation, and HOD analytics and reporting.
 
-All four suites pass: **321/321**, **59/59**, **44/44** and **68/68**.
-
 ## Notes
 
-- Outlook SMTP often blocks the default port. If delivery fails, the app logs it and
-  continues rather than rejecting the student's request.
+- Outlook SMTP often blocks the default port, and Render's free plan blocks it
+  outright. If delivery fails, the app logs it and continues rather than
+  rejecting the student's request.
 - `MAX_LEAVE_DAYS` in `app/permissions/service.py` caps a single request at 30 days.
 - Reason categorisation for the HOD charts is keyword-based
   (`categorize_reason`) and can be swapped for a lookup table.
 - Reviewer load is balanced automatically: a new request goes to the lecturer with
   the fewest pending items.
+- Text searches use `ILIKE`, not `LIKE`. The MySQL build ran under a
+  case-insensitive collation, so searching for `26b21cs058` matched a stored
+  `26B21CS058`. Postgres `LIKE` is case-sensitive and would have returned
+  nothing, so every user-facing search had to move to `ILIKE`.
+- Chart and report days are bucketed with `AT TIME ZONE REPORT_TIMEZONE`
+  (default `Asia/Kolkata`). Timestamps are stored as `timestamptz` in UTC, so
+  without that cast a request submitted at 23:30 IST would chart under the
+  following day.
+- `get_stats_for_hod()` computes a `reasons` breakdown that no template renders.
+  It is kept because the method is part of the HOD analytics surface, but it runs
+  on every dashboard load for nothing.
 
 ## Local setup notes
 
-MySQL 8.4 does not register a Windows service from the standalone MSI. If the
-service is missing, either run it directly:
+There is no local database to install. Supabase hosts both the database and the
+proof bucket, so local development uses the same two services as production.
+
+Importing the schema with `psql -f` works everywhere; the PowerShell `<`
+redirect trap no longer applies:
 
 ```bash
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" ^
-   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data" --port=3300 ^
-   --bind-address=127.0.0.1 --console
+Get-Content migrations\schema.sql -Raw | psql $env:DATABASE_URL -v ON_ERROR_STOP=1
 ```
 
-or register it from an elevated prompt:
-
-```bash
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --install MySQL84 ^
-   --datadir="C:\ProgramData\MySQL\MySQL Server 8.4\Data"
-```
-
-Importing the schema with `mysql < file.sql` does not work in PowerShell (no `<`
-redirect). Pipe it instead:
-
-```bash
-Get-Content migrations/schema.sql -Raw | mysql -u root -p
-```
-
-The schema is not incremental; re-importing after an edit drops existing rows.
+`ON_ERROR_STOP=1` is worth keeping. Without it psql exits 0 even when an earlier
+statement failed, so a broken schema looks like a successful load.

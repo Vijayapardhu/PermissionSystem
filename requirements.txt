@@ -3,8 +3,14 @@ Flask==3.1.3
 Werkzeug==3.1.3
 Jinja2==3.1.6
 
-# Database
-mysql-connector-python==8.0.33
+# WSGI server (Render start command)
+gunicorn==23.0.0
+
+# Database (Supabase Postgres)
+psycopg[binary,pool]==3.2.3
+
+# Supabase Storage, for uploaded proof documents
+supabase==2.18.1
 
 # Microsoft Entra ID sign-in
 msal==1.39.0

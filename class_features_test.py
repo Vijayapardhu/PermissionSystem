@@ -1,6 +1,6 @@
 """End-to-end test of faculty search, class groups, roster upload and attendance.
 
-Runs against the live server and MySQL, and writes a real .xlsx roster so the
+Runs against the live server and Postgres, and writes a real .xlsx roster so the
 spreadsheet path is genuinely exercised rather than stubbed.
 """
 
@@ -17,10 +17,19 @@ from datetime import date, timedelta
 BASE = 'http://localhost:5000'
 TODAY = date.today()
 
-import mysql.connector
+import os
 
-DB = dict(host='127.0.0.1', user='root', password='CsePerm@2026',
-          database='cse_permission_system')
+import psycopg
+from dotenv import load_dotenv
+from psycopg.rows import dict_row
+
+load_dotenv()
+
+DSN = os.environ.get('DATABASE_URL') or os.environ.get('SUPABASE_DB_URL')
+if not DSN:
+    raise SystemExit(
+        'Set DATABASE_URL (Supabase connection string) before running this test.'
+    )
 
 failures, passes = [], []
 
@@ -93,8 +102,8 @@ def post_csrf(opener, path, data, form_path):
 
 
 def sql(query, params=None, fetch=False):
-    conn = mysql.connector.connect(**DB)
-    cur = conn.cursor(dictionary=True)
+    conn = psycopg.connect(DSN, row_factory=dict_row)
+    cur = conn.cursor()
     cur.execute(query, params or ())
     rows = cur.fetchall() if fetch else None
     if not fetch:
@@ -113,12 +122,14 @@ post(lecturer, '/auth/dev-login', {'email': 'lecturer1.cse@adityauniversity.in'}
 status, _ = get(lecturer, '/faculty/dashboard')
 check('lecturer signed in', status == 200, f'status {status}')
 
-sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%'")
+sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%%'")
 
 # Make the run idempotent: an earlier aborted run can leave classes behind, and
 # those rows would otherwise make the import assertions fail.
-sql("DELETE FROM cse_permission_system.class_groups WHERE name LIKE 'CSE Third Year A (%'")
-sql("DELETE FROM cse_permission_system.class_groups WHERE name LIKE 'Debug Class%'")
+# %% escapes a literal percent for psycopg, which reserves %s for placeholders.
+# The tables live in the public schema, not a per-app database.
+sql("DELETE FROM public.class_groups WHERE name LIKE 'CSE Third Year A (%%'")
+sql("DELETE FROM public.class_groups WHERE name LIKE 'Debug Class%%'")
 
 # ---------------------------------------------------------------- SEARCH
 print()
@@ -251,12 +262,12 @@ check('date picker present', 'name="date"' in html)
 student_row = sql("SELECT id, roll_number FROM users WHERE roll_number = '26B21CS058'",
                   fetch=True)
 student_id = student_row[0]['id']
-sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%'")
+sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%%'")
 sql("""INSERT INTO permission_requests
        (student_id, permission_type, reason, start_date, end_date,
         start_time, end_time, status, assigned_faculty_id, created_at)
        VALUES (%s, 'LEAVE', 'ClassViewTest medical appointment',
-               %s, %s, '09:00', '13:00', 'APPROVED', 2, NOW())""",
+               %s, %s, '09:00', '13:00', 'APPROVED', 2, now())""",
     (student_id, TODAY, TODAY))
 
 status, html = get(lecturer, f'/faculty/classes/{class_id}?date={TODAY.isoformat()}')
@@ -360,7 +371,7 @@ check('student cannot reach classes', status == 403, f'status {status}')
 sql('DELETE FROM attendance_records WHERE class_id = %s', (class_id,))
 sql('DELETE FROM class_members WHERE class_id = %s', (class_id,))
 sql('DELETE FROM class_groups WHERE id = %s', (class_id,))
-sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%'")
+sql("DELETE FROM permission_requests WHERE reason LIKE 'ClassViewTest%%'")
 sql("DELETE FROM attendance_records WHERE attendance_date = %s", (clear_date,))
 sql("DELETE FROM attendance_records WHERE attendance_date = %s AND marked_by <> 0", (TODAY,))
 sql("""DELETE FROM attendance_records

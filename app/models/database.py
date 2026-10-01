@@ -1,8 +1,14 @@
-import mysql.connector
-from mysql.connector import pooling
-from flask import current_app, g
+"""Postgres access layer (Supabase).
+
+The pool is per-process, so DB_POOL_MAX is multiplied by the number of gunicorn
+workers when sizing connections against the Supabase connection limit. The
+default of 4 x 2 workers leaves room well inside the free plan's limit.
+"""
+
 from contextlib import contextmanager
-import os
+
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 
 class Database:
@@ -12,56 +18,61 @@ class Database:
             self.init_app(app)
 
     def init_app(self, app):
-        self.pool = pooling.MySQLConnectionPool(
-            pool_name="cse_permission_pool",
-            pool_size=10,
-            host=app.config['MYSQL_HOST'],
-            user=app.config['MYSQL_USER'],
-            password=app.config['MYSQL_PASSWORD'],
-            database=app.config['MYSQL_DB'],
-            port=app.config['MYSQL_PORT'],
-            charset='utf8mb4',
-            collation='utf8mb4_unicode_ci',
-            autocommit=True
+        dsn = app.config.get('DATABASE_URL')
+        if not dsn:
+            raise RuntimeError('DATABASE_URL is not set')
+        self.pool = ConnectionPool(
+            conninfo=dsn,
+            min_size=app.config['DB_POOL_MIN'],
+            max_size=app.config['DB_POOL_MAX'],
+            timeout=app.config['DB_CONNECT_TIMEOUT'],
+            kwargs={
+                'autocommit': False,
+                'connect_timeout': app.config['DB_CONNECT_TIMEOUT'],
+                # Store and compare in UTC; the three day-bucketing queries cast
+                # with AT TIME ZONE REPORT_TIMEZONE so a request submitted at
+                # 23:30 IST lands on the right chart day.
+                'options': '-c timezone=UTC',
+            },
+            open=False,
+            name='cse_permission_pool',
         )
-
-    def get_connection(self):
-        if self.pool:
-            return self.pool.get_connection()
-        return None
+        # A dead connection must never take the whole site down at import time.
+        self.pool.open(wait=False)
 
     @contextmanager
     def get_cursor(self, dictionary=True):
-        conn = self.get_connection()
-        if not conn:
-            raise RuntimeError("Database connection pool not initialized")
-        try:
-            cursor = conn.cursor(dictionary=dictionary)
-            yield cursor
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+        """Yield a dict-row cursor inside a transaction, committing on success.
+
+        The `dictionary` flag is retained for call-site compatibility. Postgres
+        always returns mapping rows here; every query in the app reads columns
+        by name.
+
+        `pool.connection()` is a context manager: leaving the block returns the
+        socket to the pool rather than closing it, so the explicit commit and
+        rollback below are what decide the transaction boundary.
+        """
+        if not self.pool:
+            raise RuntimeError('Database connection pool not initialized')
+
+        with self.pool.connection() as conn:
+            try:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    yield cursor
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def ping(self):
+        """Prove the database is reachable, for the platform health check."""
+        with self.get_cursor() as cursor:
+            cursor.execute('SELECT 1 AS ok')
+            return cursor.fetchone()['ok']
 
 
 db = Database()
 
 
-def get_db():
-    if 'db' not in g:
-        g.db = db.get_connection()
-    return g.db
-
-
-def close_db(e=None):
-    db_conn = g.pop('db', None)
-    if db_conn is not None:
-        db_conn.close()
-
-
 def init_db(app):
     db.init_app(app)
-    app.teardown_appcontext(close_db)

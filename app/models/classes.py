@@ -68,11 +68,15 @@ class ClassModel:
         with db.get_cursor() as cursor:
             cursor.execute(
                 """INSERT INTO class_groups (name, section_code, academic_year, faculty_id, created_at)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING *""",
                 (name.strip(), (section_code or None), (academic_year or None),
                  faculty_id, datetime.now()),
             )
-            return ClassModel.find_by_id(cursor.lastrowid)
+            # A class that was just created has no members, so member_count and
+            # linked_count are zero by definition. find_by_id() would not see the
+            # INSERT anyway, since the transaction commits after this block.
+            return _row_to_class(cursor.fetchone())
 
     @staticmethod
     def find_by_id(class_id: int) -> Optional[ClassGroup]:
@@ -203,9 +207,10 @@ class MemberModel:
         with db.get_cursor() as cursor:
             cursor.execute(
                 """UPDATE class_members m
-                   JOIN users u ON u.roll_number = m.roll_number
-                   SET m.student_id = u.id
-                   WHERE m.student_id IS NULL"""
+                   SET student_id = u.id
+                   FROM users u
+                   WHERE u.roll_number = m.roll_number
+                     AND m.student_id IS NULL"""
             )
             return cursor.rowcount
 
@@ -222,9 +227,10 @@ class AttendanceModel:
                     """INSERT INTO attendance_records
                        (class_id, student_id, attendance_date, status, marked_by, marked_at)
                        VALUES (%s, %s, %s, %s, %s, %s)
-                       ON DUPLICATE KEY UPDATE status = VALUES(status),
-                                               marked_by = VALUES(marked_by),
-                                               marked_at = VALUES(marked_at)""",
+                   ON CONFLICT (class_id, student_id, attendance_date)
+                   DO UPDATE SET status = EXCLUDED.status,
+                                 marked_by = EXCLUDED.marked_by,
+                                 marked_at = EXCLUDED.marked_at""",
                     (class_id, student_id, attendance_date, status, marked_by,
                      datetime.now()),
                 )

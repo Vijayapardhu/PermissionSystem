@@ -1,4 +1,4 @@
-"""End-to-end workflow test against the running server and live MySQL.
+"""End-to-end workflow test against the running server and live Postgres.
 
 Exercises the real HTTP surface: student signs in, submits a request with a
 genuine PDF upload, a lecturer approves it, and the HOD sees it on the
@@ -100,7 +100,7 @@ def post_with_csrf(opener, path, data, form_path='/auth/login'):
 
 
 print('=' * 68)
-print('END-TO-END WORKFLOW (live server + live MySQL)')
+print('END-TO-END WORKFLOW (live server + live Postgres)')
 print('=' * 68)
 
 PDF = b'%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<<>>\n%%EOF\n' + b'0' * 512
@@ -181,13 +181,22 @@ check('spoofed extension is rejected', 'not a valid PDF or image' in html,
 print()
 print('LECTURER: assigned reviewer')
 
-import mysql.connector
+import os
 
-_conn = mysql.connector.connect(
-    host='127.0.0.1', user='root', password='CsePerm@2026',
-    database='cse_permission_system',
-)
-_cur = _conn.cursor(dictionary=True)
+import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
+from psycopg.rows import dict_row
+
+DSN = os.environ.get('DATABASE_URL') or os.environ.get('SUPABASE_DB_URL')
+if not DSN:
+    raise SystemExit(
+        'Set DATABASE_URL (Supabase connection string) before running this test.'
+    )
+
+_conn = psycopg.connect(DSN, row_factory=dict_row)
+_cur = _conn.cursor()
 _cur.execute(
     """SELECT u.email, u.name FROM permission_requests r
        JOIN users u ON u.id = r.assigned_faculty_id
@@ -278,18 +287,15 @@ check('report hides UI when printing', 'd-print-none' in html)
 
 # Verify the report lists exactly the records active on the report date, by
 # comparing the rendered row count against a direct database count.
-_conn2 = mysql.connector.connect(
-    host='127.0.0.1', user='root', password='CsePerm@2026',
-    database='cse_permission_system',
-)
+_conn2 = psycopg.connect(DSN, row_factory=dict_row)
 _cur2 = _conn2.cursor()
 _cur2.execute(
-    """SELECT COUNT(*) FROM permission_requests
+    """SELECT COUNT(*) AS n FROM permission_requests
        WHERE status <> 'CANCELLED'
          AND start_date <= %s AND end_date >= %s""",
     (TODAY, TODAY),
 )
-expected_rows = _cur2.fetchone()[0]
+expected_rows = _cur2.fetchone()['n']
 _cur2.close()
 _conn2.close()
 
@@ -317,13 +323,8 @@ check('report shows the request type', 'Leave' in html)
 # ---------- DATA INTEGRITY ----------
 print()
 print('DATA INTEGRITY')
-import mysql.connector
-
-conn = mysql.connector.connect(
-    host='127.0.0.1', user='root', password='CsePerm@2026',
-    database='cse_permission_system',
-)
-cursor = conn.cursor(dictionary=True)
+conn = psycopg.connect(DSN, row_factory=dict_row)
+cursor = conn.cursor()
 
 cursor.execute('SELECT * FROM permission_requests WHERE id = %s', (request_id,))
 row = cursor.fetchone()
@@ -354,10 +355,6 @@ pending_count = cursor.fetchone()['c']
 
 cursor.close()
 conn.close()
-
-import os
-check('proof file exists on disk',
-      proof and os.path.isfile(os.path.join('storage', 'proofs', proof['file_path'])))
 
 print()
 print('=' * 68)

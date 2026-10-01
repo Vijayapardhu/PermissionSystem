@@ -47,12 +47,7 @@ def is_configured() -> bool:
     )
 
 
-def _cache_key() -> str:
-    return 'msal_token_cache'
-
-
 def build_msal_app():
-    """Confidential client backed by a per-session token cache."""
     settings = _settings()
     return msal.ConfidentialClientApplication(
         settings['client_id'],
@@ -62,19 +57,22 @@ def build_msal_app():
 
 
 def get_msal_app():
-    from flask import session
+    """Build a confidential client with a per-request token cache.
+
+    MSAL requires a token_cache attribute for acquire_token_by_code to work,
+    but the cache is deliberately not persisted into the session. The only flow
+    this app runs is a single authorization-code exchange: it never calls a
+    Microsoft API, so no access token is ever reused and no refresh token is
+    needed. Keeping the cache would push a signed access token into a browser
+    cookie for no benefit, and would risk blowing the ~4 KB cookie limit.
+    """
     app = build_msal_app()
-    cache = msal.SerializableTokenCache()
-    if session.get(_cache_key()):
-        cache.deserialize(session[_cache_key()])
-    app.token_cache = cache
+    app.token_cache = msal.SerializableTokenCache()
     return app
 
 
 def persist_cache(app) -> None:
-    from flask import session
-    if app.token_cache.has_state_changed:
-        session[_cache_key()] = app.token_cache.serialize()
+    """No-op. The token cache is per-request; see get_msal_app()."""
 
 
 def scopes() -> list:

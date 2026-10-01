@@ -1,5 +1,4 @@
 import logging
-import os
 
 from datetime import datetime
 
@@ -19,19 +18,39 @@ def create_app(config_object=Config) -> Flask:
     )
     app.config.from_object(config_object)
 
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
     logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.INFO)
 
     _register_extensions(app)
     _register_blueprints(app)
+    _register_health_check(app)
     _register_jinja_globals(app)
     _register_request_hooks(app)
     _register_template_helpers(app)
     _register_error_handlers(app)
 
     return app
+
+
+def _register_health_check(app: Flask) -> None:
+    """Liveness probe for Render.
+
+    Render's health check path is polled continuously and a failure restarts the
+    service, so this pings the database: a container that cannot reach Supabase
+    is genuinely broken and worth recycling. The response carries no detail
+    about the cause, since the endpoint is unauthenticated.
+    """
+
+    @app.route('/healthz')
+    def healthz():
+        from app.models.database import db
+
+        try:
+            db.ping()
+        except Exception:
+            app.logger.exception('Health check failed')
+            return {'status': 'unhealthy'}, 503
+        return {'status': 'ok'}, 200
 
 
 def _register_jinja_globals(app: Flask) -> None:

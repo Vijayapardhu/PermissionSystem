@@ -1,0 +1,66 @@
+# Render blueprint. `render blueprint launch` creates the web service and walks
+# through the environment values below.
+#
+# The database and proof storage are NOT defined here. Both live in Supabase:
+#   database -> Supabase Postgres (Project Settings -> Database -> URI)
+#   storage  -> Supabase Storage, a private bucket
+# Because DATABASE_URL is a prompt rather than a generated value, it is never
+# written into this file.
+#
+# The plan below is `starter`, not `free`, for one reason: Render's free plan
+# blocks all outbound traffic on ports 25, 465 and 587, which is what
+# smtp.office365.com needs. On the free plan the app still works, but every
+# notification email is silently suppressed (see app/utils/email.py).
+
+services:
+  - type: web
+    name: permission-system
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - app:app
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true
+      # Supabase Postgres, session-mode pooler on port 5432.
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_POOL_MAX
+        value: "4"
+      - key: CLIENT_ID
+        sync: false
+      - key: TENANT_ID
+        sync: false
+      - key: CLIENT_SECRET
+        sync: false
+      # Must match a registered Web redirect URI in Entra ID exactly:
+      #   https://permission-system.onrender.com/auth/callback
+      - key: REDIRECT_URI
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: proofs
+      - key: REPORT_TIMEZONE
+        value: Asia/Kolkata
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: DEV_MODE
+        value: "false"
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: MAIL_DEFAULT_SENDER
+        sync: false

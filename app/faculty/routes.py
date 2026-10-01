@@ -1,9 +1,13 @@
+import io
+import mimetypes
+
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from flask import (
     Blueprint,
     abort,
+    current_app,
     flash,
     redirect,
     render_template,
@@ -20,7 +24,7 @@ from app.models.database import db
 from app.models.permission import ApprovalModel, PermissionModel, ProofModel
 from app.models.user import UserModel
 from app.permissions.service import ValidationError, act_on_request
-from app.utils.files import UploadError, resolve_on_disk
+from app.utils.files import UploadError, fetch_proof
 from app.utils.roster import RosterError, parse_roster
 from app.utils.security import current_user, csrf_token, roles_required
 
@@ -175,10 +179,10 @@ def _search_students(viewer, query: str) -> list:
                         WHERE pr.student_id = u.id AND pr.status = 'PENDING') AS pending
                FROM users u
                WHERE u.role = 'STUDENT' AND u.is_active = TRUE
-                 AND (u.roll_number LIKE %s OR u.name LIKE %s)
+                 AND (u.roll_number ILIKE %s OR u.name ILIKE %s)
                ORDER BY
                  CASE WHEN u.roll_number = %s THEN 0
-                      WHEN u.roll_number LIKE %s THEN 1
+                      WHEN u.roll_number ILIKE %s THEN 1
                       ELSE 2 END,
                  u.roll_number
                LIMIT 40""",
@@ -626,19 +630,22 @@ def _faculty_stats(faculty_id: int) -> dict:
 def _trend_for(faculty_id: int, days: int = 7) -> dict:
     start = date.today() - timedelta(days=days - 1)
     labels, created, decided = [], [], []
+    tz = current_app.config['REPORT_TIMEZONE']
     with db_cursor() as cursor:
         for offset in range(days):
             day = start + timedelta(days=offset)
             labels.append(day.strftime('%d %b'))
             cursor.execute(
-                """SELECT COUNT(*) AS n FROM permission_requests
-                   WHERE assigned_faculty_id = %s AND DATE(created_at) = %s""",
+                f"""SELECT COUNT(*) AS n FROM permission_requests
+                    WHERE assigned_faculty_id = %s
+                      AND (created_at AT TIME ZONE '{tz}')::date = %s""",
                 (faculty_id, day),
             )
             created.append(cursor.fetchone()['n'])
             cursor.execute(
-                """SELECT COUNT(*) AS n FROM approval_history
-                   WHERE faculty_id = %s AND DATE(actioned_at) = %s""",
+                f"""SELECT COUNT(*) AS n FROM approval_history
+                    WHERE faculty_id = %s
+                      AND (actioned_at AT TIME ZONE '{tz}')::date = %s""",
                 (faculty_id, day),
             )
             decided.append(cursor.fetchone()['n'])
@@ -681,7 +688,7 @@ def _filtered_requests(status_filter, type_filter, date_from, date_to,
         clauses.append('pr.start_date <= %s')
         params.append(date_to)
     if search:
-        clauses.append('(u.roll_number LIKE %s OR u.name LIKE %s)')
+        clauses.append('(u.roll_number ILIKE %s OR u.name ILIKE %s)')
         params.extend([f'%{search}%', f'%{search}%'])
     if faculty_id:
         clauses.append('pr.assigned_faculty_id = %s')
@@ -757,13 +764,14 @@ def download_proof(proof_id: int):
         abort(403)
 
     try:
-        absolute = resolve_on_disk(proof.file_path)
+        payload = fetch_proof(proof.file_path)
     except UploadError:
         abort(404)
 
+    mimetype, _ = mimetypes.guess_type(proof.original_filename)
     return send_file(
-        absolute,
-        mimetype=f'application/{proof.file_type}',
+        io.BytesIO(payload),
+        mimetype=mimetype or f'application/{proof.file_type}',
         as_attachment=False,
         download_name=proof.original_filename,
     )

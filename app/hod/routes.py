@@ -2,7 +2,9 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint, current_app, flash, redirect, render_template, request, url_for,
+)
 
 from app.models import PermissionType, RequestStatus, UserRole
 from app.models.classes import ClassModel, MemberModel
@@ -153,7 +155,7 @@ def students():
                           (SELECT COUNT(*) FROM class_members m WHERE m.student_id = u.id) AS classes
                    FROM users u
                    WHERE u.role = 'STUDENT' AND u.is_active = TRUE
-                     AND (u.roll_number LIKE %s OR u.name LIKE %s)
+                     AND (u.roll_number ILIKE %s OR u.name ILIKE %s)
                    ORDER BY u.roll_number LIMIT 200""",
                 (like, like),
             )
@@ -235,12 +237,17 @@ def reports():
     user = current_user()
     stats = PermissionModel.get_stats_for_hod()
 
+    tz = current_app.config['REPORT_TIMEZONE']
     with db_cursor() as cursor:
+        # Cast through REPORT_TIMEZONE, not the session zone. The session runs in
+        # UTC, so without this a 23:30 IST submission would chart under the
+        # following day.
         cursor.execute(
-            """SELECT DATE(created_at) AS day, COUNT(*) AS n
+            f"""SELECT (created_at AT TIME ZONE '{tz}')::date AS day, COUNT(*) AS n
                FROM permission_requests
-               WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
-               GROUP BY DATE(created_at) ORDER BY day"""
+               WHERE (created_at AT TIME ZONE '{tz}')::date
+                     >= (now() AT TIME ZONE '{tz}')::date - INTERVAL '29 days'
+               GROUP BY (created_at AT TIME ZONE '{tz}')::date ORDER BY day"""
         )
         rows = cursor.fetchall()
 
@@ -256,7 +263,7 @@ def reports():
         cursor.execute(
             """SELECT u.roll_number, u.name,
                       COUNT(*) AS total,
-                      SUM(pr.status = 'APPROVED') AS approved
+                      COUNT(*) FILTER (WHERE pr.status = 'APPROVED') AS approved
                FROM permission_requests pr JOIN users u ON u.id = pr.student_id
                GROUP BY u.id, u.roll_number, u.name
                ORDER BY total DESC LIMIT 10"""
