@@ -1,25 +1,52 @@
-from app.models import PermissionRequest, PermissionType, RequestStatus, ProofDocument, ApprovalHistory, ApprovalAction
-from app.models.database import db
 from datetime import date, datetime, time, timedelta
-from typing import Optional, List, Tuple
+from typing import Optional, List
+
+from app.models import (
+    ApprovalAction,
+    ApprovalHistory,
+    PermissionRequest,
+    PermissionType,
+    ProofDocument,
+    RequestStatus,
+)
+from app.models.firestore import store
+
+REQUESTS = 'permission_requests'
+PROOFS = 'proof_documents'
+HISTORY = 'approval_history'
+
+# Keyword buckets behind the HOD's reason chart. The SQL version counted these
+# with ILIKE, which is a case-insensitive substring match; the same rule is
+# applied here in Python so the chart classifies exactly what it used to.
+REASON_KEYWORDS = {
+    'medical': ('medical', 'health', 'doctor'),
+    'personal': ('personal', 'family'),
+    'event': ('event', 'workshop', 'seminar', 'conference'),
+}
+
+
+def _matches(reason: str, keyword: str) -> bool:
+    return keyword in (reason or '').lower()
+
+
+def categorise_reason(reason: str) -> str:
+    """The bucket a reason falls into: medical, personal, event or other."""
+    text = (reason or '').lower()
+    for bucket, keywords in REASON_KEYWORDS.items():
+        if any(_matches(reason, keyword) for keyword in keywords):
+            return bucket
+    return 'other'
 
 
 def _to_time(value):
-    """Normalise a TIME column to datetime.time.
+    """Normalise a stored start/end time to datetime.time.
 
-    psycopg already hands back a datetime.time, so the first branch is the one
-    that runs in production. The timedelta and string branches are kept so the
-    shape stays enforced for any other driver or for a raw CSV import.
+    Times are written as ISO strings and read straight back, so the branches that
+    matter are the identity and the ISO parse. The timedelta branch is kept for a
+    raw CSV import, which is the only other thing that has ever produced one.
     """
-    if value is None:
-        return None
-    if isinstance(value, time):
+    if value is None or isinstance(value, time):
         return value
-    if isinstance(value, timedelta):
-        total = int(value.total_seconds())
-        hours, remainder = divmod(total, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        return time(hours % 24, minutes % 60, seconds)
     if isinstance(value, str):
         for pattern in ('%H:%M:%S.%f', '%H:%M:%S', '%H:%M'):
             try:
@@ -27,283 +54,286 @@ def _to_time(value):
             except ValueError:
                 continue
         return None
+    if isinstance(value, timedelta):
+        total = int(value.total_seconds())
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return time(hours % 24, minutes % 60, seconds)
     return None
 
 
 class PermissionModel:
     @staticmethod
     def create(student_id: int, permission_type: PermissionType, reason: str,
-               start_date: date, end_date: date, start_time: time = None, 
-               end_time: time = None, assigned_faculty_id: int = None) -> PermissionRequest:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO permission_requests
-                   (student_id, permission_type, reason, start_date, end_date, start_time, end_time,
-                     assigned_faculty_id, status, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   RETURNING *""",
-                (student_id, permission_type.value, reason, start_date, end_date,
-                 start_time, end_time, assigned_faculty_id, RequestStatus.PENDING.value,
-                 datetime.now(), datetime.now())
-            )
-            # Map the RETURNING row rather than re-reading with find_by_id(). A
-            # second read would run in a different transaction and could not see
-            # this INSERT, which is only committed when get_cursor() exits.
-            return PermissionModel._row_to_request(cursor.fetchone())
+               start_date: date, end_date: date, start_time: time = None,
+               end_time: time = None,
+               assigned_faculty_id: int = None) -> PermissionRequest:
+        row = store.insert(REQUESTS, {
+            'student_id': student_id,
+            'permission_type': permission_type.value,
+            'reason': reason,
+            'start_date': start_date,
+            'end_date': end_date,
+            'start_time': start_time,
+            'end_time': end_time,
+            'status': RequestStatus.PENDING.value,
+            'assigned_faculty_id': assigned_faculty_id,
+        })
+        return PermissionModel._to_request(row)
 
     @staticmethod
     def find_by_id(request_id: int) -> Optional[PermissionRequest]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM permission_requests WHERE id = %s",
-                (request_id,)
-            )
-            row = cursor.fetchone()
-            return PermissionModel._row_to_request(row) if row else None
+        row = store.get(REQUESTS, request_id)
+        return PermissionModel._to_request(row) if row else None
 
     @staticmethod
-    def find_by_student(student_id: int, status: RequestStatus = None, 
+    def find_by_student(student_id: int, status: RequestStatus = None,
                         limit: int = 50, offset: int = 0) -> List[PermissionRequest]:
-        with db.get_cursor() as cursor:
-            query = "SELECT * FROM permission_requests WHERE student_id = %s"
-            params = [student_id]
-            if status:
-                query += " AND status = %s"
-                params.append(status.value)
-            query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [PermissionModel._row_to_request(row) for row in rows]
+        rows = store.documents(REQUESTS, student_id=student_id)
+        requests = [PermissionModel._to_request(row) for row in rows]
+        if status:
+            requests = [r for r in requests if r.status == status]
+        requests.sort(key=_newest_first)
+        return requests[offset:offset + limit]
 
     @staticmethod
     def find_pending_for_faculty(faculty_id: int) -> List[PermissionRequest]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """SELECT * FROM permission_requests 
-                   WHERE assigned_faculty_id = %s AND status = 'PENDING'
-                   ORDER BY created_at ASC""",
-                (faculty_id,)
-            )
-            rows = cursor.fetchall()
-            return [PermissionModel._row_to_request(row) for row in rows]
+        """The reviewer's queue, oldest first: the request waiting longest leads.
+        """
+        rows = store.documents(REQUESTS, assigned_faculty_id=faculty_id,
+                               status=RequestStatus.PENDING.value)
+        requests = [PermissionModel._to_request(row) for row in rows]
+        requests.sort(key=_oldest_first)
+        return requests
 
     @staticmethod
-    def find_all_for_hod(status: RequestStatus = None, permission_type: PermissionType = None,
+    def find_all_for_hod(status: RequestStatus = None,
+                         permission_type: PermissionType = None,
                          start_date: date = None, end_date: date = None,
                          limit: int = 100, offset: int = 0) -> List[PermissionRequest]:
-        with db.get_cursor() as cursor:
-            query = """SELECT pr.*, u.name AS student_name, u.roll_number, u.phone
-                       FROM permission_requests pr
-                       JOIN users u ON pr.student_id = u.id
-                       WHERE 1=1"""
-            params = []
-            if status:
-                query += " AND pr.status = %s"
-                params.append(status.value)
-            if permission_type:
-                query += " AND pr.permission_type = %s"
-                params.append(permission_type.value)
-            if start_date:
-                query += " AND pr.start_date >= %s"
-                params.append(start_date)
-            if end_date:
-                query += " AND pr.end_date <= %s"
-                params.append(end_date)
-            query += " ORDER BY pr.created_at DESC LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [PermissionModel._row_to_request_with_student(row) for row in rows]
+        requests = [PermissionModel._to_request(row)
+                    for row in store.documents(REQUESTS)]
+        if status:
+            requests = [r for r in requests if r.status == status]
+        if permission_type:
+            requests = [r for r in requests if r.permission_type == permission_type]
+        if start_date:
+            requests = [r for r in requests if r.start_date >= start_date]
+        if end_date:
+            requests = [r for r in requests if r.end_date <= end_date]
+        requests.sort(key=_newest_first)
+
+        page = requests[offset:offset + limit]
+        attach_students(page)
+        return page
 
     @staticmethod
-    def get_today_approved() -> List[PermissionRequest]:
-        with db.get_cursor() as cursor:
-            today = date.today()
-            cursor.execute(
-                """SELECT pr.*, u.name AS student_name, u.roll_number, u.phone
-                   FROM permission_requests pr
-                   JOIN users u ON pr.student_id = u.id
-                   WHERE pr.status = 'APPROVED' 
-                   AND pr.start_date <= %s 
-                   AND pr.end_date >= %s
-                   ORDER BY pr.permission_type, u.roll_number""",
-                (today, today)
-            )
-            rows = cursor.fetchall()
-            return [PermissionModel._row_to_request_with_student(row) for row in rows]
+    def get_today_approved(today: date = None) -> List[PermissionRequest]:
+        """Approved permissions covering a given day, classroom requests first."""
+        today = today or date.today()
+        rows = store.documents(REQUESTS, status=RequestStatus.APPROVED.value)
+        covering = []
+        for row in rows:
+            start, end = row.get('start_date'), row.get('end_date')
+            if start and end and start <= today <= end:
+                covering.append(PermissionModel._to_request(row))
+        attach_students(covering)
+        covering.sort(key=lambda r: (r.permission_type.value,
+                                     r.student_roll_number or ''))
+        return covering
 
     @staticmethod
-    def update_status(request_id: int, status: RequestStatus, faculty_id: int = None) -> bool:
-        with db.get_cursor() as cursor:
-            query = "UPDATE permission_requests SET status = %s, updated_at = %s"
-            params = [status.value, datetime.now()]
-            if faculty_id:
-                query += ", assigned_faculty_id = %s"
-                params.append(faculty_id)
-            query += " WHERE id = %s"
-            params.append(request_id)
-            cursor.execute(query, params)
-            return cursor.rowcount > 0
+    def update_status(request_id: int, status: RequestStatus,
+                      faculty_id: int = None) -> bool:
+        values = {'status': status.value}
+        if faculty_id:
+            values['assigned_faculty_id'] = faculty_id
+        return store.update(REQUESTS, request_id, values)
 
     @staticmethod
     def get_stats_for_hod() -> dict:
-        with db.get_cursor() as cursor:
-            stats = {}
-            
-            cursor.execute("SELECT COUNT(*) as total FROM permission_requests")
-            stats['total'] = cursor.fetchone()['total']
-            
-            cursor.execute("SELECT COUNT(*) as approved FROM permission_requests WHERE status = 'APPROVED'")
-            stats['approved'] = cursor.fetchone()['approved']
-            
-            cursor.execute("SELECT COUNT(*) as rejected FROM permission_requests WHERE status = 'REJECTED'")
-            stats['rejected'] = cursor.fetchone()['rejected']
-            
-            cursor.execute("SELECT COUNT(*) as pending FROM permission_requests WHERE status = 'PENDING'")
-            stats['pending'] = cursor.fetchone()['pending']
-            
-            cursor.execute("SELECT COUNT(*) as leave_count FROM permission_requests WHERE permission_type = 'LEAVE'")
-            stats['leave_count'] = cursor.fetchone()['leave_count']
-            
-            cursor.execute("SELECT COUNT(*) as classroom_count FROM permission_requests WHERE permission_type = 'CLASSROOM'")
-            stats['classroom_count'] = cursor.fetchone()['classroom_count']
-            
-            # ILIKE, not LIKE. The MySQL build ran under a case-insensitive
-            # collation, so "Medical appointment" matched '%medical%'. Postgres
-            # LIKE is case-sensitive and would silently empty this chart.
-            cursor.execute(
-                """SELECT
-                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%medical%', '%health%', '%doctor%'])) AS medical,
-                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%personal%', '%family%'])) AS personal,
-                    COUNT(*) FILTER (WHERE reason ILIKE ANY (ARRAY['%event%', '%workshop%', '%seminar%', '%conference%'])) AS event,
-                    COUNT(*) FILTER (WHERE reason NOT ILIKE ANY (ARRAY['%medical%', '%health%', '%doctor%',
-                                                                   '%personal%', '%family%',
-                                                                   '%event%', '%workshop%', '%seminar%', '%conference%'])) AS other
-                   FROM permission_requests"""
-            )
-            reasons = cursor.fetchone()
-            stats['reasons'] = reasons
-            
-            return stats
+        """Department totals and the reason mix.
+
+        One read of the collection and every count in Python. This used to be
+        seven queries with a FILTER clause each, which Firestore has no
+        equivalent of; counting in the application is the whole reason there is
+        only one round trip.
+        """
+        rows = store.documents(REQUESTS)
+
+        stats = {
+            'total': len(rows),
+            'approved': 0,
+            'rejected': 0,
+            'pending': 0,
+            'leave_count': 0,
+            'classroom_count': 0,
+        }
+        reasons = {'medical': 0, 'personal': 0, 'event': 0, 'other': 0}
+
+        for row in rows:
+            status = row.get('status')
+            if status == RequestStatus.APPROVED.value:
+                stats['approved'] += 1
+            elif status == RequestStatus.REJECTED.value:
+                stats['rejected'] += 1
+            elif status == RequestStatus.PENDING.value:
+                stats['pending'] += 1
+
+            kind = row.get('permission_type')
+            if kind == PermissionType.LEAVE.value:
+                stats['leave_count'] += 1
+            elif kind == PermissionType.CLASSROOM.value:
+                stats['classroom_count'] += 1
+
+            reasons[categorise_reason(row.get('reason'))] += 1
+
+        stats['reasons'] = reasons
+        return stats
 
     @staticmethod
-    def _row_to_request(row) -> PermissionRequest:
+    def _to_request(row) -> PermissionRequest:
         return PermissionRequest(
-            id=row['id'],
-            student_id=row['student_id'],
-            permission_type=PermissionType(row['permission_type']),
-            reason=row['reason'],
-            start_date=row['start_date'],
-            end_date=row['end_date'],
-            start_time=_to_time(row['start_time']),
-            end_time=_to_time(row['end_time']),
-            status=RequestStatus(row['status']),
-            assigned_faculty_id=row['assigned_faculty_id'],
-            created_at=row['created_at'],
-            updated_at=row['updated_at']
+            id=int(row['id']),
+            student_id=row.get('student_id'),
+            permission_type=PermissionType(
+                row.get('permission_type') or PermissionType.LEAVE.value),
+            reason=row.get('reason') or '',
+            start_date=row.get('start_date'),
+            end_date=row.get('end_date'),
+            start_time=_to_time(row.get('start_time')),
+            end_time=_to_time(row.get('end_time')),
+            status=RequestStatus(
+                row.get('status') or RequestStatus.PENDING.value),
+            assigned_faculty_id=row.get('assigned_faculty_id'),
+            created_at=row.get('created_at'),
+            updated_at=row.get('updated_at') or row.get('created_at'),
         )
 
-    @staticmethod
-    def _row_to_request_with_student(row) -> PermissionRequest:
-        req = PermissionModel._row_to_request(row)
-        req.student_name = row.get('student_name')
-        req.student_identifier = row.get('roll_number') or row.get('student_name')
-        req.student_roll_number = row.get('roll_number')
-        req.student_phone = row.get('phone')
-        return req
+
+def attach_students(requests: List[PermissionRequest]) -> None:
+    """Fill in the student fields the old JOIN used to select.
+
+    One lookup of the students involved, keyed by id, rather than a read per
+    request. The fields are attached to the request objects the caller already
+    holds, so nothing above this line knows the difference.
+    """
+    student_ids = {r.student_id for r in requests if r.student_id}
+    if not student_ids:
+        return
+
+    students = {}
+    for student_id in student_ids:
+        row = store.get('users', student_id)
+        if row:
+            students[student_id] = row
+
+    for request in requests:
+        student = students.get(request.student_id)
+        if not student:
+            continue
+        request.student_name = student.get('name')
+        request.student_roll_number = student.get('roll_number')
+        request.student_identifier = (
+            student.get('roll_number') or student.get('name'))
+        request.student_phone = student.get('phone')
+
+
+def _newest_first(request) -> tuple:
+    created = request.created_at
+    return (created is None, _sort_key(created), -int(request.id or 0))
+
+
+def _oldest_first(request) -> tuple:
+    created = request.created_at
+    return (created is None, _sort_key(created))
+
+
+def _sort_key(value) -> str:
+    """Datetimes and strings sort alike when they are both rendered to text."""
+    return value.isoformat() if hasattr(value, 'isoformat') else str(value or '')
 
 
 class ProofModel:
     @staticmethod
     def create(request_id: int, original_filename: str, stored_filename: str,
                file_path: str, file_type: str, file_size: int) -> ProofDocument:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO proof_documents 
-                   (request_id, original_filename, stored_filename, file_path, file_type, file_size, uploaded_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                   RETURNING *""",
-                (request_id, original_filename, stored_filename, file_path, file_type, file_size, datetime.now())
-            )
-            return ProofModel._row_to_proof(cursor.fetchone())
+        row = store.insert(PROOFS, {
+            'request_id': request_id,
+            'original_filename': original_filename,
+            'stored_filename': stored_filename,
+            'file_path': file_path,
+            'file_type': file_type,
+            'file_size': file_size,
+        }, timestamps=('uploaded_at',))
+        return ProofModel._to_proof(row)
 
     @staticmethod
     def find_by_id(proof_id: int) -> Optional[ProofDocument]:
-        with db.get_cursor() as cursor:
-            cursor.execute("SELECT * FROM proof_documents WHERE id = %s", (proof_id,))
-            row = cursor.fetchone()
-            return ProofModel._row_to_proof(row) if row else None
+        row = store.get(PROOFS, proof_id)
+        return ProofModel._to_proof(row) if row else None
 
     @staticmethod
     def find_by_request(request_id: int) -> List[ProofDocument]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM proof_documents WHERE request_id = %s ORDER BY uploaded_at",
-                (request_id,)
-            )
-            rows = cursor.fetchall()
-            return [ProofModel._row_to_proof(row) for row in rows]
+        rows = store.documents(PROOFS, request_id=request_id)
+        proofs = [ProofModel._to_proof(row) for row in rows]
+        proofs.sort(key=lambda p: _sort_key(p.uploaded_at))
+        return proofs
 
     @staticmethod
-    def _row_to_proof(row) -> ProofDocument:
+    def _to_proof(row) -> ProofDocument:
         return ProofDocument(
-            id=row['id'],
-            request_id=row['request_id'],
-            original_filename=row['original_filename'],
-            stored_filename=row['stored_filename'],
-            file_path=row['file_path'],
-            file_type=row['file_type'],
-            file_size=row['file_size'],
-            uploaded_at=row['uploaded_at']
+            id=int(row['id']),
+            request_id=row.get('request_id'),
+            original_filename=row.get('original_filename') or '',
+            stored_filename=row.get('stored_filename') or '',
+            file_path=row.get('file_path') or '',
+            file_type=row.get('file_type') or '',
+            file_size=row.get('file_size') or 0,
+            uploaded_at=row.get('uploaded_at'),
         )
 
 
 class ApprovalModel:
     @staticmethod
-    def create(request_id: int, faculty_id: int, action: ApprovalAction, remarks: str = None) -> ApprovalHistory:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO approval_history (request_id, faculty_id, action, remarks, actioned_at)
-                   VALUES (%s, %s, %s, %s, %s)
-                   RETURNING *""",
-                (request_id, faculty_id, action.value, remarks, datetime.now())
-            )
-            return ApprovalModel._row_to_history(cursor.fetchone())
+    def create(request_id: int, faculty_id: int, action: ApprovalAction,
+               remarks: str = None) -> ApprovalHistory:
+        row = store.insert(HISTORY, {
+            'request_id': request_id,
+            'faculty_id': faculty_id,
+            'action': action.value,
+            'remarks': remarks,
+        }, timestamps=('actioned_at',))
+        return ApprovalModel._to_history(row)
 
     @staticmethod
     def find_by_id(history_id: int) -> Optional[ApprovalHistory]:
-        with db.get_cursor() as cursor:
-            cursor.execute("SELECT * FROM approval_history WHERE id = %s", (history_id,))
-            row = cursor.fetchone()
-            return ApprovalModel._row_to_history(row) if row else None
+        row = store.get(HISTORY, history_id)
+        return ApprovalModel._to_history(row) if row else None
 
     @staticmethod
     def find_by_request(request_id: int) -> List[ApprovalHistory]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """SELECT ah.*, u.name as faculty_name 
-                   FROM approval_history ah
-                   JOIN users u ON ah.faculty_id = u.id
-                   WHERE ah.request_id = %s ORDER BY ah.actioned_at""",
-                (request_id,)
-            )
-            rows = cursor.fetchall()
-            return [ApprovalModel._row_to_history_with_faculty(row) for row in rows]
+        rows = store.documents(HISTORY, request_id=request_id)
+        history = [ApprovalModel._to_history(row) for row in rows]
+        history.sort(key=lambda h: _sort_key(h.actioned_at))
+
+        faculty_ids = {h.faculty_id for h in history if h.faculty_id}
+        names = {}
+        for faculty_id in faculty_ids:
+            row = store.get('users', faculty_id)
+            if row:
+                names[faculty_id] = row.get('name')
+        for entry in history:
+            entry.faculty_name = names.get(entry.faculty_id)
+        return history
 
     @staticmethod
-    def _row_to_history(row) -> ApprovalHistory:
+    def _to_history(row) -> ApprovalHistory:
         return ApprovalHistory(
-            id=row['id'],
-            request_id=row['request_id'],
-            faculty_id=row['faculty_id'],
-            action=ApprovalAction(row['action']),
-            remarks=row['remarks'],
-            actioned_at=row['actioned_at']
+            id=int(row['id']),
+            request_id=row.get('request_id'),
+            faculty_id=row.get('faculty_id'),
+            action=ApprovalAction(row.get('action') or ApprovalAction.APPROVED.value),
+            remarks=row.get('remarks'),
+            actioned_at=row.get('actioned_at'),
         )
-
-    @staticmethod
-    def _row_to_history_with_faculty(row) -> ApprovalHistory:
-        hist = ApprovalModel._row_to_history(row)
-        hist.faculty_name = row.get('faculty_name')
-        return hist

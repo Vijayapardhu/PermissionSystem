@@ -10,105 +10,46 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
 
-    # Database: Supabase Postgres, DIRECT connection.
+    # Data: Cloud Firestore.
     #
-    # The direct host is db.<ref>.supabase.co. Nothing in this app derives a
-    # second endpoint from it: DATABASE_URL is dialled exactly as written, with
-    # no pooler host, no startup probe and no fallback, so the target in the
-    # startup log is the URI the operator configured.
+    # Firestore replaced Postgres rather than sitting beside it. The direct
+    # Supabase host is IPv6-only and Render has no IPv6 route to it, so a
+    # Postgres deployment there cannot open a connection at all; Firestore is
+    # reached over ordinary HTTPS and needs no inbound connectivity either.
     #
-    # Supavisor, the pooler, is deliberately not used. It reaps and reschedules
-    # session connections underneath the client, which is what produced the
-    # production log's "consuming input failed: SSL SYSCALL error: EOF
-    # detected", and it shares one slot limit between every client pointed at
-    # the project. This app pools for itself, so there is nothing for Supavisor
-    # to pool.
-    #
-    # db.<ref>.supabase.co is published as an IPv6-only AAAA record, so the host
-    # running the app needs IPv6 egress to resolve it. The pool opens in the
-    # background either way, so an unresolvable host still boots and recovers on
-    # its own rather than failing every request until the next deploy.
-    #
-    # Set DATABASE_URL to override all of this. Otherwise the URI is assembled
-    # from the project ref and the password below, which keeps the password out
-    # of two places at once.
-    SUPABASE_PROJECT_REF = (
-        os.environ.get('SUPABASE_PROJECT_REF') or 'cndqajpjmnvsafrxjowx'
-    )
-    SUPABASE_DB_PASSWORD = os.environ.get('SUPABASE_DB_PASSWORD') or ''
-    DATABASE_URL = os.environ.get('DATABASE_URL') or (
-        f'postgresql://postgres:{quote(SUPABASE_DB_PASSWORD, safe="")}'
-        f'@db.{SUPABASE_PROJECT_REF}.supabase.co:5432/postgres'
-        if SUPABASE_DB_PASSWORD else ''
-    )
+    # Credentials are read from exactly one of:
+    #   FIREBASE_CREDENTIALS_JSON - the service account JSON inline, which is
+    #                               what a Render environment variable holds
+    #   FIREBASE_CREDENTIALS_PATH - a path to that JSON on disk, for local runs
+    # With neither, the app still boots and every data-backed page reports the
+    # store as unavailable, which is the same shape as a database outage.
+    FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID') or ''
+    FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE') or '(default)'
+    FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON') or ''
+    FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH') or ''
 
-    # Sizing: the pool is per gunicorn worker process, so the total is
-    # DB_POOL_MAX x workers, and it is charged against the Supabase project's
-    # connection limit. It must also be at least the number of --threads that
-    # worker serves, or a worker deadlocks against itself: every thread holds a
-    # connection while a query runs, and the pool checkout then blocks forever.
-    #
-    # DB_POOL_MIN is what makes that survivable rather than merely unlikely.
-    # It is the number of connections the pool holds ready, and the pool grows
-    # only one at a time, on demand, once a client is already queued. Over a
-    # WAN a single connect costs well over a second, so a pool that starts at
-    # one and loses that one has nothing to serve for the whole connect, and
-    # every request behind it times out against DB_POOL_TIMEOUT. Sitting at
-    # min = --threads means each thread finds a warm connection instead of
-    # queueing behind a dial. The pool raises a floor set below --threads up to
-    # --threads itself and logs that it did, because the value actually running
-    # is whatever the dashboard says.
-    #
-    # 2 workers x 4 threads, so 4 warm and 6 available per process: 12 at the
-    # top end. Keep DB_POOL_MAX x DB_WORKER_COUNT inside the project's
-    # connection limit, or lower --threads rather than raising the limit.
-    DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN') or 4)
-    DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX') or 6)
+    # Point at the Firestore emulator to develop offline, e.g. 127.0.0.1:8080.
+    # The emulator ignores credentials entirely.
+    FIRESTORE_EMULATOR_HOST = os.environ.get('FIRESTORE_EMULATOR_HOST') or ''
 
-    # What one worker serves, and how many there are. Read by the pool only to
-    # size itself and to state the resulting connection budget in the startup
-    # log. These must match the gunicorn flags in Procfile / render.yaml.
-    DB_WORKER_THREADS = int(os.environ.get('DB_WORKER_THREADS') or 4)
-    DB_WORKER_COUNT = int(os.environ.get('DB_WORKER_COUNT') or 2)
+    # How long a single Firestore operation may take before the request gives up.
+    # Two things used to share one budget: the pool checkout and the TCP connect.
+    # There is no pool and no handshake here, so this is the whole cost of a
+    # query that never answers. Kept short so a stuck call cannot hold a worker
+    # thread for the gunicorn timeout.
+    FIRESTORE_TIMEOUT_SECONDS = float(os.environ.get('FIRESTORE_TIMEOUT_SECONDS') or 8)
 
-    # These are deliberately different, and both short.
-    #
-    # DB_CONNECT_TIMEOUT is the TCP connect timeout. DB_POOL_TIMEOUT is how long
-    # a request waits for a free connection. They used to be one 10s value, so
-    # an exhausted pool made every request hang for ten seconds before it
-    # failed -- users saw a frozen page and then a "temporarily unavailable"
-    # message. Failing fast turns a stall into an error the UI can recover from,
-    # and frees the worker for the next request.
-    DB_CONNECT_TIMEOUT = int(os.environ.get('DB_CONNECT_TIMEOUT') or 5)
-    DB_POOL_TIMEOUT = int(os.environ.get('DB_POOL_TIMEOUT') or 5)
-    # How many times a request tries for a connection before giving up. A single
-    # failed attempt is not proof the database is gone: the pool may have been
-    # serving a socket that died, or one connect may have been dropped. Two
-    # attempts means a blip is survivable and a real outage still fails well
-    # inside the gunicorn request timeout.
-    DB_POOL_RETRIES = int(os.environ.get('DB_POOL_RETRIES') or 2)
+    # How many times a request retries a failed operation before giving up. A
+    # single failure is not proof the store is gone: one RPC can be dropped or
+    # timed out while the project is perfectly healthy. Two attempts means a blip
+    # is survivable and a real outage still fails well inside the gunicorn
+    # request timeout.
+    FIRESTORE_RETRIES = int(os.environ.get('FIRESTORE_RETRIES') or 2)
 
-    # Pool housekeeping. Retiring an idle connection after four minutes means the
-    # pool only ever hands out a socket the server still has.
-    DB_POOL_MAX_IDLE = float(os.environ.get('DB_POOL_MAX_IDLE') or 240)
-    DB_POOL_MAX_LIFETIME = float(os.environ.get('DB_POOL_MAX_LIFETIME') or 1800)
-    # How long a pooled connection may be handed out without being verified
-    # against the server. A socket dropped while idle still looks alive to libpq
-    # -- closed is False, status is IDLE -- so it is only found dead when a query
-    # goes out on it. This bounds how often that check can catch it. Thirty
-    # seconds costs one SELECT 1 per idle gap and none at all on a hot path; set
-    # it to 0 to fall back to libpq's own view, which cannot see a severed flow.
-    DB_POOL_PING_INTERVAL = float(os.environ.get('DB_POOL_PING_INTERVAL') or 30)
-    # How long the background worker keeps retrying to refill the pool to
-    # min_size after a failure. Short, so the site recovers on its own once
-    # Supabase does, instead of staying broken until the next deploy.
-    DB_POOL_RECONNECT_TIMEOUT = float(
-        os.environ.get('DB_POOL_RECONNECT_TIMEOUT') or 30
-    )
-
-    # How long a health probe may reuse the previous database verdict. Render
-    # polls the health path continuously, and each probe was taking a pooled
-    # connection -- the probe itself was part of the contention it detected.
+    # How long a health probe may reuse the previous store verdict. Render polls
+    # the health path continuously, and each probe was costing a query -- the
+    # probe itself was part of the contention it detected.
+    HEALTH_DB_CACHE_SECONDS = int(os.environ.get('HEALTH_DB_CACHE_SECONDS') or 30)
     HEALTH_DB_CACHE_SECONDS = int(os.environ.get('HEALTH_DB_CACHE_SECONDS') or 30)
 
     # Microsoft Entra ID (Azure AD)

@@ -6,20 +6,17 @@ Jinja2==3.1.6
 # WSGI server (Render start command)
 gunicorn==23.0.0
 
-# Database (Supabase Postgres)
-# psycopg-binary ships wheels only, so it must be a version that publishes a
-# wheel for the Python Render is running. 3.2.3 has none for Python 3.13+
-# targets and fails the build with "No matching distribution found".
-psycopg[binary]==3.2.13
-psycopg-pool==3.3.3
+# Data (Cloud Firestore)
+# google-cloud-firestore pulls grpcio, a native extension that only installs
+# where a matching wheel exists. An older release resolves to a grpcio with no
+# wheel for the Python Render runs, and the build fails with "No matching
+# distribution found" rather than at runtime.
+google-cloud-firestore==2.34.0
 
 # Cloudflare R2, for uploaded proof documents. R2 speaks the S3 API, so this is
 # the standard client pointed at <account>.r2.cloudflarestorage.com rather than
 # AWS itself. Imported lazily, so a deployment without R2 credentials still boots.
 boto3==1.43.107
-
-# Supabase Storage, kept for a deployment still holding proofs there
-supabase==2.18.1
 
 # Microsoft Entra ID sign-in
 msal==1.39.0

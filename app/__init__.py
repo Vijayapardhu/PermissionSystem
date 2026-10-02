@@ -59,16 +59,16 @@ def _register_health_check(app: Flask) -> None:
 
     @app.route('/healthz')
     def healthz():
-        from app.models.database import db
+        from app.models.firestore import store
 
         now = time.monotonic()
         ttl = app.config['HEALTH_DB_CACHE_SECONDS']
         if now - state['checked_at'] >= ttl:
             try:
-                db.ping()
+                store.ping()
                 state['database'] = 'ok'
             except Exception:
-                app.logger.exception('Health check: database unreachable')
+                app.logger.exception('Health check: Firestore unreachable')
                 state['database'] = 'unreachable'
             state['checked_at'] = now
 
@@ -151,13 +151,13 @@ def _register_jinja_globals(app: Flask) -> None:
 
 
 def _register_extensions(app: Flask) -> None:
-    from app.models.database import init_db
+    from app.models.firestore import store
     from app.utils.email import mail
 
     try:
-        init_db(app)
+        store.init_app(app)
     except Exception as exc:  # pragma: no cover - surfaces misconfig clearly
-        app.logger.error('Database pool unavailable: %s', exc)
+        app.logger.error('Firestore store unavailable: %s', exc)
 
     try:
         mail.init_app(app)
@@ -279,7 +279,7 @@ def _error_page(app: Flask, code: int, message: str, status: int):
 
 
 def _register_error_handlers(app: Flask) -> None:
-    from app.models.database import DatabaseUnavailable
+    from app.models.firestore import DatabaseUnavailable
 
     @app.errorhandler(400)
     def bad_request(error):

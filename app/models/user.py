@@ -1,16 +1,19 @@
-from app.models import User, UserRole, is_roll_id
-from app.models.database import db
 from datetime import datetime
 from typing import Optional, List
+
+from app.models import User, UserRole, is_roll_id
+from app.models.firestore import store
+
+COLLECTION = 'users'
 
 
 def derive_roll_number(email: str, name: str = None) -> Optional[str]:
     """Resolve a student's roll number.
 
-    University mailboxes are provisioned as <rollno>@adityauniversity.in in
-    lower case (26b21cs058@...), and the Outlook display name is the same value,
-    so either source yields it. The mailbox wins because it stays stable if a
-    student renames themselves in Outlook.
+    University mailboxes are provisioned as <rollno>@adityauniversity.in in lower
+    case (26b21cs058@...), and the Outlook display name is the same value, so
+    either source yields it. The mailbox wins because it stays stable if a student
+    renames themselves in Outlook.
     """
     local_part = (email or '').split('@')[0].strip().upper()
     if is_roll_id(local_part):
@@ -23,71 +26,47 @@ def derive_roll_number(email: str, name: str = None) -> Optional[str]:
 
 class UserModel:
     @staticmethod
+    def _find_one(**filters) -> Optional[User]:
+        filters['is_active'] = True
+        rows = store.documents(COLLECTION, **filters)
+        return UserModel._to_user(rows[0]) if rows else None
+
+    @staticmethod
     def find_by_email(email: str) -> Optional[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE email = %s AND is_active = TRUE",
-                (email.lower(),)
-            )
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+        return UserModel._find_one(email=(email or '').lower())
 
     @staticmethod
     def find_by_microsoft_id(microsoft_id: str) -> Optional[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE microsoft_id = %s AND is_active = TRUE",
-                (microsoft_id,)
-            )
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+        return UserModel._find_one(microsoft_id=microsoft_id)
 
     @staticmethod
     def find_by_id(user_id: int) -> Optional[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE id = %s AND is_active = TRUE",
-                (user_id,)
-            )
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+        return UserModel._find_one(id=user_id)
 
     @staticmethod
     def find_by_roll_number(roll_number: str) -> Optional[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE roll_number = %s AND is_active = TRUE",
-                (roll_number.upper(),)
-            )
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+        return UserModel._find_one(roll_number=(roll_number or '').upper())
+
+    @staticmethod
+    def _by_role(role: str, order_by: str) -> List[User]:
+        rows = store.documents(COLLECTION, role=role, is_active=True)
+        users = [UserModel._to_user(row) for row in rows]
+        # Sorting here rather than with order_by: Firestore would need a composite
+        # index for a role filter plus an ordering, and a missing index is an
+        # error at request time rather than a slower query.
+        return sorted(users, key=lambda u: (getattr(u, order_by) or '', u.name))
 
     @staticmethod
     def get_lecturers() -> List[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE role = 'LECTURER' AND is_active = TRUE ORDER BY name"
-            )
-            rows = cursor.fetchall()
-            return [UserModel._row_to_user(row) for row in rows]
+        return UserModel._by_role(UserRole.LECTURER.value, 'name')
 
     @staticmethod
     def get_students() -> List[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE role = 'STUDENT' AND is_active = TRUE ORDER BY roll_number"
-            )
-            rows = cursor.fetchall()
-            return [UserModel._row_to_user(row) for row in rows]
+        return UserModel._by_role(UserRole.STUDENT.value, 'roll_number')
 
     @staticmethod
     def get_hods() -> List[User]:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE role = 'HOD' AND is_active = TRUE ORDER BY name"
-            )
-            rows = cursor.fetchall()
-            return [UserModel._row_to_user(row) for row in rows]
+        return UserModel._by_role(UserRole.HOD.value, 'name')
 
     @staticmethod
     def create_or_update_from_microsoft(microsoft_id: str, email: str, name: str) -> User:
@@ -116,65 +95,51 @@ class UserModel:
     def create(microsoft_id: str, email: str, name: str,
                role: UserRole = UserRole.STUDENT, roll_number: str = None,
                phone: str = None, department: str = 'CSE') -> User:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO users
-                   (microsoft_id, email, name, role, roll_number, phone,
-                    department, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   RETURNING *""",
-                (microsoft_id, email.lower(), name, role.value,
-                 roll_number or derive_roll_number(email, name), phone, department,
-                 datetime.now(), datetime.now())
-            )
-            return UserModel._row_to_user(cursor.fetchone())
+        row = store.insert(COLLECTION, {
+            'microsoft_id': microsoft_id,
+            'email': email.lower(),
+            'name': name,
+            'role': role.value,
+            'roll_number': roll_number or derive_roll_number(email, name),
+            'phone': phone,
+            'department': department,
+            'is_active': True,
+        })
+        return UserModel._to_user(row)
 
     @staticmethod
-    def update(user: User) -> User:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """UPDATE users SET microsoft_id = %s, email = %s, name = %s,
-                   role = %s, roll_number = %s, phone = %s, department = %s, updated_at = %s
-                   WHERE id = %s
-                   RETURNING *""",
-                (user.microsoft_id, user.email, user.name, user.role.value,
-                 user.roll_number, user.phone, user.department,
-                 datetime.now(), user.id)
-            )
-            # RETURNING rather than a follow-up find_by_id(): the update is not
-            # committed until get_cursor() exits, so a second read in another
-            # transaction would return the pre-update row. This path runs on
-            # every single sign-in.
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+    def update(user: User) -> Optional[User]:
+        store.update(COLLECTION, user.id, {
+            'microsoft_id': user.microsoft_id,
+            'email': user.email,
+            'name': user.name,
+            'role': user.role.value,
+            'roll_number': user.roll_number,
+            'phone': user.phone,
+            'department': user.department,
+        })
+        # Read back rather than trusting the values just written. A Firestore
+        # write is durable the moment it returns, so this is the same row, and it
+        # means the caller gets the stored defaults filled in.
+        return UserModel.find_by_id(user.id)
 
     @staticmethod
-    def set_role(user_id: int, role: UserRole) -> User:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """UPDATE users SET role = %s, updated_at = %s
-                   WHERE id = %s
-                   RETURNING *""",
-                (role.value, datetime.now(), user_id)
-            )
-            # RETURNING, not a follow-up find_by_id(). The UPDATE is not
-            # committed until get_cursor() exits, so a read in its own
-            # transaction would return the role the user had before this call.
-            row = cursor.fetchone()
-            return UserModel._row_to_user(row) if row else None
+    def set_role(user_id: int, role: UserRole) -> Optional[User]:
+        store.update(COLLECTION, user_id, {'role': role.value})
+        return UserModel.find_by_id(user_id)
 
     @staticmethod
-    def _row_to_user(row) -> User:
+    def _to_user(row) -> User:
         return User(
-            id=row['id'],
-            microsoft_id=row['microsoft_id'],
-            email=row['email'],
-            name=row['name'],
-            roll_number=row['roll_number'],
-            phone=row['phone'],
-            role=UserRole(row['role']),
-            department=row['department'],
-            is_active=row['is_active'],
-            created_at=row['created_at'],
-            updated_at=row['updated_at']
+            id=int(row['id']),
+            microsoft_id=row.get('microsoft_id'),
+            email=row.get('email') or '',
+            name=row.get('name') or '',
+            roll_number=row.get('roll_number'),
+            phone=row.get('phone'),
+            role=UserRole(row.get('role') or UserRole.STUDENT.value),
+            department=row.get('department') or 'CSE',
+            is_active=bool(row.get('is_active', True)),
+            created_at=row.get('created_at') or datetime.now(),
+            updated_at=row.get('updated_at') or row.get('created_at') or datetime.now(),
         )

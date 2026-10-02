@@ -36,26 +36,29 @@ def parse_time(value: str, field: str):
 
 def pick_faculty(student: User) -> User:
     """Assign to the lecturer with the fewest open requests to spread load."""
-    from app.models.database import db
+    from app.models.firestore import store
 
-    with db.get_cursor() as cursor:
-        cursor.execute(
-            """SELECT u.id,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.assigned_faculty_id = u.id AND pr.status = 'PENDING'
-                      ) AS open_count
-               FROM users u
-               WHERE u.role = 'LECTURER' AND u.is_active = TRUE
-               ORDER BY open_count ASC, u.name ASC
-               LIMIT 1"""
-        )
-        row = cursor.fetchone()
-    if not row:
+    # The load is counted per lecturer rather than ordered in the database:
+    # Firestore cannot sort by a field it did not filter on without a composite
+    # index, and a request that 500s until an index exists in the console is a
+    # worse failure than counting a handful of documents here.
+    open_counts = {}
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.PENDING.value):
+        faculty_id = row.get('assigned_faculty_id')
+        if faculty_id:
+            open_counts[faculty_id] = open_counts.get(faculty_id, 0) + 1
+
+    lecturers = UserModel.get_lecturers()
+    if not lecturers:
         raise ValidationError(
             'No lecturer is currently available to review requests. '
             'Contact the HOD office.'
         )
-    return UserModel.find_by_id(row['id'])
+
+    chosen = min(lecturers,
+                 key=lambda u: (open_counts.get(u.id, 0), u.name or ''))
+    return chosen
 
 
 def submit_request(*, student: User, permission_type: str, reason: str,

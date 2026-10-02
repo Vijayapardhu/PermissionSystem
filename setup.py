@@ -1,7 +1,7 @@
 """One-command project setup.
 
 Checks the prerequisites, creates a virtual environment, installs
-dependencies, prepares .env and loads the database schema.
+dependencies, prepares .env and seeds the Firestore accounts.
 
     python setup.py
 
@@ -21,7 +21,6 @@ import sys
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(ROOT, '.env')
 EXAMPLE = os.path.join(ROOT, '.env.example')
-SCHEMA = os.path.join(ROOT, 'migrations', 'schema.sql')
 
 MIN_PYTHON = (3, 9)
 
@@ -58,17 +57,6 @@ if sys.version_info < MIN_PYTHON:
     )
 else:
     ok.append(f'Python {platform.python_version()}')
-
-if have('psql'):
-    ok.append('Postgres client (psql) found on PATH')
-else:
-    warn.append(
-        'psql not found. You can still load the schema from the Supabase SQL '
-        'editor: paste migrations/schema.sql and run it once.'
-    )
-
-if platform.system() == 'Windows' and not have('psql'):
-    say('       Install PostgreSQL: https://www.postgresql.org/download/windows/')
 
 # ---------------------------------------------------------------- 2
 step(2, 'Virtual environment')
@@ -125,7 +113,8 @@ say('    Fill these in before signing in with Microsoft:')
 say('      CLIENT_ID      Entra ID -> App registrations -> Overview')
 say('      TENANT_ID      Entra ID -> App registrations -> Overview')
 say('      CLIENT_SECRET  Certificates & secrets -> New client secret')
-say('      DATABASE_URL   Supabase -> Project Settings -> Database -> URI')
+say('      FIREBASE_PROJECT_ID / FIREBASE_CREDENTIALS_PATH')
+say('                       Firebase -> Project settings')
 say('      R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY')
 say('                       Cloudflare -> R2 -> Manage R2 API Tokens')
 say('')
@@ -147,36 +136,40 @@ say('    documents and are only ever served through an authorised route.')
 ok.append('storage: R2 bucket "proofs" (create it and a token in the dashboard)')
 
 # ---------------------------------------------------------------- 5
-step(5, 'Database schema')
+step(5, 'Firestore seed accounts')
 
-if not have('psql'):
-    warn.append('skipped: psql client not on PATH')
+# There is no schema to load. Firestore collections come into being when a
+# document is written, so "creating the schema" is writing the handful of
+# accounts the app cannot start without. The seed is idempotent: it keys on the
+# email address and leaves anything already there alone.
+seed_py = os.path.join(ROOT, 'migrations', 'seed_firestore.py')
+
+if not os.path.isfile(seed_py):
+    fail.append('migrations/seed_firestore.py is missing')
 else:
-    answer = input('    Load migrations/schema.sql into Supabase now? [y/N] ').strip().lower()
-    if answer in ('y', 'yes'):
-        dsn = os.environ.get('DATABASE_URL', '')
-        if not dsn and os.path.isfile(ENV_FILE):
-            for line in open(ENV_FILE, encoding='utf-8'):
-                if line.startswith('DATABASE_URL='):
-                    dsn = line.split('=', 1)[1].strip()
-                    break
-
-        if not dsn:
-            fail.append('DATABASE_URL is not set; cannot load the schema')
-        else:
-            with open(SCHEMA, encoding='utf-8') as fh:
-                payload = fh.read()
-
+    _has_credentials = any(
+        line.startswith(('FIREBASE_CREDENTIALS_PATH=', 'FIREBASE_CREDENTIALS_JSON='))
+        and line.split('=', 1)[1].strip()
+        for line in (open(ENV_FILE, encoding='utf-8') if os.path.isfile(ENV_FILE)
+                     else [])
+    )
+    if not _has_credentials:
+        warn.append(
+            'skipped: set FIREBASE_CREDENTIALS_PATH (or _JSON) in .env first, '
+            'then run: python migrations/seed_firestore.py'
+        )
+    else:
+        answer = input('    Seed the staff and student accounts into Firestore now? [y/N] ').strip().lower()
+        if answer in ('y', 'yes'):
             proc = subprocess.run(
-                ['psql', dsn, '-v', 'ON_ERROR_STOP=1', '-f', '-'],
-                input=payload, capture_output=True, text=True,
+                [VENV_PY, seed_py], capture_output=True, text=True, cwd=ROOT,
             )
             if proc.returncode == 0:
-                ok.append('schema loaded (tables created, sample accounts added)')
+                ok.append('Firestore seeded (staff and student accounts created)')
             else:
-                fail.append(f'schema import failed: {proc.stderr.strip()[-300:]}')
-    else:
-        warn.append('skipped: answer was not "y"')
+                fail.append(f'seed failed: {(proc.stderr or proc.stdout).strip()[-300:]}')
+        else:
+            warn.append('skipped: answer was not "y"')
 
 # ---------------------------------------------------------------- summary
 say('\n' + '=' * 62)
@@ -197,7 +190,7 @@ if fail:
 
 say('Next steps:')
 say('  1. Edit .env and enter CLIENT_ID, TENANT_ID, CLIENT_SECRET,')
-say('     DATABASE_URL and the R2 API token values.')
+say('     the Firestore credentials and the R2 API token values.')
 say('  2. Start the app:')
 say('       Windows   .venv\\Scripts\\activate     then  python wsgi.py')
 say('       mac/Linux source .venv/bin/activate   then  python wsgi.py')

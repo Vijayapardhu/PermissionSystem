@@ -10,7 +10,7 @@ from flask import abort, current_app, flash, g, request, session
 from werkzeug.utils import secure_filename
 
 from app.models import UserRole
-from app.models.database import DatabaseUnavailable
+from app.models.firestore import DatabaseUnavailable
 from app.models.user import UserModel
 
 _EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')

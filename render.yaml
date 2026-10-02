@@ -1,11 +1,12 @@
 # Render blueprint. `render blueprint launch` creates the web service and walks
 # through the environment values below.
 #
-# The database and proof storage are NOT defined here. Both live in Supabase:
-#   database -> Supabase Postgres (Project Settings -> Database -> URI)
-#   storage  -> Supabase Storage, a private bucket
-# Because DATABASE_URL is a prompt rather than a generated value, it is never
-# written into this file.
+# Neither the data nor the proof storage is defined here. Both live outside
+# Render:
+#   data    -> Cloud Firestore
+#   storage -> Cloudflare R2, a private bucket
+# Because the credentials are a prompt rather than a generated value, they are
+# never written into this file.
 #
 # The plan below is `starter`, not `free`, for one reason: Render's free plan
 # blocks all outbound traffic on ports 25, 465 and 587, which is what
@@ -29,66 +30,31 @@ services:
         value: "1"
       - key: SECRET_KEY
         generateValue: true
-      # Supabase Postgres, DIRECT connection: db.<ref>.supabase.co.
+      # Cloud Firestore holds every record: users, requests, classes, rosters
+      # and attendance.
       #
-      # Not the Supavisor pooler. Supavisor reaps and reschedules session
-      # connections underneath the client -- which is where the production log's
-      # "consuming input failed: SSL SYSCALL error: EOF detected" came from --
-      # and it shares one slot limit between everything pointed at the project.
-      # This app pools for itself, so there is nothing for Supavisor to pool, and
-      # the DSN below is dialled exactly as written: no derived host, no probe,
-      # no fallback.
-      #
-      # Direct is an IPv6-only AAAA record, so this service needs IPv6 egress to
-      # resolve db.<ref>.supabase.co. The pool opens in the background either way,
-      # so an unresolvable host boots and recovers on its own.
-      - key: DATABASE_URL
+      # The service account's private key bypasses Firestore security rules, so
+      # it is a server-side secret and is never rendered into a template. Missing
+      # credentials do not stop the boot: the app serves its health path and
+      # every data-backed request reports the store as unavailable.
+      - key: FIREBASE_PROJECT_ID
+        value: permissionsystem-aus
+      - key: FIRESTORE_DATABASE
+        value: "(default)"
+      # Render has no key file on disk, so the JSON itself goes in the
+      # environment. It is multi-line; the dashboard keeps it intact and the app
+      # parses it as JSON.
+      - key: FIREBASE_CREDENTIALS_JSON
         sync: false
-      # The pool is per gunicorn worker: 6 x 2 workers = 12 connections, charged
-      # straight against the project's connection limit, since nothing sits in
-      # front of Postgres to pool it. Keep it inside that limit.
-      #
-      # MAX must exceed --threads, or a worker deadlocks against itself. MIN is
-      # what makes that survivable: the pool grows one connection at a time and
-      # only once a client is already queued, and a connect over the WAN costs
-      # over a second. At MIN=1, losing that one connection left the worker with
-      # nothing to serve and every request behind it timed out, which is exactly
-      # what the production log showed. MIN = --threads keeps a warm connection
-      # per thread.
-      - key: DB_POOL_MAX
-        value: "6"
-      - key: DB_POOL_MIN
-        value: "4"
-      # Must match the gunicorn flags in startCommand. Read only to size the
-      # pool and to state the connection budget in the startup log.
-      - key: DB_WORKER_THREADS
-        value: "4"
-      - key: DB_WORKER_COUNT
+      # A hung store call holds a gunicorn worker thread, and the page is waiting
+      # on the thread, so the budget is short and a second attempt rides out a
+      # single dropped call.
+      - key: FIRESTORE_TIMEOUT_SECONDS
+        value: "8"
+      - key: FIRESTORE_RETRIES
         value: "2"
-      # Kept separate and short on purpose. A single shared 10s value made every
-      # request stall for ten seconds whenever the pool was saturated.
-      - key: DB_POOL_TIMEOUT
-        value: "5"
-      - key: DB_CONNECT_TIMEOUT
-        value: "5"
-      # Two attempts per request, and a pool that recycles its idle sockets
-      # every four minutes. Without the recycle the first request after an idle
-      # spell is the one that pays for a socket the server has already closed.
-      - key: DB_POOL_RETRIES
-        value: "2"
-      - key: DB_POOL_MAX_IDLE
-        value: "240"
-      - key: DB_POOL_MAX_LIFETIME
-        value: "1800"
-      # A socket dropped while idle still looks alive to libpq, so it is only
-      # found dead when a query goes out on it. This bounds how often a checkout
-      # re-verifies the connection with a SELECT 1 instead.
-      - key: DB_POOL_PING_INTERVAL
-        value: "30"
-      - key: DB_POOL_RECONNECT_TIMEOUT
-        value: "30"
-      # Render polls /healthz continuously; without a cache each poll took a
-      # pooled connection and the probe became part of the contention.
+      # Render polls /healthz continuously; without a cache each poll costs a
+      # query and the probe becomes part of the load it is measuring.
       - key: HEALTH_DB_CACHE_SECONDS
         value: "30"
       - key: CLIENT_ID
@@ -108,8 +74,6 @@ services:
       # The token bypasses every bucket policy, so it is a server-side secret and
       # is never rendered into a template. Uploads fail cleanly (a plain error on
       # the form) if it is missing, rather than at import time.
-      - key: STORAGE_BACKEND
-        value: "r2"
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -135,9 +99,3 @@ services:
         value: "false"
       - key: FLASK_DEBUG
         value: "false"
-      - key: MAIL_USERNAME
-        sync: false
-      - key: MAIL_PASSWORD
-        sync: false
-      - key: MAIL_DEFAULT_SENDER
-        sync: false

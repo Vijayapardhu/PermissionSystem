@@ -1,6 +1,6 @@
 # CSE Permission & Leave Tracking System
 
-Flask + Postgres permission tracker for the Department of Computer Science & Engineering,
+Flask + Firestore permission tracker for the Department of Computer Science & Engineering,
 built to the SRS: Microsoft Entra ID sign-in, Leave and Classroom permission requests,
 proof upload, lecturer verification, and an HOD analytics dashboard with printable reports.
 
@@ -108,45 +108,54 @@ renders as `—` when the department has not recorded one.
 | Frontend  | HTML5, Bootstrap 5.3, Bootstrap Icons, Chart.js 4 |
 | Backend   | Python 3, Flask 3, Jinja2                     |
 | Auth      | Microsoft Entra ID (MSAL, authorization code) |
-| Database  | Postgres (Supabase, `psycopg` 3, pooled)     |
+| Data      | Cloud Firestore (`google-cloud-firestore`)   |
 | Storage   | Cloudflare R2 (S3 API, boto3), private bucket, year/month keys |
 | Email     | Outlook SMTP via Flask-Mail                   |
 | Hosting   | Render (web service, gunicorn)                |
 
 ## Deploy to Render
 
-The app runs on Render and keeps its database and proof storage in Supabase.
+The app runs on Render, keeps its records in Cloud Firestore and its proofs in a private Cloudflare R2 bucket.
 
-### 1. Supabase: database
+### 1. Firebase: the database
 
-Create a project, then open **SQL Editor** and paste `migrations/schema.sql`.
-Run it once. It drops and recreates every table, so never re-run it against a
-database that holds real data.
+Create a project, then **Project settings → Service accounts → Generate new
+private key** and save the JSON. Record:
 
-Then copy **Project Settings → Database → Connection string → URI (Direct)**:
+| Value | Used for |
+|---|---|
+| `FIREBASE_PROJECT_ID` | Project settings → General |
+| `FIRESTORE_DATABASE` | `(default)`, unless you created a named database |
+| `FIREBASE_CREDENTIALS_PATH` | Server-side only. Path to that JSON. |
 
+The key bypasses Firestore security rules, so it is a server-side secret: never
+put it in a template, a JavaScript file, or any client-side code, and rotate it if
+it is ever committed or pasted somewhere it should not be.
+
+There is no schema to apply. Firestore collections come into being when a
+document is written, so create the accounts the app expects with:
+
+```bash
+python migrations/seed_firestore.py
 ```
-postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
-```
 
-Use that URI exactly as written. The app dials it verbatim: there is no pooler
-host to derive, no startup probe and no fallback, and the target printed in the
-startup log is the URI configured here.
+The seed is idempotent — it keys on the email address and leaves anything already
+there alone.
 
-Two things about this URI:
+On Render there is no key file on disk, so paste the JSON itself into
+`FIREBASE_CREDENTIALS_JSON` there and leave the path unset. Missing credentials do
+not stop the boot: the app serves its health path and every data-backed request
+reports the store as unavailable, which is the same shape as a database outage.
 
-- Use the **Direct** connection, not the Supavisor pooler. Supavisor reaps and
-  reschedules session connections underneath the client, which is where
-  `consuming input failed: SSL SYSCALL error: EOF detected` comes from, and it
-  shares one slot limit between everything pointed at the project. This app
-  pools for itself, so it has nothing for Supavisor to pool.
-- A password containing `@ / : #` must be percent-encoded, or the DSN silently
-  parses up to the wrong separator.
+Two things worth knowing about how the data layer works:
 
-`db.<ref>.supabase.co` is published as an **IPv6-only AAAA record**, so the host
-running the app needs IPv6 egress to resolve it at all. The pool opens in the
-background rather than failing the boot, so an unresolvable host still starts and
-recovers on its own once egress exists.
+- Ordering happens in Python. Firestore can sort on a single field, but
+  `where(...).order_by(...)` across two fields needs a composite index created in
+  the console first, and an app that errors until someone does that is a worse
+  failure than one that sorts a few hundred documents.
+- Each collection keeps a counter document and hands out the next integer id
+  inside a transaction, so ids in URLs stay integers and two concurrent creates
+  cannot collide.
 
 ### 2. Cloudflare: proof bucket
 
@@ -171,26 +180,14 @@ any client-side code, and rotate it if it is ever committed or pasted somewhere
 it should not be. Uploads fail with a plain error on the form if it is missing,
 not at startup.
 
-`STORAGE_BACKEND` is `r2` by default. Set it to `supabase` and fill in
-`SUPABASE_URL` / `SUPABASE_SECRET_KEY` to keep storing proofs in Supabase
-Storage instead; the Supabase keys are otherwise unused.
+### 3. Storage backend
 
-### 3. Supabase: keys
-
-**Project Settings → API Keys** gives you:
-
-| Value | Used for |
-|---|---|
-| `SUPABASE_URL` | Project URL, only for `STORAGE_BACKEND=supabase` |
-| `SUPABASE_SECRET_KEY` | Server-side only. Bypasses RLS. |
-| `SUPABASE_PUBLISHABLE_KEY` | Not used by this app. |
-
-`SUPABASE_SECRET_KEY` is the renamed service-role key, and it is only read when
-proofs are stored in Supabase rather than R2. Never put it in a template, a
-JavaScript file, or any client-side code, and rotate it if it is ever committed
-or pasted somewhere it should not be. Projects created before the rename publish
-the same privilege under `SUPABASE_SERVICE_ROLE_KEY`; the app accepts either
-name.
+Proofs go to Cloudflare R2 by default. Set `STORAGE_BACKEND=supabase` with
+`SUPABASE_URL` / `SUPABASE_SECRET_KEY` to keep using the old Supabase Storage
+bucket for a deployment that still holds proofs there; those keys are otherwise
+unused. Never put a service-role key in a template, a JavaScript file, or any
+client-side code, and rotate it if it is ever committed or pasted somewhere it
+should not be.
 
 ### 4. Entra ID
 
@@ -229,7 +226,7 @@ Environment variables to set on the service:
 
 | Variable | Source |
 |---|---|
-| `DATABASE_URL` | Supabase, Direct URI (`db.<ref>.supabase.co`, not the pooler) |
+| `FIREBASE_CREDENTIALS_JSON` | The service account key, pasted in (Render has no key file) |
 | `SECRET_KEY` | Render's **Generate** button |
 | `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
 | `REDIRECT_URI` | `https://permissionsystem.onrender.com/auth/callback` |
@@ -237,6 +234,8 @@ Environment variables to set on the service:
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |
 | `R2_BUCKET` | `proofs` |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Only if `STORAGE_BACKEND=supabase` |
+| `FIRESTORE_TIMEOUT_SECONDS` | `8` |
+| `FIRESTORE_RETRIES` | `2` |
 | `SESSION_COOKIE_SECURE` | `true` (Render terminates TLS) |
 | `DEV_MODE` | `false` |
 | `FLASK_DEBUG` | `false` |
@@ -259,11 +258,11 @@ sessions.
 
 ### Deploy-time settings that matter
 
-- `--workers 2` rather than 4: `DB_POOL_MAX` is per process, and the connection
-  limit is what runs out first on the free Supabase plan.
+- `--workers 2` rather than 4: it halves the memory and the per-request store
+  calls, and this workload does not need the throughput.
 - `--timeout 120`: uploads run to 5 MB and the permission letter renders inline,
   which is tight against gunicorn's 30-second default.
-- `/healthz` stays 200 even when Postgres is unreachable. Render restarts the
+- `/healthz` stays 200 even when Firestore is unreachable. Render restarts the
   service on a non-2xx health check, and restarting cannot fix a database the
   container cannot route to — the replacement process has the same network path.
   The probe reports `{"status":"ok","database":"unreachable"}` instead, and caches
@@ -278,8 +277,7 @@ sessions.
 |---|---|---|
 | Python | 3.9 or newer | <https://www.python.org/downloads/> &mdash; tick **"Add Python to PATH"** on Windows |
 | A Git client | any | Or download this repository as a ZIP |
-| psql | 14 or newer | Optional. Only needed to load the schema from the command line |
-| A Supabase project | any | The database |
+| A Firebase project | any | The database and the service account key |
 | A Cloudflare account | any | The proof bucket and its R2 API token |
 
 You also need the department's Entra ID values, read from
@@ -302,7 +300,7 @@ cd PermissionSystem
 python setup.py
 
 # 3. Enter the real values in .env
-#    CLIENT_ID, TENANT_ID, CLIENT_SECRET, DATABASE_URL,
+#    CLIENT_ID, TENANT_ID, CLIENT_SECRET,
 #    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 
 # 4. Start the app
@@ -328,30 +326,25 @@ cp .env.example .env        # macOS / Linux
 
 Then fill in `.env` and create the storage bucket and database (below).
 
-### Create the database
+### Seed the database
 
-The app creates no tables itself. Load the schema once, either by pasting
-`migrations/schema.sql` into the Supabase **SQL Editor**, or:
+The app creates no collections itself; Firestore does that on first write. Seed
+the accounts the app expects once, after the credentials are in `.env`:
 
 ```bash
-# macOS / Linux
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/schema.sql
-
-# Windows PowerShell has no `<` redirect, so pipe instead:
-Get-Content migrations\schema.sql -Raw | psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1
+python migrations/seed_firestore.py
 ```
 
-`ON_ERROR_STOP=1` matters: without it psql reports success even when an earlier
-statement failed, and you end up with half a schema.
+It writes the three staff accounts and four students, skips any account whose
+email already exists, and touches nothing else. Re-run it whenever you want the
+sample accounts back.
 
-The script is **not incremental**. It drops and recreates the tables, which
-deletes every user, request and attendance mark. Load it once against an empty
-project and never again.
 
 Then set the connection string in `.env`:
 
 ```env
-DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_CREDENTIALS_PATH=/path/to/service-account.json
 ```
 
 ### Create the proof bucket
@@ -413,17 +406,16 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 |---|---|
 | `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
 | `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
-| `DATABASE_URL is not set` | `.env` missing the connection string, or the service has no env vars |
-| `could not translate host name` / `Connection refused` | Wrong host or port in `DATABASE_URL`. It must be the Direct host `db.<ref>.supabase.co` on 5432 — a pooler URI is no longer rewritten |
+| `Firestore is not configured` | `FIREBASE_CREDENTIALS_JSON` / `_PATH` is missing or is not valid JSON |
+| `could not translate host name` / `Connection refused` | The service account credentials are wrong, or the project id does not match the key |
 | `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
-| `too many connections` | `DB_POOL_MAX` x gunicorn `--workers` exceeds the plan limit. Free Supabase allows 15 |
-| "The user directory is temporarily unavailable" on sign-in | The pool could not get a connection. Search the log for `Postgres checkout failed` — it names the host, the last driver error and the pool stats, which distinguishes "the database is unreachable" from "the pool was full" |
-| The log says `couldn't get a connection after 5.00 sec` repeatedly | Every request is queueing. `DB_POOL_MAX` must be at least the `--threads` one worker serves, or the worker deadlocks against itself |
-| The log says `connection timeout expired` on connect | The host cannot reach `db.<ref>.supabase.co`. It is an IPv6-only AAAA record, so the host needs IPv6 egress, and a typo in the host fails the same way |
+| `DeadlineExceeded` | One store call passed `FIRESTORE_TIMEOUT_SECONDS`. It is raised rather than retried past the budget on purpose |
+| "The user directory is temporarily unavailable" on sign-in | Firestore is not answering. Search the log for `Firestore documents failed` — it names the call, the last driver error and how many attempts were made |
+| The log says `Firestore documents failed after 2 attempts` | The project is unreachable from this host, the credentials are wrong, or Firestore is not enabled for the project |
 | The log says `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
-| `/healthz` reports `"database": "unreachable"` | Postgres is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
-| `relation "users" does not exist` | `migrations/schema.sql` was never loaded |
-| `The requested path is invalid` on upload | Bucket is not called `proofs`, or `SUPABASE_STORAGE_BUCKET` is wrong |
+| `/healthz` reports `"database": "unreachable"` | Firestore is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
+| The dev picker is empty, sign-in is refused | `migrations/seed_firestore.py` has not been run, or the signed-in email is not one of the seeded accounts |
+| `Proof storage is not configured on this server` | The R2 credentials are missing, so no proof can be stored |
 | `row-level security` error | The app is connecting with the `anon` role. Use the project owner DSN |
 | Upload fails with a storage error | Bucket set to Public? It must be private |
 | No email ever arrives on Render | Free plan blocks ports 25/465/587. See "Two Render constraints" |
@@ -431,8 +423,8 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 | `AADSTS50011` | Same redirect URI mismatch |
 | Sign-in fails immediately | `CLIENT_SECRET` wrong, expired, or still a placeholder |
 | Port already in use | Change `PORT` in `.env`, or stop whatever is using it |
-| `setup.py` cannot find `psql` | Paste `migrations/schema.sql` into the Supabase SQL Editor instead |
-| `/healthz` returns 503 | Postgres unreachable. Check `DATABASE_URL` and Render's private-network access |
+| `setup.py` skipped the seed | It needs `FIREBASE_CREDENTIALS_PATH` (or `_JSON`) in `.env` first; then run `python migrations/seed_firestore.py` |
+| Every data-backed page returns 503 | Firestore unreachable. The health path still returns 200; check the credentials and the project |
 | Proof download returns 404 | Object missing from the bucket, or `file_path` in the database no longer matches |
 
 ## Authentication
@@ -491,7 +483,7 @@ Procfile               gunicorn start command for Render
 render.yaml            Render blueprint (env vars, start command, health check)
 app/__init__.py        Application factory, blueprints, /healthz, error handlers
 app/auth/              MSAL client and sign-in routes
-app/models/            Dataclasses, Postgres pool, queries
+app/models/            Dataclasses, the Firestore store, model queries
 app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
 app/faculty/           Lecturer portal, classes, attendance, proof download
@@ -501,7 +493,7 @@ templates/             Jinja2 templates
 templates/student/letter.html    Formal A4 permission letter, one page, with its QR code
 templates/auth/verify.html        Public, account-free page a letter's QR code opens
 static/                CSS, Chart.js dashboard, Aditya logo assets
-migrations/schema.sql  Database schema and seed accounts
+migrations/seed_firestore.py  Idempotent seed of the staff and student accounts
 verify.py              Unit harness, no database required
 workflow_test.py       End-to-end over HTTP
 class_features_test.py Classes, roster and attendance
@@ -517,7 +509,7 @@ the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
 - No local passwords; identities come from Microsoft.
 - Proof uploads are validated by extension **and** magic bytes, so a renamed
   `.exe` or script is rejected.
-- Stored object keys are random UUIDs; original names are kept only in Postgres.
+- Stored object keys are random UUIDs; original names are kept only in the database.
 - Object keys are validated, refusing absolute paths, `..` segments and anything
   that would resolve outside the bucket root.
 - The R2 bucket is private. Proofs are served only through an authorised
@@ -545,7 +537,7 @@ the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
 | Uploads | Extension **and** magic-byte validation, 5 MB cap, random object keys, key-traversal refusal |
 | Authorisation | Role guards per route; students see only their own requests, lecturers only assigned ones |
 | Redirects | `next` restricted to same-site relative paths |
-| Database | RLS enabled with no `anon`/`authenticated` policy on all seven tables |
+| Data access | The service account key is server-side only, and no Firebase web config is used server-side |
 | Proof storage | Private R2 bucket, fetched through an authorised route |
 | Letter verification | `/verify/<ref>.<signature>` is public and read-only; the signature is derived from `SECRET_KEY`, so a link cannot be forged and a reference number cannot be walked |
 
@@ -647,7 +639,7 @@ python sidebar_test.py        # every page for every role
 ```
 
 The first three all pass. The last three need the server running **and**
-`DATABASE_URL` set, because they assert against real database state. Point
+credentials set, because they assert against real store state. Point
 `BASE` in each at the server if it is not on `http://localhost:5000`.
 
 `verify.py` covers app construction, role enforcement, sign-in failure modes,
@@ -673,30 +665,24 @@ double-actioning, cross-role isolation, and HOD analytics and reporting.
   (`categorize_reason`) and can be swapped for a lookup table.
 - Reviewer load is balanced automatically: a new request goes to the lecturer with
   the fewest pending items.
-- Text searches use `ILIKE`, not `LIKE`. The MySQL build ran under a
-  case-insensitive collation, so searching for `26b21cs058` matched a stored
-  `26B21CS058`. Postgres `LIKE` is case-sensitive and would have returned
-  nothing, so every user-facing search had to move to `ILIKE`.
-- Chart and report days are bucketed with `AT TIME ZONE REPORT_TIMEZONE`
-  (default `Asia/Kolkata`). Timestamps are stored as `timestamptz` in UTC, so
-  without that cast a request submitted at 23:30 IST would chart under the
-  following day.
+- Text searches match roll numbers and names case-insensitively in Python
+  (`needle in value.upper()`). The original MySQL build searched under a
+  case-insensitive collation, so `26b21cs058` matched a stored `26B21CS058`, and
+  every user-facing search has kept that behaviour since.
+- Chart and report days are bucketed in `REPORT_TIMEZONE` (default
+  `Asia/Kolkata`). Timestamps are stored in UTC, and the store converts them on
+  the way out, so a request submitted at 23:30 IST charts under that IST day
+  rather than the following UTC one.
 - `get_stats_for_hod()` computes a `reasons` breakdown that no template renders.
   It is kept because the method is part of the HOD analytics surface, but it runs
   on every dashboard load for nothing.
 
 ## Local setup notes
 
-There is no local database or object store to install. Supabase hosts the
-database and Cloudflare R2 holds the proofs, so local development uses the same
+There is no local database or object store to install. Firestore holds the
+records and Cloudflare R2 holds the proofs, so local development uses the same
 two services as production.
 
-Importing the schema with `psql -f` works everywhere; the PowerShell `<`
-redirect trap no longer applies:
+Seeding needs no client and no redirect: `python migrations/seed_firestore.py` works
+the same on every platform, and it exits non-zero if the write fails.
 
-```bash
-Get-Content migrations\schema.sql -Raw | psql $env:DATABASE_URL -v ON_ERROR_STOP=1
-```
-
-`ON_ERROR_STOP=1` is worth keeping. Without it psql exits 0 even when an earlier
-statement failed, so a broken schema looks like a successful load.

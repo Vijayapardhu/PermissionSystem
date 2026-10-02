@@ -7,7 +7,6 @@ from datetime import date, datetime, timedelta
 from flask import (
     Blueprint,
     abort,
-    current_app,
     flash,
     redirect,
     render_template,
@@ -20,21 +19,12 @@ from app.models import (
     ApprovalAction, PermissionType, RequestStatus, UserRole,
 )
 from app.models.classes import AttendanceModel, ClassModel, MemberModel
-from app.models.database import db
 from app.models.permission import ApprovalModel, PermissionModel, ProofModel
 from app.models.user import UserModel
 from app.permissions.service import ValidationError, act_on_request
 from app.utils.files import UploadError, fetch_proof
 from app.utils.roster import RosterError, parse_roster
 from app.utils.security import current_user, csrf_token, roles_required
-
-from contextlib import contextmanager
-
-
-@contextmanager
-def db_cursor(dictionary=True):
-    with db.get_cursor(dictionary=dictionary) as cursor:
-        yield cursor
 
 
 def _parse_date(value, default):
@@ -165,46 +155,46 @@ def _search_students(viewer, query: str) -> list:
     A lecturer sees every student; both roles share the same department view so
     a handover between lecturers still finds the record.
     """
-    like = f'%{query}%'
-    needle = query.upper()
+    from app.models.firestore import store
 
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT u.id, u.name, u.roll_number, u.email, u.phone,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.student_id = u.id) AS total,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.student_id = u.id AND pr.status = 'APPROVED') AS approved,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.student_id = u.id AND pr.status = 'PENDING') AS pending
-               FROM users u
-               WHERE u.role = 'STUDENT' AND u.is_active = TRUE
-                 AND (u.roll_number ILIKE %s OR u.name ILIKE %s)
-               ORDER BY
-                 CASE WHEN u.roll_number = %s THEN 0
-                      WHEN u.roll_number ILIKE %s THEN 1
-                      ELSE 2 END,
-                 u.roll_number
-               LIMIT 40""",
-            (like, like, needle, f'{needle}%'),
-        )
-        students = cursor.fetchall()
+    needle = query.upper()
+    students = []
+    for row in store.documents('users', role=UserRole.STUDENT.value,
+                               is_active=True):
+        roll = (row.get('roll_number') or '').upper()
+        name = (row.get('name') or '').upper()
+        if needle and needle not in roll and needle not in name:
+            continue
+        students.append(row)
+
+    # Exact roll first, then roll prefixes, then the rest by roll number. This
+    # was a CASE expression in SQL; it is spelled out here because Firestore
+    # cannot order by an expression.
+    def rank(row):
+        roll = (row.get('roll_number') or '').upper()
+        if not needle:
+            return (0, roll)
+        if roll == needle:
+            return (0, roll)
+        if roll.startswith(needle):
+            return (1, roll)
+        return (2, roll)
+
+    students.sort(key=rank)
 
     output = []
-    for row in students:
+    for row in students[:40]:
         roll = (row.get('roll_number') or '').upper()
-        if needle and needle not in roll and needle not in (row.get('name') or '').upper():
-            continue
         record = PermissionModel.find_by_student(row['id'], limit=25)
         output.append({
             'id': row['id'],
-            'name': row['name'],
+            'name': row.get('name'),
             'roll_number': roll,
-            'email': row['email'],
+            'email': row.get('email'),
             'phone': row.get('phone'),
-            'total': row['total'],
-            'approved': row['approved'],
-            'pending': row['pending'],
+            'total': len(record),
+            'approved': sum(1 for r in record if r.status == RequestStatus.APPROVED),
+            'pending': sum(1 for r in record if r.status == RequestStatus.PENDING),
             'requests': record,
             'in_my_classes': _class_rolls_for(viewer, roll),
         })
@@ -213,16 +203,20 @@ def _search_students(viewer, query: str) -> list:
 
 def _class_rolls_for(viewer, roll_number: str) -> list:
     """Classes of the viewing lecturer that contain this roll number."""
+    from app.models.firestore import store
+
     if not roll_number:
         return []
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT c.id, c.name FROM class_members m
-               JOIN class_groups c ON c.id = m.class_id
-               WHERE m.roll_number = %s AND c.faculty_id = %s""",
-            (roll_number, viewer.id),
-        )
-        return cursor.fetchall()
+    class_ids = {row.get('class_id')
+                 for row in store.documents('class_members',
+                                            roll_number=roll_number)}
+    if not class_ids:
+        return []
+    return [
+        {'id': row['id'], 'name': row.get('name')}
+        for row in store.documents('class_groups', faculty_id=viewer.id)
+        if row['id'] in class_ids
+    ]
 
 
 @faculty_bp.route('/classes')
@@ -455,64 +449,37 @@ def _permissions_for_date(members, on_date: date):
     Only students on the roster are considered, and only rows that span the date
     are returned.
     """
-    rolls = [m.roll_number for m in members if m.is_linked]
+    from app.models.firestore import store
+    from app.models.permission import attach_students
+
+    rolls = {m.roll_number for m in members if m.is_linked}
     if not rolls:
         return {}, set()
 
-    placeholders = ', '.join(['%s'] * len(rolls))
-    with db_cursor() as cursor:
-        cursor.execute(
-            f"""SELECT pr.*, u.name AS student_name, u.roll_number
-                FROM permission_requests pr
-                JOIN users u ON u.id = pr.student_id
-                WHERE pr.status = 'APPROVED'
-                  AND pr.start_date <= %s AND pr.end_date >= %s
-                  AND u.roll_number IN ({placeholders})
-                ORDER BY u.roll_number, pr.start_date""",
-            [on_date, on_date] + rolls,
-        )
-        rows = cursor.fetchall()
+    records = []
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.APPROVED.value):
+        start, end = row.get('start_date'), row.get('end_date')
+        if start and end and start <= on_date <= end:
+            records.append(PermissionModel._to_request(row))
+    attach_students(records)
+    records = [r for r in records if (r.student_roll_number or '').upper() in rolls]
+    records.sort(key=lambda r: (r.student_roll_number or '',
+                                r.start_date or date.min))
 
     by_student = {}
     excused_member_ids = set()
     roll_to_member = {m.roll_number: m.id for m in members}
 
-    for row in rows:
-        student_id = row['student_id']
-        by_student.setdefault(student_id, []).append(
-            _row_to_request_with_student(row)
-        )
-        member_id = roll_to_member.get((row.get('roll_number') or '').upper())
+    for record in records:
+        by_student.setdefault(record.student_id, []).append(record)
+        member_id = roll_to_member.get(
+            (record.student_roll_number or '').upper())
         if member_id:
             excused_member_ids.add(member_id)
 
     return by_student, excused_member_ids
 
-
-def _row_to_request_with_student(row):
-    """Wrap a raw join row as a PermissionRequest plus student/reviewer fields."""
-    from app.models import PermissionRequest
-    from app.models.permission import _to_time
-
-    record = PermissionRequest(
-        id=row['id'],
-        student_id=row['student_id'],
-        permission_type=row['permission_type'],
-        reason=row['reason'],
-        start_date=row['start_date'],
-        end_date=row['end_date'],
-        start_time=_to_time(row.get('start_time')),
-        end_time=_to_time(row.get('end_time')),
-        status=row['status'],
-        assigned_faculty_id=row.get('assigned_faculty_id'),
-        created_at=row.get('created_at'),
-        updated_at=row.get('updated_at'),
-    )
-    record.student_name = row.get('student_name')
-    record.student_roll_number = row.get('roll_number')
-    record.student_identifier = row.get('roll_number') or row.get('student_name')
-    record.faculty_name = row.get('faculty_name')
-    return record
 
 
 @faculty_bp.route('/requests')
@@ -587,40 +554,33 @@ def reports():
 
 def _faculty_stats(faculty_id: int) -> dict:
     """Decision counts, type split, reason mix and a 7-day trend."""
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT
-                 (SELECT COUNT(*) FROM permission_requests
-                   WHERE assigned_faculty_id = %s AND status = 'PENDING') AS pending,
-                 (SELECT COUNT(*) FROM permission_requests
-                   WHERE assigned_faculty_id = %s AND status = 'APPROVED') AS approved,
-                 (SELECT COUNT(*) FROM permission_requests
-                   WHERE assigned_faculty_id = %s AND status = 'REJECTED') AS rejected,
-                 (SELECT COUNT(*) FROM approval_history
-                   WHERE faculty_id = %s) AS decisions""",
-            (faculty_id, faculty_id, faculty_id, faculty_id),
-        )
-        row = cursor.fetchone() or {}
-        stats = {k: int(v or 0) for k, v in row.items()}
+    from app.models.firestore import store
 
-        stats['total'] = stats['approved'] + stats['rejected'] + stats['pending']
+    requests = store.documents('permission_requests',
+                               assigned_faculty_id=faculty_id)
+    decisions = store.documents('approval_history', faculty_id=faculty_id)
 
-        cursor.execute(
-            """SELECT permission_type, COUNT(*) AS n FROM permission_requests
-               WHERE assigned_faculty_id = %s GROUP BY permission_type""",
-            (faculty_id,),
-        )
-        types = {r['permission_type']: r['n'] for r in cursor.fetchall()}
-        stats['leave'] = types.get('LEAVE', 0)
-        stats['classroom'] = types.get('CLASSROOM', 0)
+    stats = {'pending': 0, 'approved': 0, 'rejected': 0,
+             'decisions': len(decisions)}
+    types = {}
+    reasons = {}
+    for row in requests:
+        status = row.get('status')
+        if status in stats:
+            stats[status] += 1
+        kind = row.get('permission_type')
+        types[kind] = types.get(kind, 0) + 1
+        reason = row.get('reason')
+        reasons[reason] = reasons.get(reason, 0) + 1
 
-        cursor.execute(
-            """SELECT reason, COUNT(*) AS n FROM permission_requests
-               WHERE assigned_faculty_id = %s GROUP BY reason ORDER BY n DESC
-               LIMIT 8""",
-            (faculty_id,),
-        )
-        stats['reasons'] = cursor.fetchall()
+    stats['total'] = stats['approved'] + stats['rejected'] + stats['pending']
+    stats['leave'] = types.get(PermissionType.LEAVE.value, 0)
+    stats['classroom'] = types.get(PermissionType.CLASSROOM.value, 0)
+    stats['reasons'] = [
+        {'reason': reason, 'n': count}
+        for reason, count in sorted(reasons.items(),
+                                    key=lambda item: (-item[1], item[0] or ''))[:8]
+    ]
 
     stats['trend'] = _trend_for(faculty_id)
     stats['classes'] = ClassModel.find_for_faculty(faculty_id)
@@ -628,28 +588,40 @@ def _faculty_stats(faculty_id: int) -> dict:
 
 
 def _trend_for(faculty_id: int, days: int = 7) -> dict:
+    from app.models.firestore import store
+
     start = date.today() - timedelta(days=days - 1)
+
+    # Counted per day in Python rather than by casting the timestamp in SQL. The
+    # values are already converted to REPORT_TIMEZONE on the way out of the store,
+    # so the calendar day here is the same day the old AT TIME ZONE cast produced.
+    created_days = {}
+    for row in store.documents('permission_requests',
+                               assigned_faculty_id=faculty_id):
+        day = _report_day(row.get('created_at'))
+        if day:
+            created_days[day] = created_days.get(day, 0) + 1
+
+    decided_days = {}
+    for row in store.documents('approval_history', faculty_id=faculty_id):
+        day = _report_day(row.get('actioned_at'))
+        if day:
+            decided_days[day] = decided_days.get(day, 0) + 1
+
     labels, created, decided = [], [], []
-    tz = current_app.config['REPORT_TIMEZONE']
-    with db_cursor() as cursor:
-        for offset in range(days):
-            day = start + timedelta(days=offset)
-            labels.append(day.strftime('%d %b'))
-            cursor.execute(
-                f"""SELECT COUNT(*) AS n FROM permission_requests
-                    WHERE assigned_faculty_id = %s
-                      AND (created_at AT TIME ZONE '{tz}')::date = %s""",
-                (faculty_id, day),
-            )
-            created.append(cursor.fetchone()['n'])
-            cursor.execute(
-                f"""SELECT COUNT(*) AS n FROM approval_history
-                    WHERE faculty_id = %s
-                      AND (actioned_at AT TIME ZONE '{tz}')::date = %s""",
-                (faculty_id, day),
-            )
-            decided.append(cursor.fetchone()['n'])
+    for offset in range(days):
+        day = start + timedelta(days=offset)
+        labels.append(day.strftime('%d %b'))
+        created.append(created_days.get(day, 0))
+        decided.append(decided_days.get(day, 0))
     return {'labels': labels, 'created': created, 'decided': decided}
+
+
+def _report_day(value):
+    """The calendar day a timestamp belongs to, in REPORT_TIMEZONE."""
+    if not isinstance(value, datetime):
+        return None
+    return value.date()
 
 
 def _status_filter(value):
@@ -673,42 +645,55 @@ def _type_filter(value):
 def _filtered_requests(status_filter, type_filter, date_from, date_to,
                       search, limit=200, faculty_id=None):
     """Shared filter query used by the faculty browser and HOD request list."""
-    clauses, params = [], []
+    from app.models.firestore import store
+    from app.models.permission import attach_students
 
+    filters = {}
+    # Both are single-field equality filters, which Firestore serves from
+    # automatic indexes. Only an ordering would need a composite index, and that
+    # is done in Python below.
     if status_filter:
-        clauses.append('pr.status = %s')
-        params.append(status_filter.value)
-    if type_filter:
-        clauses.append('pr.permission_type = %s')
-        params.append(type_filter.value)
-    if date_from:
-        clauses.append('pr.end_date >= %s')
-        params.append(date_from)
-    if date_to:
-        clauses.append('pr.start_date <= %s')
-        params.append(date_to)
-    if search:
-        clauses.append('(u.roll_number ILIKE %s OR u.name ILIKE %s)')
-        params.extend([f'%{search}%', f'%{search}%'])
+        filters['status'] = status_filter.value
     if faculty_id:
-        clauses.append('pr.assigned_faculty_id = %s')
-        params.append(faculty_id)
+        filters['assigned_faculty_id'] = faculty_id
 
-    where = ('WHERE ' + ' AND '.join(clauses)) if clauses else ''
+    requests = [PermissionModel._to_request(row)
+                for row in store.documents('permission_requests', **filters)]
 
-    with db_cursor() as cursor:
-        cursor.execute(
-            f"""SELECT pr.*, u.name AS student_name, u.roll_number,
-                       f.name AS faculty_name
-                FROM permission_requests pr
-                JOIN users u ON u.id = pr.student_id
-                LEFT JOIN users f ON f.id = pr.assigned_faculty_id
-                {where}
-                ORDER BY pr.created_at DESC
-                LIMIT {int(limit)}""",
-            params,
-        )
-        return [_row_to_request_with_student(row) for row in cursor.fetchall()]
+    if type_filter:
+        requests = [r for r in requests if r.permission_type == type_filter]
+    if date_from:
+        requests = [r for r in requests if r.end_date and r.end_date >= date_from]
+    if date_to:
+        requests = [r for r in requests if r.start_date and r.start_date <= date_to]
+
+    attach_students(requests)
+
+    if search:
+        needle = search.upper()
+        # The search runs over the student's name and roll number, which live on
+        # the user rather than the request. A single read of the students involved
+        # beats a read per request.
+        students = {r.student_id: store.get('users', r.student_id)
+                    for r in requests}
+        matching = {
+            student_id for student_id, row in students.items()
+            if row and needle in f'{row.get("roll_number") or ""} {row.get("name") or ""}'.upper()
+        }
+        requests = [r for r in requests if r.student_id in matching]
+
+    faculty_names = {}
+    for record in requests:
+        faculty_id_value = record.assigned_faculty_id
+        if faculty_id_value and faculty_id_value not in faculty_names:
+            row = store.get('users', faculty_id_value)
+            faculty_names[faculty_id_value] = row.get('name') if row else None
+        record.faculty_name = faculty_names.get(faculty_id_value)
+
+    requests.sort(key=lambda r: (r.created_at is None,
+                                 r.created_at.isoformat() if hasattr(r.created_at, 'isoformat') else '',
+                                 -int(r.id or 0)))
+    return requests[:int(limit)]
 
 
 @faculty_bp.route('/requests/<int:request_id>/letter')

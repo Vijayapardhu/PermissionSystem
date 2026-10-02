@@ -1,26 +1,18 @@
 from collections import Counter
-from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from flask import (
-    Blueprint, current_app, flash, redirect, render_template, request, url_for,
+    Blueprint, flash, redirect, render_template, request, url_for,
 )
 
 from app.models import PermissionType, RequestStatus, UserRole
 from app.models.classes import ClassModel, MemberModel
-from app.models.database import db
 from app.models.permission import PermissionModel
 from app.models.user import UserModel
 from app.permissions.service import categorize_reason
 from app.utils.security import current_user, roles_required
 
 hod_bp = Blueprint('hod', __name__, url_prefix='/hod')
-
-
-@contextmanager
-def db_cursor(dictionary=True):
-    with db.get_cursor(dictionary=dictionary) as cursor:
-        yield cursor
 
 
 def _parse(value, default=None):
@@ -140,38 +132,55 @@ def requests():
 @roles_required(UserRole.HOD)
 def students():
     """Student directory with permission counts."""
+    from app.models.firestore import store
+
     user = current_user()
     search = (request.args.get('q') or '').strip()
 
-    with db_cursor() as cursor:
-        if search:
-            like = f'%{search}%'
-            cursor.execute(
-                """SELECT u.*,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id) AS total,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='APPROVED') AS approved,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='PENDING') AS pending,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='REJECTED') AS rejected,
-                          (SELECT COUNT(*) FROM class_members m WHERE m.student_id = u.id) AS classes
-                   FROM users u
-                   WHERE u.role = 'STUDENT' AND u.is_active = TRUE
-                     AND (u.roll_number ILIKE %s OR u.name ILIKE %s)
-                   ORDER BY u.roll_number LIMIT 200""",
-                (like, like),
-            )
-        else:
-            cursor.execute(
-                """SELECT u.*,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id) AS total,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='APPROVED') AS approved,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='PENDING') AS pending,
-                          (SELECT COUNT(*) FROM permission_requests pr WHERE pr.student_id = u.id AND pr.status='REJECTED') AS rejected,
-                          (SELECT COUNT(*) FROM class_members m WHERE m.student_id = u.id) AS classes
-                   FROM users u
-                   WHERE u.role = 'STUDENT' AND u.is_active = TRUE
-                   ORDER BY u.roll_number LIMIT 200"""
-            )
-        students = cursor.fetchall()
+    rows = store.documents('users', role=UserRole.STUDENT.value, is_active=True)
+
+    if search:
+        needle = search.upper()
+        rows = [row for row in rows
+                if needle in (row.get('roll_number') or '').upper()
+                or needle in (row.get('name') or '').upper()]
+
+    # The counts were five correlated subqueries per student. They are counted
+    # over two reads of the collections instead: one pass each, then a lookup.
+    # Firestore has no subquery, and one read per student would be worse.
+    per_student = Counter()
+    class_counts = Counter()
+    for row in store.documents('permission_requests'):
+        per_student[row.get('student_id')] += 1
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.APPROVED.value):
+        per_student[(row.get('student_id'), 'approved')] += 1
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.PENDING.value):
+        per_student[(row.get('student_id'), 'pending')] += 1
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.REJECTED.value):
+        per_student[(row.get('student_id'), 'rejected')] += 1
+    for row in store.documents('class_members'):
+        class_counts[row.get('student_id')] += 1
+
+    students = []
+    for row in rows:
+        student_id = row.get('id')
+        students.append({
+            'id': student_id,
+            'name': row.get('name'),
+            'roll_number': row.get('roll_number'),
+            'email': row.get('email'),
+            'phone': row.get('phone'),
+            'total': per_student[student_id],
+            'approved': per_student[(student_id, 'approved')],
+            'pending': per_student[(student_id, 'pending')],
+            'rejected': per_student[(student_id, 'rejected')],
+            'classes': class_counts[student_id],
+        })
+    students.sort(key=lambda s: s['roll_number'] or '')
+    students = students[:200]
 
     return render_template(
         'hod/students.html', user=user, students=students, search=search
@@ -182,26 +191,44 @@ def students():
 @roles_required(UserRole.HOD)
 def faculty_workload():
     """Open queue and decision counts per lecturer."""
+    from app.models.firestore import store
+
     user = current_user()
 
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT u.id, u.name, u.email,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.assigned_faculty_id = u.id AND pr.status = 'PENDING') AS pending,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.assigned_faculty_id = u.id AND pr.status = 'APPROVED') AS approved,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.assigned_faculty_id = u.id AND pr.status = 'REJECTED') AS rejected,
-                      (SELECT COUNT(*) FROM approval_history ah
-                        WHERE ah.faculty_id = u.id) AS decisions,
-                      (SELECT COUNT(*) FROM class_groups c
-                        WHERE c.faculty_id = u.id) AS classes
-               FROM users u
-               WHERE u.role = 'LECTURER' AND u.is_active = TRUE
-               ORDER BY pending DESC, u.name"""
-        )
-        lecturers = cursor.fetchall()
+    # Counted per lecturer in Python. The old query ran a subquery per lecturer
+    # for each of five counts; Firestore cannot do that at all, and one pass over
+    # each collection answers every column.
+    assigned = Counter()
+    for status in (RequestStatus.PENDING, RequestStatus.APPROVED,
+                   RequestStatus.REJECTED):
+        for row in store.documents('permission_requests',
+                                   status=status.value):
+            faculty_id = row.get('assigned_faculty_id')
+            if faculty_id:
+                assigned[(faculty_id, status.value)] += 1
+    decisions = Counter()
+    for row in store.documents('approval_history'):
+        decisions[row.get('faculty_id')] += 1
+    class_counts = Counter()
+    for row in store.documents('class_groups'):
+        class_counts[row.get('faculty_id')] += 1
+
+    lecturers = [
+        {
+            'id': user_row['id'],
+            'name': user_row.get('name'),
+            'email': user_row.get('email'),
+            'pending': assigned[(user_row['id'], RequestStatus.PENDING.value)],
+            'approved': assigned[(user_row['id'], RequestStatus.APPROVED.value)],
+            'rejected': assigned[(user_row['id'], RequestStatus.REJECTED.value)],
+            'decisions': decisions[user_row['id']],
+            'classes': class_counts[user_row['id']],
+        }
+        for user_row in store.documents('users',
+                                        role=UserRole.LECTURER.value,
+                                        is_active=True)
+    ]
+    lecturers.sort(key=lambda l: (-l['pending'], l['name'] or ''))
 
     return render_template(
         'hod/faculty.html', user=user, lecturers=lecturers
@@ -212,67 +239,107 @@ def faculty_workload():
 @roles_required(UserRole.HOD)
 def classes():
     """Every class across all lecturers."""
+    from app.models.firestore import store
+
     user = current_user()
     MemberModel.relink_unresolved()
 
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT c.*, u.name AS faculty_name,
-                      (SELECT COUNT(*) FROM class_members m WHERE m.class_id = c.id) AS member_count,
-                      (SELECT COUNT(*) FROM class_members m
-                        WHERE m.class_id = c.id AND m.student_id IS NOT NULL) AS linked_count
-               FROM class_groups c
-               JOIN users u ON u.id = c.faculty_id
-               ORDER BY u.name, c.created_at DESC"""
-        )
-        groups = cursor.fetchall()
+    faculty_names = {
+        row['id']: row.get('name')
+        for row in store.documents('users')
+    }
+    member_counts = Counter()
+    linked_counts = Counter()
+    for row in store.documents('class_members'):
+        member_counts[row.get('class_id')] += 1
+        if row.get('student_id'):
+            linked_counts[row.get('class_id')] += 1
+
+    groups = [
+        {
+            'id': row['id'],
+            'name': row.get('name'),
+            'section_code': row.get('section_code'),
+            'academic_year': row.get('academic_year'),
+            'faculty_id': row.get('faculty_id'),
+            'created_at': row.get('created_at'),
+            'faculty_name': faculty_names.get(row.get('faculty_id')),
+            'member_count': member_counts[row['id']],
+            'linked_count': linked_counts[row['id']],
+        }
+        for row in store.documents('class_groups')
+    ]
+    # Lecturer name ascending, then newest class first -- the order the query
+    # used to state. Sorted twice on purpose: Python's sort is stable, so the
+    # first pass fixes the recency and the second keeps it inside each lecturer.
+    groups.sort(key=lambda g: _sort_key(g['created_at']), reverse=True)
+    groups.sort(key=lambda g: g['faculty_name'] or '')
 
     return render_template('hod/classes.html', user=user, classes=groups)
+
+
+def _sort_key(value) -> str:
+    """A timestamp or date as text, so two orderings of different types compare."""
+    return value.isoformat() if hasattr(value, 'isoformat') else str(value or '')
 
 
 @hod_bp.route('/reports')
 @roles_required(UserRole.HOD)
 def reports():
     """Department analytics: trends, reasons, types and per-faculty volume."""
+    from app.models.firestore import store
+
     user = current_user()
     stats = PermissionModel.get_stats_for_hod()
 
-    tz = current_app.config['REPORT_TIMEZONE']
-    with db_cursor() as cursor:
-        # Cast through REPORT_TIMEZONE, not the session zone. The session runs in
-        # UTC, so without this a 23:30 IST submission would chart under the
-        # following day.
-        cursor.execute(
-            f"""SELECT (created_at AT TIME ZONE '{tz}')::date AS day, COUNT(*) AS n
-               FROM permission_requests
-               WHERE (created_at AT TIME ZONE '{tz}')::date
-                     >= (now() AT TIME ZONE '{tz}')::date - INTERVAL '29 days'
-               GROUP BY (created_at AT TIME ZONE '{tz}')::date ORDER BY day"""
-        )
-        rows = cursor.fetchall()
+    requests = store.documents('permission_requests')
 
-        cursor.execute(
-            """SELECT f.name AS faculty_name,
-                      (SELECT COUNT(*) FROM permission_requests pr
-                        WHERE pr.assigned_faculty_id = f.id) AS assigned
-               FROM users f WHERE f.role = 'LECTURER' AND f.is_active = TRUE
-               ORDER BY assigned DESC"""
-        )
-        by_faculty = cursor.fetchall()
+    # The trend is bucketed in Python. Timestamps come back from the store already
+    # converted to REPORT_TIMEZONE, so the calendar day here is the same day the
+    # AT TIME ZONE cast used to produce -- and the 23:30 IST submission still
+    # charts under the day it was filed.
+    by_day = Counter()
+    for row in requests:
+        created = row.get('created_at')
+        if isinstance(created, datetime):
+            by_day[created.date()] += 1
 
-        cursor.execute(
-            """SELECT u.roll_number, u.name,
-                      COUNT(*) AS total,
-                      COUNT(*) FILTER (WHERE pr.status = 'APPROVED') AS approved
-               FROM permission_requests pr JOIN users u ON u.id = pr.student_id
-               GROUP BY u.id, u.roll_number, u.name
-               ORDER BY total DESC LIMIT 10"""
-        )
-        top_students = cursor.fetchall()
+    by_faculty = []
+    for row in store.documents('users', role=UserRole.LECTURER.value,
+                               is_active=True):
+        by_faculty.append({
+            'faculty_name': row.get('name'),
+            'assigned': sum(1 for r in requests
+                            if r.get('assigned_faculty_id') == row['id']),
+        })
+    by_faculty.sort(key=lambda f: (-f['assigned'], f['faculty_name'] or ''))
+
+    totals = Counter()
+    approved = Counter()
+    students = {}
+    for row in requests:
+        student_id = row.get('student_id')
+        totals[student_id] += 1
+        if row.get('status') == RequestStatus.APPROVED.value:
+            approved[student_id] += 1
+    for student_id in {r.get('student_id') for r in requests if r.get('student_id')}:
+        row = store.get('users', student_id)
+        if row:
+            students[student_id] = row
+
+    top_students = [
+        {
+            'roll_number': (students[student_id] or {}).get('roll_number'),
+            'name': (students[student_id] or {}).get('name'),
+            'total': count,
+            'approved': approved[student_id],
+        }
+        for student_id, count in totals.most_common(10)
+        if student_id in students
+    ]
 
     # Build a continuous 30-day series so the chart has no gaps.
     start = date.today() - timedelta(days=29)
-    by_day = {r['day']: r['n'] for r in rows}
     labels, series = [], []
     for offset in range(30):
         day = start + timedelta(days=offset)

@@ -172,15 +172,20 @@ def faculty_login():
 
 def _faculty_accounts():
     """Staff accounts offered by the local development picker."""
-    from app.models.database import db
+    from app.models import UserRole
+    from app.models.firestore import store
     try:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """SELECT email, name, role FROM users
-                   WHERE role IN ('LECTURER', 'HOD') AND is_active = TRUE
-                   ORDER BY CASE role WHEN 'HOD' THEN 0 ELSE 1 END, name"""
-            )
-            return cursor.fetchall()
+        accounts = []
+        for role in (UserRole.HOD.value, UserRole.LECTURER.value):
+            rows = store.documents('users', role=role, is_active=True)
+            for row in rows:
+                accounts.append({
+                    'email': row.get('email'),
+                    'name': row.get('name'),
+                    'role': row.get('role'),
+                })
+        accounts.sort(key=lambda a: a['name'] or '')
+        return accounts
     except Exception:
         return []
 
@@ -383,18 +388,24 @@ def current_app_domain() -> str:
 
 def _dev_accounts():
     """Seed the dev picker with a representative account per role."""
-    from app.models.database import db
+    from app.models import UserRole
+    from app.models.firestore import store
     try:
-        with db.get_cursor() as cursor:
-            cursor.execute(
-                """SELECT email, name, role, roll_number FROM users
-                   WHERE is_active = TRUE
-                   ORDER BY CASE role WHEN 'HOD' THEN 0
-                                       WHEN 'LECTURER' THEN 1
-                                       ELSE 2 END,
-                            roll_number IS NULL, roll_number
-                   LIMIT 12"""
-            )
-            return cursor.fetchall()
+        # One representative per role, in the order the roles are listed above,
+        # so the picker shows an HOD, a lecturer and a student.
+        accounts = []
+        for role in (UserRole.HOD.value, UserRole.LECTURER.value,
+                     UserRole.STUDENT.value):
+            rows = store.documents('users', role=role, is_active=True)
+            rows.sort(key=lambda r: (r.get('roll_number') is None,
+                                     r.get('roll_number') or ''))
+            for row in rows[:4]:
+                accounts.append({
+                    'email': row.get('email'),
+                    'name': row.get('name'),
+                    'role': row.get('role'),
+                    'roll_number': row.get('roll_number'),
+                })
+        return accounts[:12]
     except Exception:
         return []

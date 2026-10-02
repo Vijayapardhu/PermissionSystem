@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from datetime import date, datetime, time
 
 from flask import (
@@ -7,7 +6,6 @@ from flask import (
 
 from app.models import RequestStatus, UserRole
 from app.models.classes import MemberModel
-from app.models.database import db
 from app.models.permission import ApprovalModel, PermissionModel, ProofModel
 from app.models.user import UserModel
 from app.permissions.service import ValidationError, cancel_request, submit_request
@@ -15,12 +13,6 @@ from app.utils.qr import letter_qr
 from app.utils.security import current_user, login_required, roles_required
 
 student_bp = Blueprint('student', __name__, url_prefix='/student')
-
-
-@contextmanager
-def db_cursor(dictionary=True):
-    with db.get_cursor(dictionary=dictionary) as cursor:
-        yield cursor
 
 
 @student_bp.route('/dashboard')
@@ -127,21 +119,27 @@ def request_detail(request_id: int):
 @roles_required(UserRole.STUDENT)
 def classes_for_student():
     """Classes this student belongs to, and their permissions in each."""
+    from app.models.firestore import store
+
     user = current_user()
 
     MemberModel.relink_unresolved()
 
-    with db_cursor() as cursor:
-        cursor.execute(
-            """SELECT c.id, c.name, c.section_code, c.academic_year, u.name AS faculty_name
-               FROM class_members m
-               JOIN class_groups c ON c.id = m.class_id
-               LEFT JOIN users u ON u.id = c.faculty_id
-               WHERE m.student_id = %s AND m.enrolled = TRUE
-               ORDER BY c.name""",
-            (user.id,),
-        )
-        groups = cursor.fetchall()
+    # Roster rows, then the classes they point at, then their lecturers. Three
+    # reads instead of one join, and each is a single-field lookup.
+    class_ids = {
+        row.get('class_id')
+        for row in store.documents('class_members', student_id=user.id)
+        if row.get('enrolled', True)
+    }
+    groups = [row for row in store.documents('class_groups')
+              if row.get('id') in class_ids]
+    faculty_names = {
+        row['id']: row.get('name') for row in store.documents('users')
+    }
+    for group in groups:
+        group['faculty_name'] = faculty_names.get(group.get('faculty_id'))
+    groups.sort(key=lambda g: g.get('name') or '')
 
     today = date.today()
     active = PermissionModel.get_today_approved()

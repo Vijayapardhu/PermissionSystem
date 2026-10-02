@@ -11,19 +11,23 @@ import os
 import re
 import sys
 
+from datetime import date, datetime, time, timezone
+from pathlib import Path
+
 os.environ.setdefault('SECRET_KEY', 'test-secret')
 os.environ.setdefault('DEV_MODE', 'true')
-# Force an unroutable DSN. setdefault would not help here: with a populated
-# .env this harness would open real pools against Supabase and exhaust the
-# connection limit. Every create_app() below makes its own pool.
-os.environ['DATABASE_URL'] = 'postgresql://nobody:nobody@127.0.0.1:1/nobody'
-# Keep pool waits short. DB_POOL_TIMEOUT is how long a checkout blocks, and this
-# harness has no database to wait for.
-os.environ['DB_POOL_TIMEOUT'] = '1'
-os.environ['DB_CONNECT_TIMEOUT'] = '1'
-# One attempt: the retry exists to ride out a real outage, and this harness has
-# no database to retry against, so a second attempt is pure runtime.
-os.environ['DB_POOL_RETRIES'] = '1'
+# Never let the harness reach the network. Blanking the credentials leaves the
+# store unconfigured, which is the same state as a fresh deployment: every
+# data-backed request reports the store as unavailable, and nothing below has to
+# special-case a live database being present.
+os.environ['FIREBASE_CREDENTIALS_JSON'] = ''
+os.environ['FIREBASE_CREDENTIALS_PATH'] = ''
+os.environ['FIRESTORE_EMULATOR_HOST'] = ''
+# Short budgets: this harness has no store to wait for, so a long timeout is pure
+# runtime, and the retry exists to ride out a real blip.
+os.environ['FIRESTORE_TIMEOUT_SECONDS'] = '1'
+os.environ['FIRESTORE_RETRIES'] = '1'
+os.environ.setdefault('FIREBASE_PROJECT_ID', 'permission-system-test')
 os.environ.setdefault('SUPABASE_URL', 'https://fake.supabase.co')
 os.environ.setdefault('SUPABASE_SECRET_KEY', 'sb_secret_fake')
 os.environ.setdefault('SUPABASE_STORAGE_BUCKET', 'proofs')
@@ -748,43 +752,35 @@ with csrf_client.session_transaction() as sess:
 # The dev sign-in form only renders when accounts exist. Force it to render so
 # the csrf_token() call inside it is always exercised, which is where a shadowed
 # context value would surface.
-_real_get_cursor = None
+from app.models import firestore as store_mod
 
-from app.models.database import db as _db
-
-try:
-    _real_get_cursor = _db.get_cursor
-except Exception:
-    pass
+_real_documents = store_mod.store.documents
 
 
-class _FakeCursor:
-    def __enter__(self):
-        return self
+def _accounts_documents(name, **filters):
+    """Stand in for the store so the dev picker has something to render.
 
-    def __exit__(self, *args):
-        return False
-
-    def execute(self, sql, params=None):
-        return None
-
-    def fetchone(self):
-        return {'email': '26b21cs058@adityauniversity.in', 'name': '26B21CS058',
-                'role': 'STUDENT', 'roll_number': '26B21CS058'}
-
-    def fetchall(self):
-        return [{'email': '26b21cs058@adityauniversity.in', 'name': '26B21CS058',
-                 'role': 'STUDENT', 'roll_number': '26B21CS058'}]
-
-
-import contextlib
-
-@contextlib.contextmanager
-def _fake_cursor(dictionary=True):
-    yield _FakeCursor()
+    The login page only renders its form when there are accounts to pick, and the
+    harness deliberately runs with an unconfigured store, so the one account the
+    form needs is faked here. Only the users collection is answered; anything else
+    still goes to the real store, which keeps the rest of the harness honest.
+    """
+    if name != 'users':
+        return _real_documents(name, **filters)
+    rows = [
+        {'id': 1, 'email': '26b21cs058@adityauniversity.in',
+         'name': '26B21CS058', 'role': 'STUDENT',
+         'roll_number': '26B21CS058', 'is_active': True},
+        {'id': 2, 'email': 'lecturer1.cse@adityauniversity.in',
+         'name': 'Dr. Anil Kumar', 'role': 'LECTURER',
+         'roll_number': None, 'is_active': True},
+    ]
+    for field, value in filters.items():
+        rows = [row for row in rows if row.get(field) == value]
+    return rows
 
 
-_db.get_cursor = _fake_cursor
+store_mod.store.documents = _accounts_documents
 try:
     login_with_form = csrf_client.get('/auth/login')
     html_form = login_with_form.get_data(as_text=True)
@@ -826,8 +822,7 @@ try:
         check('POST /auth/logout with a valid token is accepted',
               response.status_code == 302, f'got {response.status_code}')
 finally:
-    if _real_get_cursor is not None:
-        _db.get_cursor = _real_get_cursor
+    store_mod.store.documents = _real_documents
 
 # GET must remain unaffected.
 response = csrf_client.get('/student/dashboard')
@@ -876,29 +871,39 @@ check('POST /auth/logout redirects', _r.status_code == 302,
 _health_app = create_app()
 _health_client = _health_app.test_client()
 _h1 = _health_client.get('/healthz')
-check('/healthz returns 200 even with no database', _h1.status_code == 200,
+check('/healthz returns 200 even with no store', _h1.status_code == 200,
       f'got {_h1.status_code}; a failing probe makes Render restart the service')
 _h2 = _health_client.get('/healthz')
-check('/healthz reports the database separately from liveness',
+check('/healthz reports the store separately from liveness',
       _h2.get_json().get('status') == 'ok'
       and _h2.get_json().get('database') in ('ok', 'unreachable', 'unknown'),
       _h2.get_json())
 
-# Pool sizing: a worker deadlocks against itself if it serves more threads than
-# the pool can hand out connections to.
-_pool_cfg = create_app().config
-check('pool is larger than the threads one worker serves',
-      _pool_cfg['DB_POOL_MAX'] >= 4,
-      f"DB_POOL_MAX={_pool_cfg['DB_POOL_MAX']} against 4 --threads per worker")
-check('pool checkout timeout is separate from the connect timeout',
-      'DB_POOL_TIMEOUT' in _pool_cfg and 'DB_CONNECT_TIMEOUT' in _pool_cfg)
-check('pool checkout fails fast rather than hanging',
-      _pool_cfg['DB_POOL_TIMEOUT'] <= 5,
-      f"DB_POOL_TIMEOUT={_pool_cfg['DB_POOL_TIMEOUT']}s; a longer wait freezes "
-      'the page before it errors')
-check('health probe verdict is cached so polling costs no connection',
-      _pool_cfg['HEALTH_DB_CACHE_SECONDS'] >= 10,
-      'an uncached probe takes a pooled connection on every poll')
+# Store budgets. A request that hangs on a stalled call holds a gunicorn worker
+# thread, and the thread is what the page is waiting on. The harness overrides
+# both to 1s above so a failing store fails fast here, so the shipped defaults are
+# read out of config.py rather than off the running app.
+_store_cfg = create_app().config
+_config_source = Path('config.py').read_text(encoding='utf-8')
+check('a stalled call gives up rather than hanging',
+      re.search(r"FIRESTORE_TIMEOUT_SECONDS'\)\s*or\s*(\d+)", _config_source)
+      is not None
+      and 0 < int(re.search(r"FIRESTORE_TIMEOUT_SECONDS'\)\s*or\s*(\d+)",
+                            _config_source).group(1)) <= 10,
+      'a longer wait freezes the page before it errors')
+check('a failed call is retried at least once, so a blip is survivable',
+      re.search(r"FIRESTORE_RETRIES'\)\s*or\s*(\d+)", _config_source) is not None
+      and int(re.search(r"FIRESTORE_RETRIES'\)\s*or\s*(\d+)",
+                        _config_source).group(1)) >= 2,
+      'FIRESTORE_RETRIES defaults below 2')
+check('health probe verdict is cached so polling costs no query',
+      _store_cfg['HEALTH_DB_CACHE_SECONDS'] >= 10,
+      'an uncached probe costs a round trip on every poll')
+check('config carries no Postgres settings at all',
+      not any(key == 'DATABASE_URL' or key.startswith('DB_')
+              for key in _store_cfg),
+      str(sorted(key for key in _store_cfg
+                 if key == 'DATABASE_URL' or key.startswith('DB_'))))
 
 # Static assets: long max-age is only safe because the URL is versioned.
 _cache_app = create_app()
@@ -1115,8 +1120,8 @@ print('=' * 70)
 import os as _os
 
 for required in ['setup.py', 'requirements.txt', '.env.example',
-                 'migrations/schema.sql', 'config.py', 'wsgi.py', 'README.md',
-                 'render.yaml', 'Procfile']:
+                 'migrations/seed_firestore.py', 'config.py', 'wsgi.py',
+                 'README.md', 'render.yaml', 'Procfile']:
     check(f'{required} present', _os.path.isfile(required))
 
 # A top-level app.py would be unreachable: the app/ package shadows it, so
@@ -1136,12 +1141,15 @@ for package in ['Flask', 'msal', 'python-dotenv', 'gunicorn',
     check(f'requirements pins {package}',
           re.search(rf'^{re.escape(package)}==', _req, re.M) is not None)
 
-# The database driver and storage client pin with extras, so a plain
-# "package==" match would miss them.
-check('requirements pins the Postgres driver',
-      re.search(r'^psycopg\[binary\]==', _req, re.M) is not None)
-check('requirements pins the connection pool',
-      re.search(r'^psycopg-pool==', _req, re.M) is not None)
+# The store client and the storage client both pin exactly, so a plain
+# "package==" match would miss nothing -- but a stale Postgres driver left in the
+# list would still be installed on every deploy, so assert its absence.
+check('requirements pins the Firestore client',
+      re.search(r'^google-cloud-firestore==', _req, re.M) is not None)
+check('requirements pins the proof storage client',
+      re.search(r'^boto3==', _req, re.M) is not None)
+check('requirements no longer installs the Postgres driver',
+      'psycopg' not in _req, 'psycopg is still pinned')
 check('requirements no longer pulls the MySQL driver',
       'mysql' not in _req.lower())
 
@@ -1154,16 +1162,19 @@ check('Pillow declared (branding assertions)',
 # Host, port and debug must be configurable, not hardcoded.
 _env_example = open('.env.example', encoding='utf-8').read()
 for key in ['HOST', 'PORT', 'FLASK_DEBUG', 'SESSION_COOKIE_SECURE',
-            'IDLE_TIMEOUT_SECONDS', 'DATABASE_URL', 'SUPABASE_URL',
+            'IDLE_TIMEOUT_SECONDS', 'FIREBASE_PROJECT_ID', 'FIRESTORE_DATABASE',
+            'FIREBASE_CREDENTIALS_PATH', 'SUPABASE_URL',
             'SUPABASE_SECRET_KEY', 'SUPABASE_STORAGE_BUCKET',
-            'CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID',
+            'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY',
+            'R2_BUCKET', 'CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID',
             'REDIRECT_URI', 'DEV_MODE']:
     check(f'.env.example documents {key}',
           re.search(rf'^{key}=', _env_example, re.M) is not None)
 
 check('.env.example carries no real credentials',
       not re.search(r'PASTE_[A-Z_]*HERE', _env_example)
-      and 'CsePerm' not in _env_example)
+      and 'CsePerm' not in _env_example
+      and 'private_key' not in _env_example)
 
 _wsgi_py = open('wsgi.py', encoding='utf-8').read()
 check('wsgi.py reads host from the environment',
@@ -1179,11 +1190,11 @@ check('wsgi.py exposes a module-level app for the WSGI servers',
       is not None,
       'gunicorn loads wsgi:app and needs a module-level app')
 
-# The README must document a complete install and the Render/Supabase deploy.
+# The README must document a complete install and the Render deploy.
 _readme = open('README.md', encoding='utf-8').read()
-for phrase in ['python setup.py', 'git clone', 'waitress', 'gunicorn',
-               'AADSTS50011', 'DEV_MODE', 'Supabase', 'Render',
-               'psql', 'healthz']:
+for phrase in ['python setup.py', 'git clone', 'gunicorn',
+               'AADSTS50011', 'DEV_MODE', 'Firestore', 'Render',
+               'seed_firestore.py', 'healthz']:
     check(f'README documents {phrase!r}', phrase in _readme)
 
 # The deployment entry points must agree with each other.
@@ -1192,10 +1203,10 @@ check('render.yaml starts gunicorn',
       'gunicorn' in _render_yaml and 'wsgi:app' in _render_yaml)
 check('render.yaml points the health check at /healthz',
       'healthCheckPath: /healthz' in _render_yaml)
-check('render.yaml takes DATABASE_URL from the environment, not a literal',
-      re.search(r'- key: DATABASE_URL\s*\n\s*sync: false', _render_yaml)
-      is not None)
-check('render.yaml declares no database instance (Supabase hosts it)',
+check('render.yaml takes the credentials from the environment, not a literal',
+      re.search(r'- key: FIREBASE_CREDENTIALS_JSON\s*\n\s*sync: false',
+                _render_yaml) is not None)
+check('render.yaml declares no database instance (Firestore and R2 host it)',
       'type: postgres' not in _render_yaml and not re.search(
           r'^databases:', _render_yaml, re.M))
 check('render.yaml ships DEV_MODE false',
@@ -1219,7 +1230,7 @@ check('Procfile targets the real module:app, not app:app',
 check('setup.py performs all install steps',
       all(step in open('setup.py', encoding='utf-8').read()
           for step in ['venv', 'requirements.txt', '.env.example',
-                       'schema.sql']))
+                       'seed_firestore.py']))
 
 # setup.py is a CLI script and runs on import by design, but nothing in the
 # application may import it.
@@ -1823,351 +1834,380 @@ finally:
 
 print()
 print('=' * 70)
-print('12. CONNECTION POOL BEHAVIOUR')
+print('12. THE FIRESTORE DATA LAYER')
 print('=' * 70)
 
-# Every symptom this section guards against reached the browser as the same
-# "user directory is temporarily unavailable" message: a pool that could not
-# connect, and a model call that checked out a second connection while already
-# holding one. With one gunicorn thread per pool slot the second one can starve
-# the pool against itself, so it is a hang, not just a wasted socket.
+# This is the layer that used to be a connection pool plus SQL, and the rules it
+# has to keep are the ones the pool sections used to check: a store that cannot be
+# reached must fail as one exception type the routes already handle, a blip must
+# be survivable, a bad request must not be retried, and nothing above this layer
+# may see a driver exception.
+#
+# The client is faked rather than stubbed at the model layer, so the type mapping,
+# the id counter, the filters and the retry wrapper are the real code under test.
 
 import threading as _threading
 
-from app.models import database as db_mod
-from app.models.database import (
-    Database, DatabaseUnavailable, describe_dsn, reject_dead_connection,
+from google.api_core.exceptions import ServiceUnavailable
+from google.cloud.firestore_v1.base_query import FieldFilter
+
+from app.models import firestore as store_mod
+from app.models.firestore import (
+    DatabaseUnavailable, Store, to_python_value, to_timestamp,
 )
-from psycopg import OperationalError
-from psycopg_pool import PoolTimeout
+from config import Config
+from flask import Flask
 
 
-class _PoolCursor:
-    def __init__(self, conn):
-        self.conn = conn
-        self.closed = False
+class _FakeSnapshot:
+    def __init__(self, data):
+        self._data = data
 
-    def __enter__(self):
-        return self
+    @property
+    def exists(self):
+        return self._data is not None
 
-    def __exit__(self, *exc):
-        self.close()
-        return False
+    def to_dict(self):
+        return dict(self._data) if self._data is not None else None
 
-    def close(self):
-        self.closed = True
-
-    def execute(self, sql, params=None):
-        self.conn.log.append(sql)
-
-    def fetchone(self):
-        return {'ok': 1}
-
-    def fetchall(self):
-        return []
+    def get(self, field):
+        return (self._data or {}).get(field)
 
 
-class _PoolConn:
+class _FakeQuery:
+    """Equality filtering and a stream, which is all the store ever asks for."""
+
+    def __init__(self, docs):
+        self._docs = docs
+
+    def where(self, filter=None, **kwargs):
+        field_filter = filter
+        matches = [
+            doc for doc in self._docs
+            if doc.get(field_filter.field_path) == field_filter.value
+        ]
+        return _FakeQuery(matches)
+
+    def limit(self, count):
+        return _FakeQuery(self._docs[:count])
+
+    def stream(self, timeout=None):
+        for data in self._docs:
+            yield _FakeSnapshot(data)
+
+    def get(self, timeout=None):
+        return iter(())
+
+
+class _FakeDocument:
+    def __init__(self, collection, doc_id):
+        self._collection = collection
+        self._id = doc_id
+
+    def get(self, timeout=None, transaction=None):
+        return _FakeSnapshot(self._collection._docs.get(self._id))
+
+    def set(self, data, timeout=None):
+        self._collection._docs[self._id] = dict(data)
+
+    def update(self, data, timeout=None):
+        self._collection._docs[self._id].update(data)
+
+    def delete(self, timeout=None):
+        self._collection._docs.pop(self._id, None)
+
+
+class _FakeCollection:
+    def __init__(self, client, name):
+        self._client = client
+        self._name = name
+        self._docs = client._data.setdefault(name, {})
+
+    def document(self, doc_id):
+        return _FakeDocument(self, str(doc_id))
+
+    def where(self, **kwargs):
+        return _FakeQuery(list(self._docs.values())).where(**kwargs)
+
+    def limit(self, count):
+        return _FakeQuery(list(self._docs.values())).limit(count)
+
+    # An unfiltered read streams the collection itself, exactly as the real
+    # client does.
+    def stream(self, timeout=None):
+        for data in list(self._docs.values()):
+            yield _FakeSnapshot(data)
+
+    def get(self, timeout=None):
+        return iter(())
+
+
+class _FakeTransaction:
+    """Enough of firestore_v1.Transaction for the transactional decorator.
+
+    The decorator drives `_clean_up`, `_begin`, `_commit` and `_rollback`, and
+    reads `_read_only` and `_max_attempts` off the object, so the fake carries
+    those. Writes are staged and applied on commit, which is what makes the id
+    counter behave the way the real one does.
+    """
+
+    _read_only = False
+    _max_attempts = 5
+
+    def __init__(self, client):
+        self._client = client
+        self._id = 'fake-txn'
+        self._writes = []
+
+    def _clean_up(self):
+        self._writes = []
+
+    def _begin(self, retry_id=None):
+        return None
+
+    def get(self, reference, **kwargs):
+        return reference.get()
+
+    def set(self, reference, data):
+        self._writes.append((reference, dict(data)))
+
+    def _commit(self):
+        for reference, data in self._writes:
+            reference.set(data)
+        self._writes = []
+
+    def _rollback(self):
+        self._writes = []
+
+
+class _FakeClient:
+    """Enough of google.cloud.firestore.Client for the store's own methods."""
+
     def __init__(self):
-        self.log = []
-        self.commits = 0
-        self.rollbacks = 0
-        # psycopg reports a connection the network dropped as closed, and that
-        # is the flag the settle path keys off, so the stand-in carries it.
-        self.closed = False
+        self._data = {}
+        self.writes = 0
 
-    def cursor(self, row_factory=None):
-        return _PoolCursor(self)
+    def collection(self, name):
+        return _FakeCollection(self, name)
 
-    def commit(self):
-        self.commits += 1
-
-    def rollback(self):
-        self.rollbacks += 1
+    def transaction(self):
+        return _FakeTransaction(self)
 
 
-class _Pool:
-    """Minimal ConnectionPool stand-in that records every checkout."""
-
-    def __init__(self, conn=None, error=None):
-        self.conn = conn or _PoolConn()
-        self.error = error
-        self.checkouts = 0
-        self.returns = 0
-        self.checks = 0
-        self.timeouts = []
-
-    def getconn(self, timeout=None):
-        self.checkouts += 1
-        self.timeouts.append(timeout)
-        if self.error:
-            raise self.error
-        return self.conn
-
-    def putconn(self, conn):
-        self.returns += 1
-
-    def get_stats(self):
-        return {'pool_size': 1, 'pool_available': 0, 'requests_waiting': 0}
-
-    def check(self):
-        self.checks += 1
+def _store_with_fake_client():
+    """A Store wired to the fake client, configured but never dialling out."""
+    store = Store()
+    store.client = _FakeClient()
+    store.target = 'firestore:(default) in permission-system-test'
+    store.timeout = 1.0
+    store.retries = 1
+    return store
 
 
-_d = Database()
-_p = _Pool()
-_d.pool = _p
+_fake_store = _store_with_fake_client()
 
-_commits_while_open = None
-with _d.get_cursor() as _c:
-    _c.execute('SELECT outer')
-    with _d.get_cursor() as _inner:
-        _inner.execute('SELECT middle')
-        with _d.get_cursor() as _deepest:
-            _deepest.execute('SELECT inner')
-    # Sampled from inside the outer block: a nested call that committed or
-    # rolled back would end the transaction the outer block is still writing to.
-    _commits_while_open = _p.conn.commits
+with app.test_request_context():
+    # -- ids ---------------------------------------------------------------
+    _first, _second = _fake_store.next_id('widgets'), _fake_store.next_id('widgets')
+    check('ids are integers and never reused',
+          _first == 1 and _second == 2, f'{_first}, {_second}')
+    _gadget = _fake_store.next_id('gadgets')
+    check('counters are per collection', _gadget == 1, str(_gadget))
 
-check('a nested query reuses the open connection',
-      _p.checkouts == 1, f'took {_p.checkouts} connections for 3 queries')
-check('a nested query does not commit on its own', _commits_while_open == 0,
-      f'{_commits_while_open} commits before the outer block closed')
-check('the outer block commits exactly once', _p.conn.commits == 1,
-      f'{_p.conn.commits} commits')
-check('all three statements reached the connection',
-      _p.conn.log == ['SELECT outer', 'SELECT middle', 'SELECT inner'],
-      str(_p.conn.log))
-check('the connection is returned to the pool', _p.returns == 1,
-      f'{_p.returns} returns')
-check('the thread-local handle is cleared afterwards',
-      getattr(_d._local, 'conn', None) is None)
+    # -- round trips -------------------------------------------------------
+    _written = _fake_store.insert('widgets', {
+        'name': 'spanner',
+        'count': 3,
+        'active': True,
+        'ratio': 0.5,
+        'day': date(2026, 10, 2),
+        'opens': time(9, 30),
+        'stamp': datetime(2026, 10, 2, 15, 30, tzinfo=timezone.utc),
+        'note': None,
+    })
+    _spanner_id = _written['id']
+    check('insert returns the stored row',
+          _written['name'] == 'spanner' and _spanner_id == 3, str(_spanner_id))
+    check('insert stamps created_at and updated_at',
+          _written.get('created_at') is not None
+          and _written.get('updated_at') is not None)
 
-# A leak here is permanent: the pool only ever shrinks, and every later request
-# finds one fewer slot until nothing is left.
-try:
-    with _d.get_cursor() as _c:
-        _c.execute('SELECT boom')
-        raise ValueError('boom')
-except ValueError:
-    pass
-check('a failing block still returns its connection',
-      _p.checkouts == 2 and _p.returns == 2,
-      f'checkouts={_p.checkouts} returns={_p.returns}')
-check('a failing block rolls back', _p.conn.rollbacks == 1,
-      f'{_p.conn.rollbacks} rollbacks')
+    _read = _fake_store.get('widgets', _spanner_id)
+    check('a date comes back as a date', isinstance(_read['day'], date)
+          and _read['day'] == date(2026, 10, 2), repr(_read.get('day')))
+    check('a time comes back as a time', isinstance(_read['opens'], time)
+          and _read['opens'].hour == 9, repr(_read.get('opens')))
+    check('a timestamp comes back naive and local',
+          isinstance(_read['stamp'], datetime) and _read['stamp'].tzinfo is None,
+          repr(_read.get('stamp')))
+    check('types survive unchanged',
+          _read['count'] == 3 and _read['active'] is True
+          and _read['ratio'] == 0.5, str(_read))
+    check('a missing field reads as None', _read.get('note') is None)
 
+    # Free text is the reason the shape is checked before parsing: a reason field
+    # that happens to look like a date must not come back as a datetime.
+    _fake_store.insert('widgets', {
+        'name': 'quoted',
+        'note': 'Medical appointment on 2026-10-02 at 09:30 near gate 3',
+    })
+    _quoted = [row for row in _fake_store.documents('widgets')
+               if row.get('name') == 'quoted'][0]
+    check('free text is returned exactly as stored',
+          _quoted['note'] == 'Medical appointment on 2026-10-02 at 09:30 near gate 3',
+          repr(_quoted.get('note')))
 
-# A severed TLS flow is the one failure where the rollback is more dangerous
-# than the failure it is cleaning up after. psycopg marks the connection BAD,
-# and its rollback() then reads pgconn without checking, so it raises "the
-# connection is lost" from inside the except block. Nothing catches that, so it
-# replaces the real error and a 404 rendered through a template context
-# processor becomes an unexplained 500 whose cause is buried one frame deeper.
-class _DeadCursor(_PoolCursor):
-    def execute(self, sql, params=None):
-        self.conn.log.append(sql)
-        self.conn.closed = True
-        raise OperationalError(
-            'consuming input failed: SSL SYSCALL error: EOF detected')
+    _fake_store.insert('widgets', {'name': 'quoted again'})
+    check('an unparseable date-looking string is left alone',
+          to_python_value('1234-56-78', store_mod.ZoneInfo('UTC'))
+          is store_mod._UNCHANGED)
 
+    # -- writes ------------------------------------------------------------
+    check('update merges and returns True',
+          _fake_store.update('widgets', _spanner_id, {'name': 'renamed'}) is True)
+    check('update leaves other fields alone',
+          _fake_store.get('widgets', _spanner_id)['count'] == 3
+          and _fake_store.get('widgets', _spanner_id)['name'] == 'renamed')
+    check('updating a missing document returns False',
+          _fake_store.update('widgets', 999, {'name': 'ghost'}) is False)
 
-class _DeadConn(_PoolConn):
-    def cursor(self, row_factory=None):
-        return _DeadCursor(self)
+    check('delete removes the document',
+          _fake_store.delete('widgets', _spanner_id) is True)
+    check('deleting a missing document returns False',
+          _fake_store.delete('widgets', _spanner_id) is False)
+    check('a deleted document reads as None',
+          _fake_store.get('widgets', _spanner_id) is None)
 
-    def rollback(self):
-        # psycopg's behaviour on a BAD connection: no guard, straight to pgconn.
-        if self.closed:
-            raise OperationalError('the connection is lost')
-        super().rollback()
+    # -- filters -----------------------------------------------------------
+    _fake_store.insert('things', {'name': 'a', 'kind': 'x', 'owner': 7})
+    _fake_store.insert('things', {'name': 'b', 'kind': 'y', 'owner': 7})
+    _fake_store.insert('things', {'name': 'c', 'kind': 'x', 'owner': 9})
+    check('equality filter returns the matching rows',
+          [r['name'] for r in _fake_store.documents('things', kind='x')] == ['a', 'c'],
+          str([r['name'] for r in _fake_store.documents('things', kind='x')]))
+    check('two equality filters intersect',
+          [r['name'] for r in
+           _fake_store.documents('things', kind='x', owner=9)] == ['c'])
+    check('a None filter is skipped rather than queried',
+          len(_fake_store.documents('things', owner=None)) == 3)
+    check('delete_where removes only the matches',
+          _fake_store.delete_where('things', kind='x') == 2
+          and len(_fake_store.documents('things')) == 1,
+          str(len(_fake_store.documents('things'))))
+    check('delete_where on no matches removes nothing',
+          _fake_store.delete_where('things', kind='zzz') == 0)
 
-
-_d4 = Database()
-_d4.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
-_d4._wait = 0.01
-_d4._attempts = 1
-_d4._local = _threading.local()
-_d4.pool = _Pool(conn=_DeadConn())
-
-try:
-    with _d4.get_cursor() as _c:
-        _c.execute('SELECT 1')
-    check('a dropped connection surfaces the query failure', False, 'no error')
-except OperationalError as exc:
-    check('a dropped connection surfaces the query failure',
-          'SSL SYSCALL error' in str(exc), str(exc))
-    check('  -> the rollback does not mask it with "connection is lost"',
-          'the connection is lost' not in str(exc), str(exc))
-except Exception as exc:
-    check('a dropped connection surfaces the query failure', False,
-          f'{type(exc).__name__}: {exc}')
-
-check('a dropped connection is still handed back for the pool to discard',
-      _d4.pool.returns == 1, f'{_d4.pool.returns} returns')
-check('a dead connection is never rolled back over the socket',
-      _d4.pool.conn.rollbacks == 0,
-      f'{_d4.pool.conn.rollbacks} rollbacks against a dead socket')
-check('the thread-local handle is cleared after a dropped connection',
-      getattr(_d4._local, 'conn', None) is None)
-
-# A healthy connection has no such excuse: the rollback still has to run, and a
-# commit that genuinely fails must still raise so a constraint violation is not
-# swallowed.
-_d5 = Database()
-_d5.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
-_d5._wait = 0.01
-_d5._attempts = 1
-_d5._local = _threading.local()
-_d5.pool = _Pool()
-
-
-class _FailingCommitConn(_PoolConn):
-    def commit(self):
-        raise OperationalError('duplicate key value violates unique constraint')
-
-
-_d5.pool.conn = _FailingCommitConn()
-try:
-    with _d5.get_cursor() as _c:
-        _c.execute('INSERT INTO users (email) VALUES (%s)', ('a@b.in',))
-    check('a failed commit still raises', False, 'no error')
-except OperationalError as exc:
-    check('a failed commit still raises', 'unique constraint' in str(exc),
-          str(exc))
-check('a live connection is rolled back after a failed commit',
-      _d5.pool.conn.rollbacks == 1, f'{_d5.pool.conn.rollbacks} rollbacks')
-
-# An exhausted budget must say which host was unreachable, and must not leak
-# the password into the log. The budget is generous on purpose: with a
-# millisecond-scale one, the first warning log call alone can eat the deadline
-# and the retry never gets to happen, which is exactly the flake this section
-# must not have.
-_d2 = Database()
-_d2.target = 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres'
-_d2._wait = 0.5
-_d2._attempts = 2
-_d2._local = _threading.local()
-_d2.pool = _Pool(error=PoolTimeout('couldn\'t get a connection after 10.00 sec'))
-try:
-    with _d2.get_cursor() as _c:
-        _c.execute('SELECT 1')
-    check('an unreachable pool raises DatabaseUnavailable', False, 'no error')
-except DatabaseUnavailable as exc:
-    check('an unreachable pool raises DatabaseUnavailable', True)
-    check('  -> the failure names the connection target',
-          'db.ref-x.supabase.co:5432' in str(exc), str(exc))
-except Exception as exc:
-    check('an unreachable pool raises DatabaseUnavailable', False,
-          f'{type(exc).__name__}: {exc}')
-
-check('a failed checkout is retried', _d2.pool.checkouts == 2,
-      f'{_d2.pool.checkouts} attempts')
-# No single attempt may be told to wait longer than the whole budget, and the
-# total must not come to attempts x budget either -- that is the stall the
-# timeout split exists to remove.
-check('no attempt waits longer than the budget',
-      all(0 < t <= 0.5 for t in _d2.pool.timeouts), str(_d2.pool.timeouts))
-check('the total wait cannot exceed the budget',
-      sum(_d2.pool.timeouts) <= 0.5 + 1e-6, str(_d2.pool.timeouts))
-
-# The failure is reported with the pool's own numbers, and a pool that cannot
-# even produce them must not turn a database outage into a logging crash.
-class _NoStatsPool(_Pool):
-    def get_stats(self):
-        raise RuntimeError('stats unavailable')
-
-
-_d4 = Database()
-_d4.target = 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres'
-_d4._wait = 0.05
-_d4._attempts = 1
-_d4._local = _threading.local()
-_d4.pool = _NoStatsPool(error=PoolTimeout('no connection'))
-try:
-    with _d4.get_cursor() as _c:
-        _c.execute('SELECT 1')
-    check('a pool that cannot report its stats still fails cleanly', False,
-          'no error raised')
-except DatabaseUnavailable:
-    check('a pool that cannot report its stats still fails cleanly', True)
-except Exception as exc:
-    check('a pool that cannot report its stats still fails cleanly', False,
-          f'{type(exc).__name__}: {exc}')
-
-# A live database error carries the server's own words, which is the difference
-# between "wrong password", "no slots" and "project paused".
-_d3 = Database()
-_d3.target = 'postgresql://postgres.ref@db.invalid:5432/postgres'
-_d3._wait = 0.01
-_d3._attempts = 1
-_d3._local = _threading.local()
-_d3.pool = _Pool(error=OperationalError(
-    'connection failed: FATAL:  password authentication failed for user "x"'))
-try:
-    with _d3.get_cursor() as _c:
-        _c.execute('SELECT 1')
-    check('a refused connection raises DatabaseUnavailable', False, 'no error')
-except DatabaseUnavailable as exc:
-    check('a refused connection raises DatabaseUnavailable', True)
-    check('  -> the driver message survives into the diagnosis',
-          'password authentication failed' in str(exc), str(exc))
-
-check('the DSN summary carries no password',
-      describe_dsn(
-          'postgresql://postgres.ref:s3cr%40et@db.ref-x.supabase.co:5432/postgres'
-      ) == 'postgresql://postgres.ref@db.ref-x.supabase.co:5432/postgres',
-      describe_dsn(
-          'postgresql://postgres.ref:s3cr%40et@db.ref-x.supabase.co:5432/postgres'
-      ))
-
-
-class _DeadConn:
-    def __init__(self, closed=False, status=0):
-        self.closed = closed
-        self.pgconn = type('Pq', (), {'transaction_status': status})()
-
-
-UNKNOWN = 4
-for label, conn in [
-    ('a closed connection', _DeadConn(closed=True)),
-    ('a connection libpq has given up on', _DeadConn(status=UNKNOWN)),
-]:
+    # -- an unreachable store ----------------------------------------------
+    _broken = Store()
+    _broken.client = None
+    check('an unconfigured store refuses every read', _broken._require_client
+          is not None)
     try:
-        reject_dead_connection(conn)
-        check(f'{label} is rejected at checkout', False, 'accepted')
-    except OperationalError:
-        check(f'{label} is rejected at checkout', True)
+        _broken.documents('users')
+        check('an unconfigured store raises DatabaseUnavailable', False, 'no error')
+    except DatabaseUnavailable as exc:
+        check('an unconfigured store raises DatabaseUnavailable',
+              'not configured' in str(exc), str(exc))
+    try:
+        _broken.ping()
+        check('pinging an unconfigured store raises', False, 'no error')
+    except DatabaseUnavailable:
+        check('pinging an unconfigured store raises', True)
 
-check('a live connection passes the checkout check',
-      reject_dead_connection(_DeadConn(status=0)) is None)
+    # -- retry -------------------------------------------------------------
+    class _Flaky(_FakeClient):
+        """Fails the first `failures` reads with a retryable error.
 
-# The pool is configured to stop serving sockets the server has already reaped.
-# Supabase closes a silent session well before that, so the app has to retire its
-# own idle sockets early or the first request after a quiet spell is the one that
-# discovers the socket is dead.
-_cfg_keys = ['DB_POOL_MIN', 'DB_POOL_MAX', 'DB_CONNECT_TIMEOUT',
-             'DB_POOL_TIMEOUT', 'DB_POOL_RETRIES', 'DB_POOL_MAX_IDLE',
-             'DB_POOL_MAX_LIFETIME', 'DB_POOL_RECONNECT_TIMEOUT']
-for _key in _cfg_keys:
-    check(f'config exposes {_key}', _key in app.config)
-check('idle connections are retired before the server reaps them',
-      app.config['DB_POOL_MAX_IDLE'] < 900,
-      f"max_idle={app.config['DB_POOL_MAX_IDLE']}s")
-check('a connect cannot consume the whole pool wait',
-      app.config['DB_CONNECT_TIMEOUT'] <= app.config['DB_POOL_TIMEOUT'],
-      f"connect={app.config['DB_CONNECT_TIMEOUT']}s "
-      f"wait={app.config['DB_POOL_TIMEOUT']}s")
+        The failure is injected into `stream`, which is the only read path the
+        store uses -- filtered or not -- so both shapes of `documents()` are
+        covered.
+        """
 
-# Render restarts the service on a non-2xx health check, so a database that is
-# merely unreachable must not be able to drive a restart loop. It cannot help:
-# the replacement process has the same network path to Supabase.
-_health = client.get('/healthz')
-check('health check stays 200 with no database reachable',
-      _health.status_code == 200, f'got {_health.status_code}')
-check('  -> and still reports the database verdict',
-      _health.get_json().get('database') in ('ok', 'unreachable', 'unknown'),
-      str(_health.get_json()))
+        def __init__(self, failures, error):
+            super().__init__()
+            self.remaining = failures
+            self.error = error
+            self.calls = 0
+
+        def collection(self, name):
+            client = self
+
+            class _FlakyCollection(_FakeCollection):
+                def stream(self, timeout=None):
+                    client.calls += 1
+                    if client.remaining > 0:
+                        client.remaining -= 1
+                        raise client.error
+                    return super().stream(timeout=timeout)
+
+            return _FlakyCollection(self, name)
+
+    _retrying = Store()
+    _retrying.retries = 3
+    _retrying.timeout = 1.0
+    _retrying.client = _Flaky(2, ServiceUnavailable('firestore is warming up'))
+    try:
+        with app.test_request_context():
+            _retrying.documents('users')
+        check('a blip is retried and then succeeds', True)
+    except DatabaseUnavailable as exc:
+        check('a blip is retried and then succeeds', False, str(exc))
+
+    _flaky_client = _Flaky(1, ValueError('bad field name'))
+    _failing = Store()
+    _failing.retries = 3
+    _failing.timeout = 1.0
+    _failing.client = _flaky_client
+    try:
+        with app.test_request_context():
+            _failing.documents('users')
+        check('a bad request is not retried', False, 'no error')
+    except DatabaseUnavailable as exc:
+        check('a bad request is not retried', _flaky_client.calls == 1,
+              f'{_flaky_client.calls} attempts')
+
+    _exhausting = Store()
+    _exhausting.retries = 2
+    _exhausting.timeout = 1.0
+    _exhausting.client = _Flaky(5, ServiceUnavailable('firestore is down'))
+    try:
+        with app.test_request_context():
+            _exhausting.documents('users')
+        check('an exhausted retry budget raises DatabaseUnavailable', False, 'no error')
+    except DatabaseUnavailable as exc:
+        check('an exhausted retry budget raises DatabaseUnavailable',
+              'after 2 attempts' in str(exc), str(exc))
+
+    # A driver exception must never reach a caller: the routes, the error
+    # handlers and the health check all catch DatabaseUnavailable and nothing
+    # else, so anything else is a 500 with a stack trace in it.
+    check('every store failure is DatabaseUnavailable',
+          issubclass(DatabaseUnavailable, RuntimeError))
+
+# -- configuration ---------------------------------------------------------
+
+_firestore_config = create_app().config
+check('config carries the Firestore settings',
+      all(key in _firestore_config for key in
+          ('FIREBASE_PROJECT_ID', 'FIRESTORE_DATABASE', 'FIRESTORE_TIMEOUT_SECONDS',
+           'FIRESTORE_RETRIES')),
+      str([key for key in ('FIREBASE_PROJECT_ID', 'FIRESTORE_DATABASE',
+                           'FIRESTORE_TIMEOUT_SECONDS', 'FIRESTORE_RETRIES')
+           if key not in _firestore_config]))
+check('config carries no Postgres settings',
+      not any(key == 'DATABASE_URL' or key.startswith('DB_')
+              for key in _firestore_config),
+      str(sorted(key for key in _firestore_config
+                 if key == 'DATABASE_URL' or key.startswith('DB_'))))
+check('health probe verdicts are cached',
+      _firestore_config['HEALTH_DB_CACHE_SECONDS'] >= 10,
+      'an uncached probe costs a query on every poll')
+check('no composite index is required',
+      re.search(r'\w\.order_by\(', Path('app/models/firestore.py').read_text(
+          encoding='utf-8')) is None,
+      'order_by on a query needs a composite index configured in the console')
+
+print()
 
 print()
 print('=' * 70)
@@ -2327,172 +2367,35 @@ finally:
 
 print()
 print('=' * 70)
-print('14. LIVE SOCKET CHECKS AND UNAVAILABILITY')
+print('14. AN UNREACHABLE STORE')
 print('=' * 70)
 
-# Everything above proved the pool fails *cleanly*. These check the two things
-# left: that a socket which died while idle is never handed to a query, and
-# that the single configured DSN is the only endpoint the app can dial.
+# Everything above proved the store behaves itself when it answers. This is the
+# other half: what a deployment whose store is unreachable does. It used to be a
+# pool that could not connect; it is now a store with no client, which is the same
+# state from every layer above -- the pages, the session and the health check.
 
-from app.models.database import (
-    describe_dsn, reject_dead_connection, verify_connection,
-)
-from config import Config
-from flask import Flask
+import sys
 
-PROJECT_REF = 'cndqajpjmnvsafrxjowx'
-DIRECT_URI = (
-    f'postgresql://postgres:s3cr%40et@db.{PROJECT_REF}.supabase.co:5432/postgres'
-)
+from app.models import firestore as _store_mod
+from app.models.firestore import DatabaseUnavailable
 
-# One endpoint, verbatim. Nothing is derived from the DSN, nothing is probed at
-# boot and nothing is tried second, so a DSN the operator wrote cannot be
-# rewritten into a host that answers for a different tenant.
-check('no pooler endpoint machinery is left in the db layer',
-      not any(hasattr(db_mod, _gone) for _gone in
-              ('resolve_dsn', 'pooled_dsn', 'direct_dsn', '_reachable',
-               'project_ref', '_retarget')),
-      ', '.join(_gone for _gone in
-                ('resolve_dsn', 'pooled_dsn', 'direct_dsn', '_reachable',
-                 'project_ref', '_retarget') if hasattr(db_mod, _gone)))
-check('config carries neither a pooler region nor a fallback DSN',
-      'DB_POOLER_REGION' not in app.config
-      and 'DATABASE_URL_FALLBACK' not in app.config,
-      ', '.join(sorted(
-          key for key in app.config
-          if 'POOLER' in key or 'FALLBACK' in key)) or 'none')
-check('the direct URI is described without its password',
-      describe_dsn(DIRECT_URI)
-      == f'postgresql://postgres@db.{PROJECT_REF}.supabase.co:5432/postgres',
-      describe_dsn(DIRECT_URI))
+check('the Postgres pool module is gone',
+      'app.models.database' not in sys.modules
+      and not Path('app/models/database.py').exists(),
+      'app/models/database.py is still present')
+check('nothing in the app imports the pool any more',
+      not any('models.database' in Path(path).read_text(encoding='utf-8')
+              for path in Path('app').rglob('*.py')),
+      ', '.join(str(path) for path in Path('app').rglob('*.py')
+                if 'models.database' in path.read_text(encoding='utf-8')))
 
-# The pool is opened against the DSN exactly as configured: no derived host, no
-# boot-time probe, no second candidate. A loopback DSN stands in for the real
-# one so this checks the target rather than the network -- the connection fails
-# instantly in a background thread that the pool owns.
-_probe = describe_dsn('postgresql://nobody@127.0.0.1:1/nobody')
-_verbatim_app = Flask('verbatim')
-_verbatim_app.config.update(Config.__dict__)
-_verbatim_app.config['DATABASE_URL'] = 'postgresql://nobody@127.0.0.1:1/nobody'
-_verbatim_db = Database()
-_verbatim_db.init_app(_verbatim_app)
-check('the pool opens against the configured DSN, verbatim',
-      _verbatim_db.target == _probe, _verbatim_db.target)
-check('  -> and the pool was dialled with the DSN itself, not a rehosted one',
-      _verbatim_db.pool.conninfo == 'postgresql://nobody@127.0.0.1:1/nobody',
-      _verbatim_db.pool.conninfo)
-_verbatim_db.pool.close()
-
-
-class _PingConn:
-    """Stands in for a pooled connection, counting what the check does to it."""
-
-    def __init__(self, ping_error=None, closed=False, status=0):
-        self.closed = closed
-        self.pgconn = type('Pq', (), {'transaction_status': status})()
-        self.ping_error = ping_error
-        self.pings = 0
-        self.rollbacks = 0
-
-    def cursor(self, row_factory=None):
-        conn = self
-
-        class _C:
-            def __enter__(self_inner):
-                return self_inner
-
-            def __exit__(self_inner, *exc):
-                return False
-
-            def execute(self_inner, sql, params=None):
-                conn.pings += 1
-                if conn.ping_error:
-                    raise conn.ping_error
-
-            def fetchone(self_inner):
-                return {'?column?': 1}
-
-        return _C()
-
-    def rollback(self):
-        self.rollbacks += 1
-
-
-_ping = _PingConn()
-verify_connection(_ping, interval=30)
-check('a connection nobody has verified is checked against the server',
-      _ping.pings == 1, f'{_ping.pings} round trips')
-check('  -> and the probe leaves no transaction open',
-      _ping.rollbacks == 1, f'{_ping.rollbacks} rollbacks')
-
-# The stamp lives on the connection, so a hot path pays nothing.
-verify_connection(_ping, interval=30)
-check('a just-verified connection is not checked again',
-      _ping.pings == 1, f'{_ping.pings} round trips after a second checkout')
-
-_ping_stale = _PingConn()
-_ping_stale._au_verified_at = 0.0
-verify_connection(_ping_stale, interval=30)
-check('a connection idle past the interval is checked again',
-      _ping_stale.pings == 1, f'{_ping_stale.pings} round trips')
-
-# The failure this whole check exists for: the socket died while idle, so it
-# still looks alive to libpq and is only found out when a query goes out on it.
-_dead_while_idle = _PingConn(
-    ping_error=OperationalError(
-        'consuming input failed: SSL SYSCALL error: EOF detected'))
+_live_client = _store_mod.store.client
 try:
-    verify_connection(_dead_while_idle, interval=30)
-    check('a socket that died while idle is rejected at checkout', False, 'accepted')
-except OperationalError as exc:
-    check('a socket that died while idle is rejected at checkout',
-          'SSL SYSCALL error' in str(exc), str(exc))
-check('  -> the failure is reported, not masked by the rollback',
-      _dead_while_idle.rollbacks == 0,
-      f'{_dead_while_idle.rollbacks} rollbacks against a dead socket')
-
-_ping_off = _PingConn()
-verify_connection(_ping_off, interval=0)
-check('the round trip can be switched off', _ping_off.pings == 0)
-
-for label, conn in [('a closed one', _PingConn(closed=True)),
-                    ('one libpq has given up on', _PingConn(status=UNKNOWN))]:
-    try:
-        verify_connection(conn, interval=30)
-        check(f'{label} is rejected before any round trip', False, 'accepted')
-    except OperationalError:
-        check(f'{label} is rejected before any round trip', True)
-
-# Sizing is enforced rather than trusted, because the value actually running is
-# whatever the dashboard holds, and a floor below the thread count is what put
-# production's seven waiting requests in a queue with nothing to give them.
-for _label, _config, _expected in [
-    ('a floor below the thread count is raised to it',
-     {'DB_POOL_MIN': 2, 'DB_POOL_MAX': 8}, (4, 8)),
-    ('a ceiling at or below the floor is lifted above it',
-     {'DB_POOL_MIN': 4, 'DB_POOL_MAX': 4}, (4, 5)),
-    ('sane values are left alone',
-     {'DB_POOL_MIN': 4, 'DB_POOL_MAX': 6}, (4, 6)),
-]:
-    _sizing_app = Flask('sizing')
-    _sizing_app.config.update(Config.__dict__)
-    _sizing_app.config['DATABASE_URL'] = 'postgresql://nobody@127.0.0.1:1/nobody'
-    _sizing_app.config.update(_config)
-    _probe_database = Database()
-    _probe_database.init_app(_sizing_app)
-    check(_label, (_probe_database.pool.min_size, _probe_database.pool.max_size)
-          == _expected,
-          f'got min={_probe_database.pool.min_size} '
-          f'max={_probe_database.pool.max_size}, wanted {_expected}')
-    _probe_database.pool.close()
-
-# An unreachable database must produce a page a person can read, not an empty
-# 500. Both spellings matter: `abort(503)` from a guard, and the pool's own
-# exception from a view whose query could not run.
-_live_pool = db_mod.db.pool
-_db_module = sys.modules['app.models.database']
-try:
-    db_mod.db.pool = _Pool(error=PoolTimeout('couldn\'t get a connection'))
+    # An unreachable store must produce a page a person can read, not an empty
+    # 500. Both spellings matter: the guard's own 503, and the store's exception
+    # from a view whose query could not run.
+    _store_mod.store.client = None
     _outage = app.test_client()
 
     with _outage.session_transaction() as _sess:
@@ -2501,7 +2404,7 @@ try:
         _sess['_marker'] = 'kept'
 
     _body404 = _outage.get('/no/such/page').get_data(as_text=True)
-    check('a 404 page still renders while the database is unreachable',
+    check('a 404 page still renders while the store is unreachable',
           _outage.get('/no/such/page').status_code == 404, _body404[:80])
     check('  -> and it is a real page, not an empty body', len(_body404) > 500,
           f'{len(_body404)} bytes')
@@ -2520,12 +2423,12 @@ try:
     with _outage.session_transaction() as _sess:
         _kept = _sess.get('_marker') is not None and _sess.get('user_id') == 7
     check('an outage does not sign the user out', _kept,
-          'the session was cleared by a database failure')
+          'the session was cleared by a store failure')
 
     with app.test_request_context('/'):
         from flask import session as _session
         from app.utils.security import current_user, database_unavailable
-        # A context with no session never reaches the database at all, so the
+        # A context with no session never reaches the store at all, so the
         # session has to be seeded for this to test the unavailable branch.
         _session['user_id'] = 7
         _session['_last_seen'] = int(datetime.now().timestamp())
@@ -2537,10 +2440,34 @@ try:
               current_user() is None and database_unavailable() is True)
 
     _err503 = app.test_client().get('/student/dashboard')
-    check('the unavailable page leaks no connection detail',
-          'postgres' not in _err503.get_data(as_text=True).lower())
+    _err_body = _err503.get_data(as_text=True).lower()
+    check('the unavailable page leaks no store detail',
+          'firestore' not in _err_body and 'googleapis' not in _err_body,
+          'the page named the backend')
+
+    # The health path stays 200 either way. Render restarts a service on a
+    # non-2xx, so a probe that pings the store turns one bad minute into a
+    # restart loop where every request queues behind a cold start.
+    _health = app.test_client().get('/healthz')
+    check('/healthz returns 200 even with no store', _health.status_code == 200,
+          f'got {_health.status_code}')
+    check('  -> and still reports the store verdict separately',
+          _health.get_json().get('database') in ('ok', 'unreachable', 'unknown'),
+          str(_health.get_json()))
+
+    # Missing credentials must not take the process down: the app boots, and the
+    # fault shows up as an upload or a request rather than at import time.
+    check('a store with no client still constructs',
+          isinstance(_store_mod.Store(), _store_mod.Store))
 finally:
-    db_mod.db.pool = _live_pool
+    _store_mod.store.client = _live_client
+
+# The favicon the browser asks for by default, not because the layout asked.
+_favicon = client.get('/favicon.ico')
+check('the default favicon request is answered', _favicon.status_code == 200,
+      f'got {_favicon.status_code}')
+check('  -> and it is an image, not an error page',
+      (_favicon.mimetype or '').startswith('image/'), str(_favicon.mimetype))
 
 # The favicon the browser asks for by default, not because the layout asked.
 _favicon = client.get('/favicon.ico')
