@@ -144,30 +144,39 @@ class Config:
     MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS = {'pdf', 'jpg', 'jpeg', 'png'}
 
-# Proof documents: Firebase Storage, which holds uploaded proofs.
+    # Proof documents: Cloudflare R2, which holds uploaded proofs.
     #
-    # The bucket must be PRIVATE. Proofs carry medical and identity documents,
-    # so they are only ever served back through an authorised Flask route;
-    # nothing here publishes an object or hands out a public URL.
+    # The bucket must stay PRIVATE. Proofs carry medical and identity documents,
+    # so they are only ever served back through an authorised Flask route; nothing
+    # in this app ever hands out a public URL for one.
     #
-    # firebase-admin bypasses Storage security rules, so the service account's
-    # private key is a server-side secret: never in a template, a JavaScript
-    # file, or any client-side code. Rotate it if it is ever committed or pasted
-    # somewhere it should not be.
-    #
-    # Credentials are read from exactly one of:
-    #   FIREBASE_CREDENTIALS_JSON - the service account JSON inline, which is
-    #                               what a Render environment variable holds
-    #   FIREBASE_CREDENTIALS_PATH - a path to that JSON on disk, for local runs
-    # With neither, an upload fails with a plain message on the form instead of
-    # taking the process down at import time.
-    FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID') or ''
-    FIREBASE_STORAGE_BUCKET = os.environ.get('FIREBASE_STORAGE_BUCKET') or ''
-    FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON') or ''
-    FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH') or ''
+    # R2 speaks the S3 API, so these are an R2 API token scoped to the bucket
+    # ("Object Read & Write"), not AWS keys. Console -> R2 -> Manage R2 API
+    # Tokens -> Create Account API token. It bypasses every bucket policy, so it
+    # is a server-side secret: never in a template, a JS file, or any client-side
+    # code. Rotate it if it is ever committed or pasted somewhere it should not be.
+    STORAGE_BACKEND = (os.environ.get('STORAGE_BACKEND') or 'r2').lower()
+    R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID') or ''
+    R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID') or ''
+    R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY') or ''
+    R2_BUCKET = os.environ.get('R2_BUCKET') or 'permission-system'
 
-    # How long one storage round trip may take: the whole operation, not a single
-    # socket. Long enough for a 5 MB proof over a slow link, short enough that a
+    # Supabase Storage, kept for a deployment still storing proofs there.
+    # Only read when STORAGE_BACKEND=supabase.
+    #
+    # Supabase renamed the service-role key: it is now published as
+    # SUPABASE_SECRET_KEY (sb_secret_...). The legacy service_role JWT is still
+    # accepted under SUPABASE_SERVICE_ROLE_KEY for older projects.
+    SUPABASE_URL = os.environ.get('SUPABASE_URL') or ''
+    SUPABASE_SECRET_KEY = (
+        os.environ.get('SUPABASE_SECRET_KEY')
+        or os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        or ''
+    )
+    SUPABASE_STORAGE_BUCKET = os.environ.get('SUPABASE_STORAGE_BUCKET') or 'proofs'
+
+    # One budget for a whole storage round trip: TCP connect plus the read or
+    # write. Long enough for a 5 MB proof over a slow link, short enough that a
     # hung request cannot hold a worker thread for the gunicorn timeout.
     STORAGE_TIMEOUT_SECONDS = int(os.environ.get('STORAGE_TIMEOUT_SECONDS') or 30)
 

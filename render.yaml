@@ -1,9 +1,9 @@
 # Render blueprint. `render blueprint launch` creates the web service and walks
 # through the environment values below.
 #
-# The database and proof storage are NOT defined here. Both live outside Render:
+# The database and proof storage are NOT defined here. Both live in Supabase:
 #   database -> Supabase Postgres (Project Settings -> Database -> URI)
-#   storage  -> Firebase Storage, a private bucket
+#   storage  -> Supabase Storage, a private bucket
 # Because DATABASE_URL is a prompt rather than a generated value, it is never
 # written into this file.
 #
@@ -101,22 +101,32 @@ services:
       # If the service is renamed, change this and the Entra entry together.
       - key: REDIRECT_URI
         value: https://permissionsystem.onrender.com/auth/callback
-      # Firebase Storage holds the uploaded proofs. The bucket stays private and
-      # firebase-admin bypasses Storage rules, so the service account's private
-      # key is a server-side secret that is never rendered into a template.
-      # Uploads fail cleanly (a plain error on the form) if it is missing,
-      # rather than at import time.
-      - key: FIREBASE_PROJECT_ID
-        value: permissionsystem-aus
-      - key: FIREBASE_STORAGE_BUCKET
-        value: permission-system
-      # Render has no key file on disk, so the JSON itself goes in the
-      # environment. It is multi-line; the dashboard keeps it intact and the app
-      # parses it as JSON.
-      - key: FIREBASE_CREDENTIALS_JSON
+      # Cloudflare R2 holds the uploaded proofs. R2 speaks the S3 API, so the app
+      # talks to it with boto3 against <account>.r2.cloudflarestorage.com and
+      # nothing sits in front of it to proxy uploads.
+      #
+      # The token bypasses every bucket policy, so it is a server-side secret and
+      # is never rendered into a template. Uploads fail cleanly (a plain error on
+      # the form) if it is missing, rather than at import time.
+      - key: STORAGE_BACKEND
+        value: "r2"
+      - key: R2_ACCOUNT_ID
         sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: permission-system
       - key: STORAGE_TIMEOUT_SECONDS
         value: "30"
+      # Only read when STORAGE_BACKEND=supabase.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: permission-system
       - key: REPORT_TIMEZONE
         value: Asia/Kolkata
       - key: SESSION_COOKIE_SECURE

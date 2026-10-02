@@ -7,9 +7,9 @@ dependencies, prepares .env and loads the database schema.
 
 Re-running is safe: it skips anything already in place.
 
-Storage is Firebase Storage, not the local filesystem, so there is no upload
-folder to create here. Create the bucket in the Firebase console (Storage ->
-Get started, public access off) before the first upload.
+Storage is Cloudflare R2, not the local filesystem, so there is no upload folder
+to create here. Create the bucket and its API token in the Cloudflare dashboard
+(R2 -> Create bucket, Public off) before the first upload.
 """
 
 import os
@@ -126,10 +126,8 @@ say('      CLIENT_ID      Entra ID -> App registrations -> Overview')
 say('      TENANT_ID      Entra ID -> App registrations -> Overview')
 say('      CLIENT_SECRET  Certificates & secrets -> New client secret')
 say('      DATABASE_URL   Supabase -> Project Settings -> Database -> URI')
-say('      FIREBASE_PROJECT_ID / FIREBASE_STORAGE_BUCKET')
-say('                       Firebase -> Project settings -> General')
-say('      FIREBASE_CREDENTIALS_PATH')
-say('                       Firebase -> Project settings -> Service accounts')
+say('      R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY')
+say('                       Cloudflare -> R2 -> Manage R2 API Tokens')
 say('')
 say('    Leave DEV_MODE=true to use the local account picker while testing.')
 say('    Set DEV_MODE=false once Outlook sign-in works.')
@@ -138,14 +136,15 @@ say('    Set DEV_MODE=false once Outlook sign-in works.')
 step(4, 'Storage bucket')
 
 say('')
-say('    Proof documents live in a Firebase Storage bucket, not on this machine.')
-say('    Create the bucket and a service account key once:')
-say('      Storage -> Get started -> create a bucket -> public access OFF')
-say('      Project settings -> Service accounts -> Generate new private key')
+say('    Proof documents live in a Cloudflare R2 bucket, not on this machine.')
+say('    Create the bucket and a token once, in the Cloudflare dashboard:')
+say('      R2 -> Create bucket -> name it "proofs" -> public access OFF')
+say('      R2 -> Manage R2 API Tokens -> Create Account API token')
+say('                      (Object Read & Write on that bucket)')
 say('')
 say('    The bucket must stay private. Proofs carry medical and identity')
 say('    documents and are only ever served through an authorised route.')
-ok.append('storage: Firebase bucket (create it and a key in the console)')
+ok.append('storage: R2 bucket "proofs" (create it and a token in the dashboard)')
 
 # ---------------------------------------------------------------- 5
 step(5, 'Database schema')
@@ -198,7 +197,7 @@ if fail:
 
 say('Next steps:')
 say('  1. Edit .env and enter CLIENT_ID, TENANT_ID, CLIENT_SECRET,')
-say('     DATABASE_URL and the Firebase storage values.')
+say('     DATABASE_URL and the R2 API token values.')
 say('  2. Start the app:')
 say('       Windows   .venv\\Scripts\\activate     then  python wsgi.py')
 say('       mac/Linux source .venv/bin/activate   then  python wsgi.py')

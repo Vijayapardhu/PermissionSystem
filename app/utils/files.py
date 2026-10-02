@@ -1,6 +1,4 @@
-import json
 import mimetypes
-import os
 import posixpath
 
 from datetime import datetime
@@ -24,82 +22,99 @@ class UploadError(Exception):
 
 MAX_PROOF_BYTES = 5 * 1024 * 1024
 
-# The app is built once per process and the bucket handle it hands out is safe to
-# share across requests and threads. firebase-admin's own client is thread-safe and
-# refreshes its own access token, so there is nothing here to serialise against.
-_app = None
+# The storage handle is built once per process and shared across requests and
+# threads. Both backends talk to an object store over HTTPS rather than holding
+# a socket open, so there is nothing here to serialise against.
+_handle = None
 _bucket = None
 
 
 def storage_bucket():
-    """Return the Firebase Storage bucket proofs are written to.
+    """Return the ``(client, bucket)`` pair proofs are written to.
 
-    The bucket is private and stays private: proofs are medical and identity
-    documents, and nothing in this app hands out a public URL for one. They leave
-    only through an authorised Flask route.
-
-    Credentials come from the environment and never from the repository. Either
-    FIREBASE_CREDENTIALS_JSON (the service account's JSON, inline, which is what a
-    Render environment variable holds) or FIREBASE_CREDENTIALS_PATH (a file on
-    disk, which is how it is usually set locally). firebase-admin is imported
-    here rather than at module scope so a deployment without credentials still
-    boots and reports the fault as an upload error instead of refusing to start.
+    Cloudflare R2 is the default. R2 speaks the S3 API, so boto3 talks to it
+    directly against ``<account>.r2.cloudflarestorage.com`` -- no proxy, no
+    second service to keep running, and a bucket that stays private unless it is
+    deliberately published. STORAGE_BACKEND picks the backend; the Supabase path
+    is still here for a project still holding proofs there, and both are
+    configured entirely from the environment so no credential is ever written
+    into a template.
     """
-    global _app, _bucket
-    if _app is None:
-        import firebase_admin
-        from firebase_admin import credentials, storage
-
-        project_id = current_app.config['FIREBASE_PROJECT_ID']
-        options = _credential_options()
-        if not options:
-            raise UploadError('Proof storage is not configured on this server.')
-
-        # options= explicitly: initialize_app's first positional argument is the
-        # credential, not the options, so passing the dict there makes it look
-        # for a credential in a dict and refuse to start.
-        _app = firebase_admin.initialize_app(options=options, name=_APP_NAME)
-        _bucket = storage.bucket(
-            current_app.config['FIREBASE_STORAGE_BUCKET'], app=_app
-        )
-    return _bucket
+    global _handle, _bucket
+    if _handle is None:
+        backend = current_app.config['STORAGE_BACKEND']
+        if backend == 'supabase':
+            _handle, _bucket = _supabase_handle()
+        else:
+            _handle, _bucket = _r2_handle()
+    return _handle, _bucket
 
 
-_APP_NAME = 'permission-system'
+def _r2_handle():
+    """Build the S3 client for Cloudflare R2.
+
+    The credentials are an R2 API token, not an AWS one, and they carry full
+    bucket access, so they are treated as a server-side secret exactly like the
+    key they replace. boto3 is imported here rather than at module scope so a
+    misconfigured deployment still boots and reports the fault as an upload
+    error, instead of refusing to start.
+    """
+    account_id = current_app.config['R2_ACCOUNT_ID']
+    access_key = current_app.config['R2_ACCESS_KEY_ID']
+    secret_key = current_app.config['R2_SECRET_ACCESS_KEY']
+    bucket = current_app.config['R2_BUCKET']
+    if not all((account_id, access_key, secret_key, bucket)):
+        raise UploadError('Proof storage is not configured on this server.')
+
+    import boto3
+    from botocore.config import Config as S3Config
+
+    timeout = current_app.config['STORAGE_TIMEOUT_SECONDS']
+    client = boto3.client(
+        's3',
+        endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        # R2 ignores the region but SigV4 requires one, and "auto" is what
+        # Cloudflare documents for it. Region-specific endpoints would 404.
+        region_name='auto',
+        config=S3Config(
+            signature_version='s3v4',
+            # A hung upload must not hold a request thread: the same reasoning as
+            # DB_CONNECT_TIMEOUT, for the same reason.
+            connect_timeout=timeout,
+            read_timeout=timeout,
+            retries={'max_attempts': 3, 'mode': 'standard'},
+        ),
+    )
+    return client, bucket
 
 
-def _credential_options() -> dict:
-    """Build firebase-admin's options, or {} when nothing is configured."""
-    project_id = current_app.config['FIREBASE_PROJECT_ID']
+def _supabase_handle():
+    """Build the Supabase Storage handle, for deployments still using it."""
+    from supabase import ClientOptions, create_client
 
-    inline = (current_app.config['FIREBASE_CREDENTIALS_JSON'] or '').strip()
-    if inline:
-        from firebase_admin import credentials
-        try:
-            # Render's dashboard holds multi-line env vars, so the JSON arrives
-            # with its newlines intact and has to be parsed, not pattern-matched.
-            return {
-                'credential': credentials.Certificate(json.loads(inline)),
-                'projectId': project_id or None,
-            }
-        except (ValueError, TypeError):
-            current_app.logger.error(
-                'FIREBASE_CREDENTIALS_JSON is not valid JSON')
-            raise UploadError('Proof storage is not configured on this server.')
+    url = current_app.config['SUPABASE_URL']
+    key = current_app.config['SUPABASE_SECRET_KEY']
+    if not url or not key:
+        raise UploadError('Proof storage is not configured on this server.')
+    bucket = current_app.config['SUPABASE_STORAGE_BUCKET']
+    client = create_client(
+        url,
+        key,
+        options=ClientOptions(
+            storage={'timeout': current_app.config['STORAGE_TIMEOUT_SECONDS']}
+        ),
+    )
+    return client.storage.from_(bucket), bucket
 
-    path = (current_app.config['FIREBASE_CREDENTIALS_PATH'] or '').strip()
-    if path:
-        if not os.path.exists(path):
-            current_app.logger.error(
-                'FIREBASE_CREDENTIALS_PATH does not exist: %s', path)
-            raise UploadError('Proof storage is not configured on this server.')
-        from firebase_admin import credentials
-        return {
-            'credential': credentials.Certificate(path),
-            'projectId': project_id or None,
-        }
 
-    return {}
+def _error_code(exc) -> str:
+    """The S3 error code on a client exception, or '' for anything else."""
+    response = getattr(exc, 'response', None)
+    if isinstance(response, dict):
+        return str(response.get('Error', {}).get('Code', ''))
+    return ''
 
 
 def normalise_key(file_path: str) -> str:
@@ -131,8 +146,8 @@ def normalise_key(file_path: str) -> str:
 def validate_and_store(file_storage) -> dict:
     """Validate an uploaded proof and write it under year/month keys.
 
-    Returns the stored object's metadata; the caller records the key in the
-    database. The original filename is preserved only as a database column
+    Returns the stored object's metadata; the caller records the key in
+    Postgres. The original filename is preserved only as a database column
     value, never as part of an object key.
     """
     if file_storage is None or not file_storage.filename:
@@ -198,20 +213,32 @@ def _put(key: str, payload: bytes, content_type: str) -> None:
     """Write the object, refusing to overwrite one that is already there.
 
     Two UUIDs colliding is astronomically unlikely, and clobbering an existing
-    proof is unrecoverable, so the key is checked before the write: the bucket
-    would otherwise replace the object silently.
+    proof is unrecoverable, so the key is checked before the write. S3's
+    put_object overwrites silently, which makes that check the only thing
+    standing between a re-run of the request and a destroyed document.
     """
-    blob = storage_bucket().blob(key)
+    client, bucket = storage_bucket()
 
-    if blob.exists():
+    if current_app.config['STORAGE_BACKEND'] == 'supabase':
+        result = client.upload(key, payload, {
+            'content-type': content_type,
+            'upsert': 'false',
+        })
+        if getattr(result, 'error', None):
+            current_app.logger.error('Proof upload rejected: %s', result.error)
+            raise UploadError('The proof document could not be stored.')
+        return
+
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        if _error_code(exc) not in ('404', 'NoSuchKey', 'NotFound'):
+            raise
+    else:
         raise UploadError('The proof document could not be stored.')
 
-    blob.upload_from_string(
-        payload,
-        content_type=content_type,
-        # Never overwrite, whatever the check above found. The two together mean
-        # a lost race cannot destroy a document that is already stored.
-        if_generation_match=0,
+    client.put_object(
+        Bucket=bucket, Key=key, Body=payload, ContentType=content_type,
     )
 
 
@@ -219,7 +246,11 @@ def fetch_proof(file_path: str) -> bytes:
     """Read a stored proof back for an authorised download."""
     key = normalise_key(file_path)
     try:
-        return storage_bucket().blob(key).download_as_bytes()
+        client, bucket = storage_bucket()
+        if current_app.config['STORAGE_BACKEND'] == 'supabase':
+            return client.download(key)
+        response = client.get_object(Bucket=bucket, Key=key)
+        return response['Body'].read()
     except Exception as exc:
         current_app.logger.warning('Proof download failed for %s: %s', key, exc)
         raise UploadError('That document is no longer available.') from exc
@@ -228,7 +259,11 @@ def fetch_proof(file_path: str) -> bytes:
 def delete_proof(file_path: str) -> bool:
     key = normalise_key(file_path)
     try:
-        storage_bucket().blob(key).delete()
+        client, bucket = storage_bucket()
+        if current_app.config['STORAGE_BACKEND'] == 'supabase':
+            client.remove([key])
+        else:
+            client.delete_object(Bucket=bucket, Key=key)
         return True
     except Exception:
         current_app.logger.exception('Proof delete failed for %s', key)

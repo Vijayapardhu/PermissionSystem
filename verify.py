@@ -3,7 +3,7 @@
 Covers what can be checked without a reachable Postgres instance: application
 construction, route wiring, access control, template compilation, and the
 pure validation/security helpers. Proof storage is exercised against an
-in-memory fake of the Firebase Storage API.
+in-memory fake of the Supabase Storage API.
 """
 
 import io
@@ -24,14 +24,17 @@ os.environ['DB_CONNECT_TIMEOUT'] = '1'
 # One attempt: the retry exists to ride out a real outage, and this harness has
 # no database to retry against, so a second attempt is pure runtime.
 os.environ['DB_POOL_RETRIES'] = '1'
-# Firebase Storage is the proof store, and the harness fakes the bucket handle
-# rather than reaching Google's API. The values only have to be non-empty:
-# storage_bucket() refuses to build one without credentials, and the fake
-# replaces it. A real key is picked up from the environment when one is set,
-# which is what proves the builder works against actual credentials.
-os.environ.setdefault('FIREBASE_PROJECT_ID', 'permissionsystem-aus')
-os.environ.setdefault('FIREBASE_STORAGE_BUCKET', 'permission-system')
-os.environ.setdefault('FIREBASE_CREDENTIALS_PATH', '')
+os.environ.setdefault('SUPABASE_URL', 'https://fake.supabase.co')
+os.environ.setdefault('SUPABASE_SECRET_KEY', 'sb_secret_fake')
+os.environ.setdefault('SUPABASE_STORAGE_BUCKET', 'proofs')
+# Cloudflare R2 is the proof store, and the harness fakes the S3 client rather
+# than reaching Cloudflare. The values only have to be non-empty: storage_bucket
+# refuses to build a client without them, and the fake replaces the client.
+os.environ['STORAGE_BACKEND'] = 'r2'
+os.environ.setdefault('R2_ACCOUNT_ID', 'fake-account')
+os.environ.setdefault('R2_ACCESS_KEY_ID', 'fake-key')
+os.environ.setdefault('R2_SECRET_ACCESS_KEY', 'fake-secret')
+os.environ.setdefault('R2_BUCKET', 'proofs')
 
 failures = []
 passes = []
@@ -1151,8 +1154,8 @@ check('Pillow declared (branding assertions)',
 # Host, port and debug must be configurable, not hardcoded.
 _env_example = open('.env.example', encoding='utf-8').read()
 for key in ['HOST', 'PORT', 'FLASK_DEBUG', 'SESSION_COOKIE_SECURE',
-            'IDLE_TIMEOUT_SECONDS', 'DATABASE_URL', 'FIREBASE_PROJECT_ID',
-            'FIREBASE_STORAGE_BUCKET', 'FIREBASE_CREDENTIALS_PATH',
+            'IDLE_TIMEOUT_SECONDS', 'DATABASE_URL', 'SUPABASE_URL',
+            'SUPABASE_SECRET_KEY', 'SUPABASE_STORAGE_BUCKET',
             'CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID',
             'REDIRECT_URI', 'DEV_MODE']:
     check(f'.env.example documents {key}',
@@ -1446,7 +1449,7 @@ finally:
 
 print()
 print('=' * 70)
-print('11. PROOF STORAGE ROUND TRIP (FIREBASE STORAGE)')
+print('11. PROOF STORAGE ROUND TRIP (CLOUDFLARE R2)')
 print('=' * 70)
 
 from werkzeug.datastructures import FileStorage
@@ -1456,49 +1459,46 @@ from app.utils.files import UploadError, delete_proof, fetch_proof, validate_and
 
 
 class _FakeMissing(Exception):
-    """Shaped like the NotFound google-cloud-storage raises for a missing blob."""
+    """Shaped like botocore's ClientError for an object that is not there."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {'Error': {'Code': code, 'Message': code}}
 
 
-class _FakeBlob:
-    def __init__(self, store, name):
-        self._store = store
-        self._name = name
-
-    def exists(self):
-        return self._name in self._store.objects
-
-    def upload_from_string(self, payload, content_type=None, **kwargs):
-        if kwargs.get('if_generation_match') == 0 and self.exists():
-            raise RuntimeError('Precondition failed')
-        self._store.objects[self._name] = bytes(payload)
-        self._store.types[self._name] = content_type
-
-    def download_as_bytes(self):
-        if self._name not in self._store.objects:
-            raise _FakeMissing(self._name)
-        return self._store.objects[self._name]
-
-    def delete(self):
-        if self._name not in self._store.objects:
-            raise _FakeMissing(self._name)
-        self._store.objects.pop(self._name)
-
-
-class _FakeBucket:
-    """In-memory stand-in for the firebase-admin Storage bucket."""
+class _FakeS3:
+    """In-memory stand-in for the boto3 S3 client R2 is reached through."""
 
     def __init__(self):
         self.objects = {}
-        self.types = {}
+        self.puts = 0
 
-    def blob(self, name):
-        return _FakeBlob(self, name)
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('404')
+        return {'ContentLength': len(self.objects[Key])}
+
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        self.puts += 1
+        self.objects[Key] = bytes(Body)
+        return {'ETag': f'"{len(self.objects[Key])}"'}
+
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('NoSuchKey')
+        return {'Body': io.BytesIO(self.objects[Key])}
+
+    def delete_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _FakeMissing('NoSuchKey')
+        self.objects.pop(Key)
 
 
-_FAKE = _FakeBucket()
+_FAKE = _FakeS3()
+_fake_stored = {'count': 0}
 
 _real_storage_bucket = files_mod.storage_bucket
-files_mod.storage_bucket = lambda: _FAKE
+files_mod.storage_bucket = lambda: (_FAKE, 'proofs')
 
 
 def store(name, payload):
@@ -1519,9 +1519,6 @@ with app.test_request_context():
           meta['file_path'].startswith(_expected_prefix), meta['file_path'])
     check('stored object is in the bucket',
           meta['file_path'] in _FAKE.objects, str(list(_FAKE.objects)))
-    check('the object carries a content type',
-          _FAKE.types.get(meta['file_path']) == 'application/pdf',
-          str(_FAKE.types.get(meta['file_path'])))
     check('stored bytes round-trip',
           fetch_proof(meta['file_path']) == b'%PDF-1.7\n' + b'0' * 2048)
     check('stored size recorded', meta['file_size'] == len(b'%PDF-1.7\n') + 2048,
@@ -1529,16 +1526,18 @@ with app.test_request_context():
     check('stored key never leaks the original filename',
           'doctor-letter' not in meta['file_path'], meta['file_path'])
 
-    # An existing proof must not be clobbered: the bucket would replace the
-    # object silently, so the existence check is the only thing preventing it.
+    # An existing proof must not be clobbered: S3's put_object overwrites
+    # silently, so the pre-write head check is the only thing preventing it.
+    _puts_before = _FAKE.puts
     _payload_before = _FAKE.objects[meta['file_path']]
     try:
-        files_mod._put(meta['file_path'], b'%PDF-1.7\nX', 'application/pdf')
+        _put_again = files_mod._put(meta['file_path'], b'%PDF-1.7\nX', 'application/pdf')
         check('an existing proof is never overwritten', False, 'the write went through')
     except UploadError:
         check('an existing proof is never overwritten', True)
     check('  -> and the stored bytes are untouched',
-          _FAKE.objects[meta['file_path']] == _payload_before)
+          _FAKE.objects[meta['file_path']] == _payload_before
+          and _FAKE.puts == _puts_before)
 
     renamed = store('holiday.png', b'%PDF-1.7\n' + b'0' * 100)
     try:
@@ -1585,65 +1584,36 @@ with app.test_request_context():
     except UploadError:
         check('fetching a deleted proof raises', True)
 
-# The real builder is what constructs the handle, so it must read credentials
-# from the environment and refuse to exist without them, rather than building one
-# from an empty project id and failing on the first upload.
+# The client must be built from the environment, and refuse to exist without
+# credentials rather than dialling an endpoint built from empty strings.
 files_mod.storage_bucket = _real_storage_bucket
-files_mod._app, files_mod._bucket = None, None
-_saved = {key: app.config[key] for key in
-          ('FIREBASE_PROJECT_ID', 'FIREBASE_STORAGE_BUCKET',
-           'FIREBASE_CREDENTIALS_JSON', 'FIREBASE_CREDENTIALS_PATH')}
+files_mod._handle, files_mod._bucket = None, None
 with app.test_request_context():
-    app.config.update({
-        'FIREBASE_PROJECT_ID': '', 'FIREBASE_STORAGE_BUCKET': '',
-        'FIREBASE_CREDENTIALS_JSON': '', 'FIREBASE_CREDENTIALS_PATH': '',
-    })
+    _saved = {key: app.config[key] for key in
+              ('R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY')}
+    app.config.update({'R2_ACCOUNT_ID': '', 'R2_ACCESS_KEY_ID': '',
+                       'R2_SECRET_ACCESS_KEY': ''})
     try:
         files_mod.storage_bucket()
-        check('unconfigured storage refuses to build a bucket', False, 'no error')
+        check('unconfigured storage refuses to build a client', False, 'no error')
     except UploadError as exc:
-        check('unconfigured storage refuses to build a bucket',
+        check('unconfigured storage refuses to build a client',
               'not configured' in str(exc), str(exc))
-
-    app.config['FIREBASE_CREDENTIALS_PATH'] = 'no-such-credentials.json'
-    try:
-        files_mod.storage_bucket()
-        check('a missing credentials file is reported, not raised raw', False, 'no error')
-    except UploadError as exc:
-        check('a missing credentials file is reported, not raised raw',
-              'not configured' in str(exc), str(exc))
-
-    app.config['FIREBASE_CREDENTIALS_JSON'] = '{not json'
-    try:
-        files_mod.storage_bucket()
-        check('malformed credentials JSON is reported, not raised raw', False, 'no error')
-    except UploadError as exc:
-        check('malformed credentials JSON is reported, not raised raw',
-              'not configured' in str(exc), str(exc))
-
     app.config.update(_saved)
-    app.config['FIREBASE_PROJECT_ID'] = 'permissionsystem-aus'
-    app.config['FIREBASE_STORAGE_BUCKET'] = 'permission-system'
-    app.config['FIREBASE_CREDENTIALS_PATH'] = os.environ[
-        'FIREBASE_CREDENTIALS_PATH'
-    ] if os.environ.get('FIREBASE_CREDENTIALS_PATH') else ''
-    app.config['FIREBASE_CREDENTIALS_JSON'] = (
-        os.environ['FIREBASE_CREDENTIALS_JSON']
-        if os.environ.get('FIREBASE_CREDENTIALS_JSON') else ''
-    )
-    if app.config['FIREBASE_CREDENTIALS_PATH'] or app.config['FIREBASE_CREDENTIALS_JSON']:
-        _live_bucket = files_mod.storage_bucket()
-        check('the bucket handle is built from the environment',
-              _live_bucket.name == 'permission-system',
-              str(getattr(_live_bucket, 'name', '')))
-        check('  -> against the configured Firebase project',
-              _live_bucket.client.project == 'permissionsystem-aus',
-              str(getattr(_live_bucket.client, 'project', '')))
-    else:
-        check('the bucket handle is built from the environment',
-              True, 'skipped: no credentials in this environment')
-        check('  -> against the configured Firebase project', True)
-    files_mod._app, files_mod._bucket = None, None
+
+    # The real builder is what constructs the R2 client, so the endpoint, the
+    # signing scheme and the bucket all come from config rather than a literal.
+    import boto3
+    _built, _built_bucket = files_mod.storage_bucket()
+    check('the R2 client is built against the account endpoint',
+          _built.meta.endpoint_url.endswith('.r2.cloudflarestorage.com'),
+          str(getattr(_built.meta, 'endpoint_url', '')))
+    check('  -> with the configured bucket', _built_bucket == 'proofs', _built_bucket)
+    check('  -> and SigV4 signing', _built.meta.config.signature_version == 's3v4',
+          str(_built.meta.config.signature_version))
+    check('  -> and the region Cloudflare documents', _built.meta.region_name == 'auto',
+          str(_built.meta.region_name))
+    files_mod._handle, files_mod._bucket = None, None
 
 print()
 
