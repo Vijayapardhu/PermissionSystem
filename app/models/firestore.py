@@ -186,6 +186,27 @@ def to_python_value(value, tz):
     return _UNCHANGED
 
 
+def credential_source(config):
+    """Which variable is holding the credentials: 'json', 'json-in-path' or None.
+
+    'json-in-path' is the mistake worth naming: the service account JSON pasted
+    into FIREBASE_CREDENTIALS_PATH instead of FIREBASE_CREDENTIALS_JSON. It is
+    unambiguously a credential and unambiguously not a path, so it is recognised
+    rather than reported as a missing file -- otherwise the only clue is a log
+    line that prints two kilobytes of private key after "does not exist".
+    """
+    inline = (config.get('FIREBASE_CREDENTIALS_JSON') or '').strip()
+    if inline:
+        return 'json'
+
+    path = (config.get('FIREBASE_CREDENTIALS_PATH') or '').strip()
+    if not path:
+        return None
+    if path.startswith('{'):
+        return 'json-in-path'
+    return 'path'
+
+
 class Store:
     """Firestore access, configured once per process."""
 
@@ -265,21 +286,31 @@ class Store:
     def _credentials(self):
         """Service-account credentials from the environment, or None."""
         config = self._settings(self.app) if self.app is not None else {}
+        source = credential_source(config)
 
-        inline = (config.get('FIREBASE_CREDENTIALS_JSON') or '').strip()
-        if inline:
+        if source in ('json', 'json-in-path'):
+            raw = (config.get('FIREBASE_CREDENTIALS_JSON') if source == 'json'
+                   else config.get('FIREBASE_CREDENTIALS_PATH')) or ''
+            if source == 'json-in-path':
+                self._log('warning',
+                          'FIREBASE_CREDENTIALS_PATH holds the service account '
+                          'JSON, not a path. It is being read as credentials; '
+                          'move it to FIREBASE_CREDENTIALS_JSON and clear '
+                          'FIREBASE_CREDENTIALS_PATH, or the next person to read '
+                          'this config will not know which one is real.')
             try:
                 # Render's dashboard holds multi-line env vars, so the JSON
                 # arrives with its newlines intact and has to be parsed rather
                 # than pattern-matched.
-                info = json.loads(inline)
+                info = json.loads(raw)
             except (ValueError, TypeError):
-                self._log('error', 'FIREBASE_CREDENTIALS_JSON is not valid JSON')
+                self._log('error',
+                          'The service account credentials are not valid JSON')
                 return None
             return self._service_account(info)
 
-        path = (config.get('FIREBASE_CREDENTIALS_PATH') or '').strip()
-        if path:
+        if source == 'path':
+            path = (config.get('FIREBASE_CREDENTIALS_PATH') or '').strip()
             if not os.path.exists(path):
                 self._log('error',
                           'FIREBASE_CREDENTIALS_PATH does not exist: %s', path)

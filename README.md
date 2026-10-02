@@ -193,10 +193,11 @@ should not be.
 
 Under **App registrations → your app → Authentication → Web**, add the exact
 redirect URI. Entra matches character for character, so paste it rather than
-typing it:
+typing it — and take the hostname from the service's own URL, because a second
+service on Render gets a `-1` suffix:
 
 ```
-https://permissionsystem.onrender.com/auth/callback
+https://<the exact hostname in your Render dashboard>/auth/callback
 ```
 
 Set the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
@@ -229,7 +230,7 @@ Environment variables to set on the service:
 | `FIREBASE_CREDENTIALS_JSON` | The service account key, pasted in (Render has no key file) |
 | `SECRET_KEY` | Render's **Generate** button |
 | `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
-| `REDIRECT_URI` | `https://permissionsystem.onrender.com/auth/callback` |
+| `REDIRECT_URI` | `https://<your exact Render hostname>/auth/callback` |
 | `STORAGE_BACKEND` | `r2` |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |
 | `R2_BUCKET` | `proofs` |
@@ -404,15 +405,16 @@ and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
 
 | Symptom | Cause and fix |
 |---|---|
+| `AppImportError: Failed to find attribute 'app' in 'app'` | The Start Command in the Render dashboard reads `gunicorn app:app`. It must be `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - wsgi:app`. The WSGI callable lives in `wsgi.py`; `app` is the package, and there is deliberately no `app.py` to point at, because a top-level one would shadow the package |
 | `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
 | `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
 | `Firestore is not configured` | `FIREBASE_CREDENTIALS_JSON` / `_PATH` is missing or is not valid JSON |
+| `FIREBASE_CREDENTIALS_PATH does not exist: {"type":"service_account"...}` | The service account JSON went into `FIREBASE_CREDENTIALS_PATH` instead of `FIREBASE_CREDENTIALS_JSON`. The app reads it anyway and warns, but the dashboard should be corrected: the JSON belongs in `_JSON`, and `_PATH` should hold a file path or be deleted |
 | `could not translate host name` / `Connection refused` | The service account credentials are wrong, or the project id does not match the key |
-| `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
 | `DeadlineExceeded` | One store call passed `FIRESTORE_TIMEOUT_SECONDS`. It is raised rather than retried past the budget on purpose |
 | "The user directory is temporarily unavailable" on sign-in | Firestore is not answering. Search the log for `Firestore documents failed` — it names the call, the last driver error and how many attempts were made |
 | The log says `Firestore documents failed after 2 attempts` | The project is unreachable from this host, the credentials are wrong, or Firestore is not enabled for the project |
-| The log says `password authentication failed` | Wrong password, or an unencoded `@` / `:` / `#` in the URI |
+| The log says `DefaultCredentialsError` | No credentials were found. `FIREBASE_CREDENTIALS_JSON` is set but empty — a Render env var cannot be an empty string, it has to hold the JSON or be deleted |
 | `/healthz` reports `"database": "unreachable"` | Firestore is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
 | The dev picker is empty, sign-in is refused | `migrations/seed_firestore.py` has not been run, or the signed-in email is not one of the seeded accounts |
 | `Proof storage is not configured on this server` | The R2 credentials are missing, so no proof can be stored |

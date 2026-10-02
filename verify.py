@@ -1190,6 +1190,31 @@ check('wsgi.py exposes a module-level app for the WSGI servers',
       is not None,
       'gunicorn loads wsgi:app and needs a module-level app')
 
+# `gunicorn app:app` is the mistake that reaches production most often, because
+# the Start Command typed into the Render dashboard overrides the Procfile and
+# nothing in the repo complains until the deploy exits. `app` is the package;
+# the callable is in wsgi.py. The declared entry points must never name it, and
+# the README has to explain it rather than hide it.
+for _path in ['Procfile', 'render.yaml']:
+    _text = open(_path, encoding='utf-8').read()
+    check(f'{_path} never tells anyone to run gunicorn app:app',
+          'app:app' not in _text.replace('wsgi:app', ''),
+          'gunicorn app:app is unreachable: app is the package, not the callable')
+
+check('render.yaml starts gunicorn on wsgi:app',
+      re.search(r'startCommand:\s*gunicorn\b.*\bwsgi:app',
+                open('render.yaml', encoding='utf-8').read()) is not None,
+      'render.yaml startCommand must target wsgi:app')
+_readme_text = open('README.md', encoding='utf-8').read()
+check('the README explains the app:app mistake',
+      'AppImportError' in _readme_text and 'gunicorn app:app' in _readme_text,
+      'the README must document the symptom and the correct Start Command')
+
+import wsgi as _wsgi_module
+check('wsgi:app loads and is callable, the way gunicorn loads it',
+      callable(_wsgi_module.app),
+      f'type {type(_wsgi_module.app).__name__}')
+
 # The README must document a complete install and the Render deploy.
 _readme = open('README.md', encoding='utf-8').read()
 for phrase in ['python setup.py', 'git clone', 'gunicorn',
@@ -2181,8 +2206,26 @@ with app.test_request_context():
     # A driver exception must never reach a caller: the routes, the error
     # handlers and the health check all catch DatabaseUnavailable and nothing
     # else, so anything else is a 500 with a stack trace in it.
-    check('every store failure is DatabaseUnavailable',
-          issubclass(DatabaseUnavailable, RuntimeError))
+check('every store failure is DatabaseUnavailable',
+      issubclass(DatabaseUnavailable, RuntimeError))
+
+# Which variable holds the credentials is decided in one place, because getting
+# it wrong is invisible otherwise: a JSON pasted into the _PATH variable reads
+# as a missing file and takes the whole app offline.
+from app.models.firestore import credential_source
+
+check('the inline JSON is preferred when both are set',
+      credential_source({'FIREBASE_CREDENTIALS_JSON': '{"a": 1}',
+                         'FIREBASE_CREDENTIALS_PATH': '/tmp/key.json'}) == 'json')
+check('a key file is used when no inline JSON is set',
+      credential_source({'FIREBASE_CREDENTIALS_PATH': '/tmp/key.json'}) == 'path')
+check('an empty value is not a credential',
+      credential_source({'FIREBASE_CREDENTIALS_JSON': '   ',
+                         'FIREBASE_CREDENTIALS_PATH': ''}) is None)
+check('JSON pasted into the path variable is recognised as credentials',
+      credential_source({'FIREBASE_CREDENTIALS_PATH': '{"type": "service_account"}'})
+      == 'json-in-path',
+      'a credential in the wrong variable must not read as a missing file')
 
 # -- configuration ---------------------------------------------------------
 
