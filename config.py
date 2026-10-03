@@ -135,7 +135,9 @@ class Config:
     REPORT_TIMEZONE = os.environ.get('REPORT_TIMEZONE') or 'Asia/Kolkata'
 
     # App
-    APP_NAME = 'CSE Permission & Leave Tracking System'
+    # "Leave" was dropped from the name with leave management: the system issues
+    # activity permissions only, and the name is printed on every letter.
+    APP_NAME = 'CSE Permission Tracking System'
     UNIVERSITY_NAME = 'Aditya University'
     DEPARTMENT_NAME = 'Department of Computer Science & Engineering'
 

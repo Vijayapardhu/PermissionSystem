@@ -6,17 +6,24 @@
 #}
 
 {% macro status_badge(status) -%}
+{# `|title` alone renders AWAITING_HOD as "Awaiting_Hod", which reads as a
+   variable name leaking into the interface. Replacing the underscore first
+   turns it into "Awaiting Hod". #}
 <span class="badge-au badge-au--{{ status.value|lower }}">
   <i class="bi bi-{{ status_icons.get(status.value, 'question-circle') }}"></i>
-  {{ status.value|title }}
+  {{ status.value|replace('_', ' ')|title }}
 </span>
 {%- endmacro %}
 
 {% macro type_badge(perm_type) -%}
+{# The one place a type is named. CLASSROOM is labelled "Activity" because that
+   is what it now is -- co-curricular and extracurricular permissions -- while the
+   stored value stays CLASSROOM so historical rows keep working. A legacy leave
+   row is labelled as retired rather than silently shown as an activity. #}
 {% if perm_type.value == 'LEAVE' %}
-  <span class="badge-au badge-au--leave"><i class="bi bi-calendar-minus"></i> Leave</span>
+  <span class="badge-au badge-au--leave"><i class="bi bi-calendar-minus"></i> Leave (retired)</span>
 {% else %}
-  <span class="badge-au badge-au--classroom"><i class="bi bi-door-open"></i> Classroom</span>
+  <span class="badge-au badge-au--classroom"><i class="bi bi-door-open"></i> Activity</span>
 {% endif %}
 {%- endmacro %}
 

@@ -60,7 +60,10 @@
           <td>{{ date_short(record.end_date) }}</td>
           <td>{{ record.status.value|title }}</td>
           <td class="text-center">
-            <a href="{{ url_for('student.request_letter', request_id=record.id) }}"
+            {# The HOD opens letters through the faculty route, which is the one
+               granted to staff. The student route happens to render the same
+               template, but its URL is wrong from the HOD's side of the app. #}
+            <a href="{{ url_for('faculty.request_letter', request_id=record.id) }}"
                class="btn btn-sm btn-outline-secondary">Letter</a>
           </td>
         </tr>
@@ -83,7 +86,6 @@
     </div>
 
     <div class="report-summary" style="border-top:0;margin-top:.35rem">
-      <div><strong>Leave permissions:</strong> {{ stats.leave_count }}</div>
       <div><strong>Classroom permissions:</strong> {{ stats.classroom_count }}</div>
       <div><strong>Generated:</strong> {{ report_date.strftime('%d-%m-%Y') }}</div>
     </div>

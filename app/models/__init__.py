@@ -1,7 +1,7 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
-from typing import Optional
+from typing import List, Optional
 from enum import Enum
 
 # Student roll identifiers at Aditya University are PIN-shaped, e.g. 26B21CS058.
@@ -27,16 +27,46 @@ class UserRole(Enum):
 
 
 class PermissionType(Enum):
+    # Leave management has been retired: a student cannot request one, and
+    # nothing in the interface offers, filters, charts or reports it.
+    #
+    # The member stays because Firestore holds rows written while it existed, and
+    # `PermissionType(row['permission_type'])` raises on anything it does not
+    # know -- deleting this would turn every historical leave row into a 500 on
+    # the dashboard, the register and the letter. It is read-only: nothing may
+    # create one, which is enforced by OFFERABLE_PERMISSION_TYPES below rather
+    # than by the enum, so a legacy row still renders as "Leave (retired)".
     LEAVE = 'LEAVE'
+    # Co-curricular and extracurricular activity permission: the only type the
+    # system issues now.
     CLASSROOM = 'CLASSROOM'
+
+
+# What may actually be requested. Anything not listed here cannot be created,
+# whatever the enum contains -- the form, the service and the analytics all read
+# this one list, so a retired type cannot reappear in one place and not another.
+OFFERABLE_PERMISSION_TYPES = (PermissionType.CLASSROOM,)
 
 
 class RequestStatus(Enum):
     PENDING = 'PENDING'
+    # The lecturer has recommended approval but the HOD has not yet decided.
+    # A request in this state is not a grant of permission: the letter says so,
+    # and nothing counts it as approved.
+    AWAITING_HOD = 'AWAITING_HOD'
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
     CANCELLED = 'CANCELLED'
     EXPIRED = 'EXPIRED'
+
+
+# Statuses that no longer constrain the student: they grant nothing and are not
+# worth being checked against when looking for an overlapping request.
+DEAD_STATUSES = frozenset({
+    RequestStatus.REJECTED,
+    RequestStatus.CANCELLED,
+    RequestStatus.EXPIRED,
+})
 
 
 class ApprovalAction(Enum):
@@ -103,6 +133,57 @@ class PermissionRequest:
     assigned_faculty_id: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # Everyone the permission covers, requester first. Empty on records written
+    # before group permissions existed, which is why `members` below falls back
+    # to the single student rather than treating those rows as having nobody.
+    member_ids: List[int] = field(default_factory=list)
+    # The subset the HOD actually approved. None means "all of them", which is
+    # both the single-student case and the group nobody edited before approving.
+    approved_member_ids: Optional[List[int]] = None
+
+    @property
+    def members(self) -> List[int]:
+        """Everyone covered, requester first. Never empty."""
+        if self.member_ids:
+            seen, ordered = set(), []
+            for mid in self.member_ids:
+                if mid and mid not in seen:
+                    seen.add(mid)
+                    ordered.append(mid)
+            if ordered:
+                return ordered
+        return [self.student_id] if self.student_id else []
+
+    @property
+    def approved_members(self) -> List[int]:
+        """Who the approval actually covers.
+
+        An approval with an empty subset would mean the HOD struck everyone off,
+        which the route refuses to submit. Falling back to the full membership
+        keeps an older record, or one nobody edited, meaning what it says.
+        """
+        if self.approved_member_ids:
+            allowed = set(self.approved_member_ids)
+            kept = [m for m in self.members if m in allowed]
+            if kept:
+                return kept
+        return self.members
+
+    @property
+    def group_size(self) -> int:
+        return len(self.members)
+
+    @property
+    def is_group(self) -> bool:
+        return self.group_size > 1
+
+    @property
+    def dropped_members(self) -> List[int]:
+        """Members the HOD struck off before approving."""
+        if not self.approved_member_ids:
+            return []
+        kept = set(self.approved_members)
+        return [m for m in self.members if m not in kept]
 
     @property
     def is_pending(self) -> bool:

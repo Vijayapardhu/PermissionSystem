@@ -2,15 +2,22 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 
 from flask import (
-    Blueprint, flash, redirect, render_template, request, url_for,
+    Blueprint, abort, flash, redirect, render_template, request, url_for,
 )
 
-from app.models import PermissionType, RequestStatus, UserRole
+from app.models import (
+    ApprovalAction, PermissionType, RequestStatus, UserRole,
+)
 from app.models.classes import ClassModel, MemberModel
-from app.models.permission import PermissionModel
+from app.models.permission import (
+    ApprovalModel, PermissionModel, ProofModel, attach_members,
+)
 from app.models.user import UserModel
-from app.permissions.service import categorize_reason
-from app.utils.security import current_user, roles_required
+from app.permissions.pages import permission_required
+from app.permissions.service import (
+    ValidationError, categorize_reason, hod_act_on_request,
+)
+from app.utils.security import current_user
 
 hod_bp = Blueprint('hod', __name__, url_prefix='/hod')
 
@@ -20,8 +27,21 @@ def _parse(value, default=None):
     return _parse_date(value, default)
 
 
+def _approval_action(raw: str) -> ApprovalAction:
+    """The posted decision, or a 400 rather than a silent default.
+
+    Defaulting an unrecognised value to APPROVED would let a mistyped or
+    tampered button grant a permission, which is the one outcome this whole stage
+    exists to prevent.
+    """
+    try:
+        return ApprovalAction((raw or '').strip().upper())
+    except ValueError:
+        abort(400, description='Choose whether to approve or reject.')
+
+
 @hod_bp.route('/dashboard')
-@roles_required(UserRole.HOD)
+@permission_required('hod.dashboard')
 def dashboard():
     user = current_user()
 
@@ -59,9 +79,12 @@ def dashboard():
         'counts': [stats['approved'], stats['rejected'], stats['pending']],
     }
 
+    # One type is issued now, so a type split is a single bar. The shape is kept
+    # because the chart reads `labels` and `series` and the dashboard template
+    # renders it without knowing what is in it.
     type_distribution = {
-        'labels': ['Leave Permission', 'Classroom Permission'],
-        'series': [stats['leave_count'], stats['classroom_count']],
+        'labels': ['Activity Permission'],
+        'series': [stats['classroom_count']],
     }
 
     reason_counts = Counter(categorize_reason(record.reason) for record in records)
@@ -102,7 +125,7 @@ def _weekly_trend():
 
 
 @hod_bp.route('/requests')
-@roles_required(UserRole.HOD)
+@permission_required('hod.requests')
 def requests():
     """Every request in the department, with filters."""
     user = current_user()
@@ -128,8 +151,79 @@ def requests():
     )
 
 
+@hod_bp.route('/requests/<int:request_id>', methods=['GET'])
+@permission_required('hod.request_detail')
+def request_detail(request_id: int):
+    """One request in full, with every student it covers.
+
+    The HOD approves here rather than from the register row, because dropping a
+    student off a group needs the whole membership on screen to be a decision
+    rather than a guess.
+    """
+    record = PermissionModel.find_by_id(request_id)
+    if record is None:
+        abort(404)
+    attach_members([record])
+    return render_template(
+        'hod/request_detail.html',
+        user=current_user(),
+        request=record,
+        proofs=ProofModel.find_by_request(request_id),
+        history=ApprovalModel.find_by_request(request_id),
+    )
+
+
+@hod_bp.route('/requests/<int:request_id>/action', methods=['POST'])
+@permission_required('hod.request_action')
+def request_action(request_id: int):
+    """The HOD's decision on a request the lecturer has recommended.
+
+    This is the step that actually grants a permission. The service refuses
+    anything not already in AWAITING_HOD, so a request still sitting with a
+    lecturer cannot be approved from here -- the two stages stay in order.
+
+    `member_ids` is only meaningful on a group: it is the subset being kept, and
+    the service refuses an approval that would leave nobody covered.
+    """
+    user = current_user()
+    action = _approval_action(request.form.get('action', ''))
+    remarks = (request.form.get('remarks') or '').strip()
+    # `member_scope` disambiguates an empty `member_ids`: unchecked boxes are
+    # absent from a POST, so "no ids" means either "solo, no checkboxes" or "the
+    # HOD unticked all four". Only the latter must reach the service to be
+    # refused, because the alternative is approving a group nobody was left on.
+    group_scope = (request.form.get('member_scope') == 'group')
+    submitted_members = request.form.getlist('member_ids') if group_scope else None
+
+    try:
+        hod_act_on_request(
+            request_id=request_id,
+            hod=user,
+            action=action,
+            remarks=remarks,
+            base_url=url_for('hod.dashboard', _external=True).rsplit('/', 1)[0],
+            member_ids=submitted_members,
+        )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('hod.requests'))
+
+    verb = 'approved' if action == ApprovalAction.APPROVED else 'rejected'
+    record = PermissionModel.find_by_id(request_id)
+    if action == ApprovalAction.APPROVED and record and record.is_group:
+        kept = len([m for m in record.approved_members])
+        flash(
+            f'Request #{request_id} approved for {kept} of '
+            f'{record.group_size} student{"s" if record.group_size != 1 else ""}.',
+            'success',
+        )
+    else:
+        flash(f'Request #{request_id} {verb}.', 'success')
+    return redirect(url_for('hod.requests'))
+
+
 @hod_bp.route('/students')
-@roles_required(UserRole.HOD)
+@permission_required('hod.students')
 def students():
     """Student directory with permission counts."""
     from app.models.firestore import store
@@ -188,7 +282,7 @@ def students():
 
 
 @hod_bp.route('/faculty')
-@roles_required(UserRole.HOD)
+@permission_required('hod.faculty_workload')
 def faculty_workload():
     """Open queue and decision counts per lecturer."""
     from app.models.firestore import store
@@ -236,7 +330,7 @@ def faculty_workload():
 
 
 @hod_bp.route('/classes')
-@roles_required(UserRole.HOD)
+@permission_required('hod.classes')
 def classes():
     """Every class across all lecturers."""
     from app.models.firestore import store
@@ -284,7 +378,7 @@ def _sort_key(value) -> str:
 
 
 @hod_bp.route('/reports')
-@roles_required(UserRole.HOD)
+@permission_required('hod.reports')
 def reports():
     """Department analytics: trends, reasons, types and per-faculty volume."""
     from app.models.firestore import store
@@ -391,7 +485,7 @@ def _filtered_requests(status_filter, type_filter, date_from, date_to,
 
 
 @hod_bp.route('/report/print')
-@roles_required(UserRole.HOD)
+@permission_required('hod.print_report')
 def print_report():
     user = current_user()
 

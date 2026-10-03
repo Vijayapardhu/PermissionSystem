@@ -10,216 +10,663 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
   <link href="{{ asset('css/style.css') }}" rel="stylesheet">
   <style>
-    /* Formal letter typography: serif body on a printed sheet.
+    /* The letter, laid out to the supplied design.
 
-       Everything below is sized against one A4 page at @page margin 15mm, which
-       leaves 180 x 267 mm of printable area. The sheet is a fixed block rather
-       than a growing one so a long reason cannot silently push the approval
-       line onto a second sheet, and `break-inside: avoid` stops any single block
-       from being split. */
+       One A4 sheet at @page margin 10mm, which leaves 190 x 277mm of printable
+       area. Sizes are in mm where a mark has to survive the trip to paper
+       unchanged, and in rem for type, so the on-screen sheet and the printed
+       sheet are the same document rather than two layouts that happen to look
+       alike.
+
+       The sheet is a fixed block and `break-inside: avoid` keeps any single block
+       off a second page, so a long reason cannot quietly push the approval
+       timeline onto a sheet of its own. */
+
+    :root {
+      /* Sampled from the design file rather than eyeballed, so a change here is
+         a decision instead of a drift. */
+      --lt-gold: #b5730f;
+      --lt-gold-bright: #c67c12;
+      --lt-gold-soft: #d6a45a;
+      --lt-amber: #ec9900;
+      --lt-cream: #fbf6ee;
+      --lt-cream-deep: #f9f3e8;
+      --lt-amber-wash: #f8ebd6;
+      --lt-pill: #f8e9d0;
+      --lt-ink: #101c33;
+      --lt-body: #3d4a5c;
+      --lt-muted: #6b7688;
+      --lt-line: #e2e2e6;
+      --lt-zebra: #f9f9fa;
+      --lt-blue-wash: #f3f8fe;
+      --lt-blue: #2976c3;
+
+      --lt-sans: 'Google Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --lt-serif: Georgia, 'Times New Roman', serif;
+    }
+
     .letter-sheet {
-      position: relative;
       width: 100%;
       max-width: 210mm;
       margin-inline: auto;
       background: #fff;
-      padding: 2.5rem 2.75rem;
+      padding: 10mm 10mm 8mm;
       box-shadow: 0 16px 40px rgba(16, 24, 40, .16);
-      font-family: Georgia, 'Times New Roman', serif;
-      color: #1a202c;
+      font-family: var(--lt-sans);
+      color: var(--lt-body);
     }
 
-    /* The mark is a seal on the page, not a letterhead: it sits behind the text
-       at the optical centre of the sheet, which frees the whole header for the
-       QR code. `position: relative` on every other child keeps the body text
-       above it, and the faint opacity keeps it from touching legibility. */
-    .letter-watermark {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 56%;
-      max-width: 300px;
-      opacity: .06;
-      margin: 0;
-      z-index: 0;
-      pointer-events: none;
-      user-select: none;
-    }
-    .letter-sheet > *:not(.letter-watermark) { position: relative; z-index: 1; }
+    /* ---------- Letterhead ---------- */
 
-    .letter-head {
+    /* The gold rule is the whole of the letterhead furniture. Sized in mm so it
+       is the same weight on screen and on paper. */
+    .lt-head {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
-      border-bottom: 2px solid #004e92;
-      padding-bottom: .85rem;
-      margin-bottom: 1rem;
+      justify-content: space-between;
+      gap: 8mm;
+      padding-bottom: 4mm;
+      border-bottom: 2px solid var(--lt-gold);
     }
 
-    /* The code owns the header outright now that the university and department
-       lines are gone, and the caption that used to sit beside it has moved into
-       the body, so the mark can be as large as the page allows. Sized in mm so
-       the printed sheet and the on-screen sheet are the same mark, and 48mm is
-       well clear of the ~25mm a phone needs to lock on from an angle. */
-    .letter-qr { flex: 0 0 auto; display: flex; align-items: center; }
-    .letter-qr img {
-      width: 48mm; height: 48mm; display: block; image-rendering: pixelated;
-      border: 1px solid #cbd5e1; padding: 3px; background: #fff;
+    .lt-head__logo {
+      width: 70mm;
+      max-width: 100%;
+      height: auto;
+      display: block;
+      object-fit: contain;
     }
 
+    /* No border and no plate: the code is a white-on-white figure that carries
+       its own quiet zone, so a box drawn around it only adds ink to the paper.
+       30mm rather than the design's 26mm, which is the floor for a phone held
+       at an angle and leaves no margin for a bad scan. */
+    .lt-head__qr { flex: 0 0 auto; margin: 0; }
+    .lt-head__qr img {
+      width: 30mm;
+      height: 30mm;
+      display: block;
+      image-rendering: pixelated;
+      border: 0;
+      padding: 0;
+      background: none;
+    }
+
+    /* ---------- Status panel ---------- */
+
+    /* One set of tone variables per status, so the panel, the pill in the table
+       and the icon disc all recolour together instead of three rules each. */
     .letter-status {
-      border: 2.5px solid;
-      border-radius: 6px;
-      padding: .6rem .85rem;
-      margin: 0 0 1rem;
+      --tone-bg: var(--lt-cream);
+      --tone-fg: var(--lt-gold-bright);
+      --tone-disc: var(--lt-amber-wash);
+
       display: flex;
       align-items: center;
-      gap: .8rem;
-      font-family: var(--au-font);
+      gap: 5mm;
+      margin: 5.5mm 0 5mm;
+      padding: 4.4mm 5.5mm;
+      border-radius: 2.5mm;
+      background: var(--tone-bg);
       break-inside: avoid;
     }
-    .letter-status__icon { font-size: 1.35rem; line-height: 1; }
-    .letter-status__label {
-      font-size: .64rem;
-      letter-spacing: .14em;
-      text-transform: uppercase;
-      font-weight: 700;
-      opacity: .8;
-      display: block;
+
+    .letter-status--awaiting_hod { --tone-bg: var(--lt-blue-wash); --tone-fg: var(--lt-blue); --tone-disc: #dceaf9; }
+    .letter-status--approved     { --tone-bg: #f0fdf6; --tone-fg: #046c4e; --tone-disc: #d9f2e6; }
+    .letter-status--rejected     { --tone-bg: #fef2f2; --tone-fg: #991b1b; --tone-disc: #fde0e0; }
+    .letter-status--cancelled    { --tone-bg: var(--lt-zebra); --tone-fg: #475569; --tone-disc: #e8eaee; }
+    .letter-status--expired      { --tone-bg: #f1f5f9; --tone-fg: #0f172a; --tone-disc: #e2e8f0; }
+
+    .letter-status__disc {
+      flex: 0 0 auto;
+      width: 17mm;
+      height: 17mm;
+      border-radius: 50%;
+      background: var(--tone-disc);
+      color: var(--tone-fg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      line-height: 1;
     }
-    .letter-status__value { font-size: 1.05rem; font-weight: 700; letter-spacing: .04em; }
 
-    .letter-status--approved  { border-color: #0f9d6e; background: #f0fdf6; color: #046c4e; }
-    .letter-status--rejected  { border-color: #dc2626; background: #fef2f2; color: #991b1b; }
-    .letter-status--pending   { border-color: #d97706; background: #fffbeb; color: #92400e; }
-    .letter-status--cancelled { border-color: #64748b; background: #f8fafc; color: #334155; }
-    .letter-status--expired   { border-color: #334155; background: #f1f5f9; color: #0f172a; }
+    .letter-status__label {
+      display: block;
+      font-size: .62rem;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--lt-muted);
+    }
+    .letter-status__value {
+      display: block;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: .01em;
+      line-height: 1.15;
+      color: var(--tone-fg);
+      margin: .1rem 0 .15rem;
+    }
+    .letter-status__desc {
+      display: block;
+      font-size: .74rem;
+      color: var(--lt-body);
+    }
 
-    .letter-body { font-size: .8rem; line-height: 1.6; }
-    .letter-body p { margin: 0 0 .6rem; }
-    .letter-table { width: 100%; border-collapse: collapse; margin: .7rem 0 1rem; font-size: .78rem; break-inside: avoid; }
-    .letter-table th, .letter-table td {
-      border: 1px solid #cbd5e1;
-      padding: .3rem .55rem;
+    /* ---------- Body ---------- */
+
+    /* Georgia's default figures are old-style, which sets a PIN number and a
+       date in a document to lowercase digits. Lining figures are what a formal
+       record is expected to carry, and the design uses them. */
+    .letter-body {
+      font-family: var(--lt-serif);
+      font-size: .82rem;
+      line-height: 1.65;
+      color: var(--lt-body);
+      font-variant-numeric: lining-nums;
+      font-feature-settings: 'lnum' 1, 'tnum' 1;
+    }
+    .letter-body p { margin: 0 0 .5rem; }
+    .letter-salute {
+      font-size: 1.02rem;
+      font-weight: 700;
+      color: var(--lt-ink);
+      margin-bottom: .7rem !important;
+    }
+    .letter-body strong { font-weight: 700; color: var(--lt-ink); }
+
+    /* ---------- Request details ---------- */
+
+    .letter-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin: 4mm 0 0;
+      font-family: var(--lt-sans);
+      font-size: .78rem;
+      border: 1px solid var(--lt-line);
+      border-radius: 1.5mm;
+      overflow: hidden;
+      /* Deliberately allowed to break. Holding the whole table together is worse
+         than a second sheet: an unusually long reason would otherwise push the
+         entire block onto a page of its own, splitting the letter from its own
+         letterhead. Rows still refuse to split, so a break lands between them. */
+      break-inside: auto;
+    }
+    .letter-table tr { break-inside: avoid; }
+
+    /* `border-collapse: separate` is what lets the radius clip the header band
+       and the outer edge; with collapse the corners square off again. The header
+       therefore carries its own background and side borders rather than relying
+       on a collapsed cell edge. */
+    .letter-table thead th {
+      background: var(--lt-cream-deep);
+      color: var(--lt-ink);
+      font-size: .66rem;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
       text-align: left;
+      padding: 2.3mm 4mm;
+      border-bottom: 1px solid var(--lt-line);
+    }
+
+    .letter-table tbody th {
+      width: 30%;
+      text-align: left;
+      font-weight: 700;
+      color: var(--lt-ink);
+      padding: 2.05mm 4mm;
+      background: #fff;
+      border-bottom: 1px solid var(--lt-line);
       vertical-align: top;
     }
-    .letter-table th { width: 30%; background: #f8fafc; font-weight: 700; }
-    .letter-status-note { font-weight: 700; }
+    .letter-table tbody td {
+      padding: 2.05mm 4mm;
+      border-bottom: 1px solid var(--lt-line);
+      vertical-align: top;
+    }
+    /* Zebra on the body rows only. The header band already separates them, and
+       striping the label column as well would draw a second vertical rule
+       through the table that the design does not have. */
+    .letter-table tbody tr:nth-child(even) th,
+    .letter-table tbody tr:nth-child(even) td { background: var(--lt-zebra); }
+    .letter-table tbody tr:last-child th,
+    .letter-table tbody tr:last-child td { border-bottom: 0; }
+
+    /* The clock range is parenthetical to the dates, so it steps back a size and
+       a shade rather than competing with them. */
+    .letter-time { font-size: .94em; color: var(--lt-muted); white-space: nowrap; }
+
+    .letter-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 1.5mm;
+      padding: .9mm 3mm;
+      border-radius: 20mm;
+      background: var(--lt-pill);
+      color: var(--lt-gold);
+      font-weight: 600;
+      font-size: .74rem;
+      white-space: nowrap;
+    }
+    .letter-pill__dot {
+      width: 1.8mm;
+      height: 1.8mm;
+      border-radius: 50%;
+      background: var(--lt-amber);
+      flex: 0 0 auto;
+    }
+    .letter-pill--awaiting_hod { background: #dceaf9; color: #1c5fa8; }
+    .letter-pill--awaiting_hod .letter-pill__dot { background: var(--lt-blue); }
+    .letter-pill--approved  { background: #d9f2e6; color: #046c4e; }
+    .letter-pill--approved .letter-pill__dot { background: #0f9d6e; }
+    .letter-pill--rejected  { background: #fde0e0; color: #991b1b; }
+    .letter-pill--rejected .letter-pill__dot { background: #dc2626; }
+    .letter-pill--cancelled,
+    .letter-pill--expired   { background: #e8eaee; color: #475569; }
+    .letter-pill--cancelled .letter-pill__dot,
+    .letter-pill--expired .letter-pill__dot { background: #64748b; }
+
     .letter-remarks {
-      border-left: 3px solid #004e92;
-      background: #f8fafc;
-      padding: .55rem .75rem;
-      margin: .7rem 0;
-      font-size: .78rem;
+      margin: 3mm 0 0;
+      padding: 2.4mm 3.5mm;
+      background: var(--lt-cream);
+      border-left: 3px solid var(--lt-gold-soft);
+      border-radius: 0 1.5mm 1.5mm 0;
+      font-family: var(--lt-sans);
+      font-size: .72rem;
+      line-height: 1.5;
       break-inside: avoid;
+    }
+    .letter-remarks strong { color: var(--lt-ink); }
+
+    /* Group permissions: the member name sits beside its PIN rather than in a
+       column of its own, so four students read as four lines instead of an
+       eight-cell grid. */
+    .letter-member__name {
+      margin-left: .8rem;
+      font-weight: 400;
+      color: var(--lt-muted);
+    }
+    .letter-table--members { margin-bottom: 3mm; }
+    .letter-table--members th { width: 30%; }
+
+    /* Students the HOD struck off. Muted rather than red: they are recorded on
+       the letter as not being covered, which is a fact, not a warning. */
+    .letter-excluded {
+      margin: 2.5mm 0 0;
+      font-family: var(--lt-sans);
+      font-size: .72rem;
+      line-height: 1.5;
+      color: var(--lt-muted);
+    }
+    .letter-excluded strong { color: var(--lt-ink); }
+
+    /* ---------- Approval timeline ---------- */
+
+    .letter-track { margin-top: 5.5mm; break-inside: avoid; }
+    .letter-track__title {
+      margin: 0 0 3.4mm;
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--lt-ink);
     }
 
-    /* No signature blocks: the letter is a departmental record, and an
-       approving lecturer's name is what the department can attest to. */
-    .letter-approval {
-      margin-top: 1.25rem;
-      padding-top: .7rem;
-      border-top: 1px solid #cbd5e1;
-      font-size: .8rem;
+    .track { display: flex; list-style: none; margin: 0; padding: 0; }
+
+    .track__step {
+      position: relative;
+      flex: 1 1 0;
+      min-width: 0;
+      text-align: center;
+      padding: 0 2mm;
+    }
+
+    /* The connector is drawn by the step it leaves, so its colour can depend on
+       whether that step happened. Gold up to the first step still outstanding,
+       grey after it -- which is what makes the timeline readable as a position
+       rather than four unrelated icons. */
+    .track__step::after {
+      content: '';
+      position: absolute;
+      top: 4.4mm;
+      left: 50%;
+      width: 100%;
+      height: 2px;
+      background: var(--lt-line);
+    }
+    .track__step--done::after { background: var(--lt-gold-soft); }
+    .track__step:last-child::after { display: none; }
+
+    .track__dot {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 9mm;
+      height: 9mm;
+      margin: 0 auto 2mm;
+      border-radius: 50%;
+      border: 1.5px solid var(--lt-line);
+      background: #fff;
+      color: var(--lt-muted);
+      font-size: .92rem;
+      line-height: 1;
+    }
+    .track__step--done .track__dot {
+      border-color: var(--lt-gold);
+      background: var(--lt-gold);
+      color: #fff;
+    }
+    .track__step--current .track__dot { border-color: var(--lt-gold-soft); color: var(--lt-gold); }
+    .track__step--failed .track__dot { border-color: #e4a3a3; color: #c53030; }
+
+    .track__name {
+      display: block;
+      font-size: .72rem;
+      font-weight: 700;
+      line-height: 1.3;
+      color: var(--lt-ink);
+    }
+    .track__sub {
+      display: block;
+      margin-top: .3mm;
+      font-size: .68rem;
+      line-height: 1.35;
+      color: var(--lt-muted);
+    }
+    .track__step--current .track__sub { color: var(--lt-gold); font-weight: 600; }
+
+    /* ---------- Closing notice ---------- */
+
+    .letter-rule { border: 0; border-top: 1px solid var(--lt-line); margin: 5.5mm 0 4.5mm; }
+
+    /* Who signed, in one muted line under the timeline. The letter is a
+       departmental record rather than a personal sign-off, so it names the
+       person who decided instead of carrying a signature block -- which is also
+       what used to push it onto a second sheet. */
+    .letter-attr {
+      margin: 2.6mm 0 0;
+      text-align: center;
+      font-size: .68rem;
+      line-height: 1.5;
+      color: var(--lt-muted);
+    }
+    .letter-attr strong { color: var(--lt-ink); font-weight: 600; }
+
+    .letter-notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 4mm;
+      padding: 3.6mm 4.6mm;
+      border-radius: 2mm;
+      background: var(--lt-blue-wash);
+      font-size: .78rem;
+      line-height: 1.55;
       break-inside: avoid;
     }
-    .letter-approval strong { font-weight: 700; }
-    .letter-note {
-      font-size: .64rem; color: #64748b; margin-top: .7rem;
-      padding-top: .5rem; border-top: 1px dashed #cbd5e1;
+    .letter-notice__disc {
+      flex: 0 0 auto;
+      width: 6mm;
+      height: 6mm;
+      border-radius: 50%;
+      background: var(--lt-blue);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .78rem;
+      line-height: 1;
+      margin-top: .3mm;
     }
+    .letter-notice p { margin: 0; }
+    .letter-notice strong { color: var(--lt-ink); }
+
+    .letter-notice--settled { background: #f0fdf6; }
+    .letter-notice--settled .letter-notice__disc { background: #0f9d6e; }
+    .letter-notice--closed { background: var(--lt-zebra); }
+    .letter-notice--closed .letter-notice__disc { background: #64748b; }
+
+    .letter-colophon {
+      margin: 4mm 0 0;
+      font-size: .64rem;
+      line-height: 1.5;
+      color: var(--lt-muted);
+    }
+    /* The signed reference is long and says nothing to a reader holding the
+       paper, so it stays in the muted footer weight rather than being dressed up
+       as a call to action. */
+    .letter-colophon a { color: inherit; text-decoration: none; word-break: break-all; }
+    .letter-colophon a:hover { text-decoration: underline; }
 
     @media print {
       .letter-tools { display: none !important; }
-      .letter-shell { background: #fff !important; padding: 0 !important; }
+
+      /* The design is carried almost entirely by background fills: the cream
+         status panel, the amber disc, the gold header band, the zebra rows, the
+         status pill and the blue notice. A print pipeline drops background
+         graphics unless the document insists, and every browser leaves "Background
+         graphics" unchecked by default -- so without this the printed sheet keeps
+         the gold rules and all the text and loses every panel, which is what made
+         the printed letter look undesigned. `exact` is inherited, so setting it
+         on the sheet covers everything inside it. The -webkit- prefix is for older
+         WebKit, which shipped the property under its own name. */
+      .letter-sheet {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .letter-shell {
+        background: #fff !important;
+        padding: 0 !important;
+        /* The inline min-height:100vh on the body is not reset by the rules
+           above, and 100vh in paged media is taller than the sheet -- which is
+           what produces a second, blank page. */
+        min-height: 0 !important;
+      }
+
       .letter-sheet {
         box-shadow: none;
         max-width: none;
         width: auto;
         padding: 0;
-        /* Exactly one sheet. `break-after` on the sheet plus a zero height on
-           its last child stops a trailing blank page from the 1px rounding that
-           routinely appears when a block ends flush with the page box. */
+        /* Exactly one sheet. `break-after` plus a zero height on the last child
+           stops the trailing blank page the 1px rounding routinely produces when
+           a block ends flush with the page box. */
         break-after: page;
       }
       .letter-sheet > :last-child { break-after: avoid; margin-bottom: 0; }
-      /* 15mm all round fits the whole letter on one A4 with the margins a
-         formal document is expected to have. */
-      @page { size: A4 portrait; margin: 15mm; }
+      @page { size: A4 portrait; margin: 10mm; }
     }
   </style>
 </head>
 <body class="letter-shell" style="background:#eef1f5;padding:2rem 1rem;min-height:100vh">
 
+  {# The toolbar follows whoever is reading. This template is rendered by both
+     the student and the faculty route, and `student.requests` is granted to
+     students alone -- so a lecturer who opened a letter and then clicked "All
+     requests" was sent to a 403. Both views pass the signed-in account as
+     `user`, so the destination is chosen rather than guessed. #}
+  {% set viewer_is_student = user and user.is_student %}
   <div class="letter-tools" style="max-width:210mm;margin:0 auto 1rem;display:flex;gap:.5rem;flex-wrap:wrap">
     <button class="btn btn-primary btn-pill" onclick="window.print()">
       <i class="bi bi-printer"></i> Print / Save as PDF
     </button>
-    <a href="{{ url_for('student.request_detail', request_id=request.id) }}"
+    <a href="{{ url_for('student.request_detail' if viewer_is_student
+                        else 'faculty.request_detail', request_id=request.id) }}"
        class="btn btn-outline-secondary btn-pill">
       <i class="bi bi-arrow-left"></i> Back to request
     </a>
-    <a href="{{ url_for('student.requests') }}" class="btn btn-outline-secondary btn-pill">
+    <a href="{{ url_for('student.requests' if viewer_is_student
+                        else 'faculty.requests_browser') }}"
+       class="btn btn-outline-secondary btn-pill">
       <i class="bi bi-journal-text"></i> All requests
     </a>
   </div>
 
+  {% set S = request.status.value %}
+  {% set state = S|lower %}
+  {% set is_pending   = S == 'PENDING' %}
+  {% set is_awaiting  = S == 'AWAITING_HOD' %}
+  {% set is_approved  = S == 'APPROVED' %}
+  {% set is_rejected  = S == 'REJECTED' %}
+  {% set is_cancelled = S == 'CANCELLED' %}
+  {% set is_expired   = S == 'EXPIRED' %}
+
+  {# The one place the status is spelled out, so the panel, the pill and the
+     timeline cannot disagree about what a status is called. #}
+  {% set words = {
+    'PENDING':      'AWAITING VERIFICATION',
+    'AWAITING_HOD': 'AWAITING HOD APPROVAL',
+    'APPROVED':     'APPROVED',
+    'REJECTED':     'REJECTED',
+    'CANCELLED':    'CANCELLED BY STUDENT',
+    'EXPIRED':      'EXPIRED',
+  } %}
+  {% set pills = {
+    'PENDING': 'Pending', 'AWAITING_HOD': 'Awaiting HOD', 'APPROVED': 'Approved',
+    'REJECTED': 'Rejected', 'CANCELLED': 'Cancelled', 'EXPIRED': 'Expired',
+  } %}
+  {% set icons = {
+    'PENDING': 'hourglass-split', 'AWAITING_HOD': 'person-check',
+    'APPROVED': 'check-circle', 'REJECTED': 'x-circle',
+    'CANCELLED': 'slash-circle', 'EXPIRED': 'clock-history',
+  } %}
+  {% set blurbs = {
+    'PENDING': 'This request is under review by the department and has not yet been approved or rejected.',
+    'AWAITING_HOD': 'The faculty has recommended this request. It now awaits the final approval of the Head of Department.',
+    'APPROVED': 'The Head of Department has approved this permission for the period stated below.',
+    'REJECTED': 'This request was rejected. It does not grant any permission.',
+    'CANCELLED': 'This request was withdrawn by the student and is no longer under consideration.',
+    'EXPIRED': 'This permission was approved, but the period it covered has now passed.',
+  } %}
+
   <article class="letter-sheet">
-    {# The mark moved to a watermark on the paper: the header now belongs to the
-       QR code, and the university, department and reference are all stated in
-       the body below, so nothing is lost by dropping the letterhead text. #}
-    <img class="au-wordmark letter-watermark"
-         src="{{ asset('images/aditya-logo.png') }}"
-         alt="{{ UNIVERSITY_NAME }}"
-         aria-hidden="true">
-    {% if qr and qr.image %}
-    <header class="letter-head">
-      <figure class="letter-qr">
+
+    {# ---- Letterhead: wordmark left, QR right, gold rule beneath ---- #}
+    <header class="lt-head">
+      <img class="au-wordmark lt-head__logo"
+           src="{{ asset('images/aditya-logo.png') }}"
+           alt="{{ UNIVERSITY_NAME }}">
+      {% if qr and qr.image %}
+      <figure class="lt-head__qr">
         <img src="{{ qr.image }}" alt="QR code to verify {{ qr.reference }} online">
       </figure>
+      {% endif %}
     </header>
-    {% endif %}
 
-    {# ---- Prominent status, including cancelled ---- #}
-    {% set state = request.status.value|lower %}
-    {% set icons = {
-      'APPROVED': 'check-circle', 'REJECTED': 'x-circle', 'PENDING': 'hourglass-split',
-      'CANCELLED': 'slash-circle', 'EXPIRED': 'clock-history' } %}
-    <div class="letter-status letter-status--{{ state }}">
-      <i class="bi bi-{{ icons.get(request.status.value, 'question-circle') }} letter-status__icon"></i>
+    {# ---- Status panel ---- #}
+    <section class="letter-status letter-status--{{ state }}">
+      <span class="letter-status__disc">
+        <i class="bi bi-{{ icons.get(S, 'question-circle') }}" aria-hidden="true"></i>
+      </span>
       <div>
         <span class="letter-status__label">Status of this request</span>
-        <span class="letter-status__value">
-          {% if request.status.value == 'APPROVED' %}APPROVED
-          {% elif request.status.value == 'REJECTED' %}REJECTED
-          {% elif request.status.value == 'PENDING' %}AWAITING VERIFICATION
-          {% elif request.status.value == 'CANCELLED' %}CANCELLED BY STUDENT
-          {% else %}{{ request.status.value }}
-          {% endif %}
-        </span>
+        <span class="letter-status__value">{{ words.get(S, S) }}</span>
+        <span class="letter-status__desc">{{ blurbs.get(S, '') }}</span>
       </div>
-    </div>
+    </section>
 
+    {# ---- Attestation ----
+
+         A group letter certifies the people on it, so the wording and the
+         student list both change. A solo request keeps the original sentence
+         exactly, because it reads better and because the rest of the document
+         was written around it. #}
+    {% set covered = (request.approved_member_details
+                      if request.status.value == 'APPROVED'
+                      else request.member_details) or [] %}
     <div class="letter-body">
-      <p>To Whomsoever It May Concern,</p>
-
+      {% if request.is_group %}
+      <p class="letter-salute">To Whomsoever It May Concern,</p>
+      <p>
+        This is to certify that the {{ covered|length }} student{{ '' if covered|length == 1 else 's' }}
+        listed below, of the Department of {{ student.department }}, have submitted
+        a <strong>{{ request.permission_type.value|title }} Permission</strong>
+        request to this department, and that the same permission applies to every
+        one of them.
+      </p>
+      {% else %}
+      <p class="letter-salute">To Whomsoever It May Concern,</p>
       <p>
         This is to certify that <strong>{{ student.name }}</strong>
         {% if student.roll_number %}, PIN <strong>{{ student.roll_number }}</strong>,{% endif %}
         Department of {{ student.department }},
-        has submitted a <strong>{{ request.permission_type.value|title }} Permission</strong>
+        has submitted a <strong>{% if request.permission_type.value == 'LEAVE' %}Leave (retired){% else %}Activity{% endif %} Permission</strong>
         request to this department.
       </p>
+      {% endif %}
+    </div>
 
-      <table class="letter-table">
-        <tr><th>Reference number</th><td>{{ qr.reference if qr else 'REQ-%04d' % request.id }}</td></tr>
+    {# ---- Students covered ---- #}
+    {% if request.is_group %}
+    <table class="letter-table letter-table--members">
+      <thead>
+        <tr>
+          <th colspan="2">Students Covered</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in covered %}
+        <tr>
+          <th>{{ 'PIN / Roll number' if loop.first else '' }}</th>
+          <td>
+            <strong>{{ member.roll_number or '—' }}</strong>
+            {# A student's display name is often their PIN; printing both repeats
+               the same string on a formal document. #}
+            {% if member.name and member.name != member.roll_number %}
+            <span class="letter-member__name">{{ member.name }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {# Named rather than counted: a student who was struck off has to be able to
+       see that they were on the request and are not covered by it. Only once the
+       permission is APPROVED, though -- before that the letter covers everyone on
+       it, so listing someone as excluded would contradict the table above. #}
+    {% if request.status.value == 'APPROVED' and request.dropped_member_details %}
+    <p class="letter-excluded">
+      <i class="bi bi-dash-circle"></i>
+      Also submitted but <strong>not covered</strong> by this permission:
+      {% for member in request.dropped_member_details %}{{ member.roll_number or member.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+    </p>
+    {% endif %}
+    {% endif %}
+
+    {# ---- Request details ---- #}
+    <table class="letter-table">
+      <thead>
+        <tr><th colspan="2">Request Details</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>Reference number</th>
+          <td>{{ qr.reference if qr else 'REQ-%04d' % request.id }}</td>
+        </tr>
         <tr>
           <th>PIN / Roll number</th>
-          <td>{{ student.roll_number or '—' }}</td>
+          {# A group already has every PIN in the table above; repeating four of
+             them in one cell helps nobody and breaks the column. #}
+          <td>
+            {% if request.is_group %}
+              {{ covered|length }} student{{ '' if covered|length == 1 else 's' }} &mdash; listed above
+            {% else %}
+              {{ student.roll_number or '—' }}
+            {% endif %}
+          </td>
         </tr>
-        <tr><th>Permission type</th><td>{{ request.permission_type.value|title }} Permission</td></tr>
+        <tr>
+          <th>Permission type</th>
+          <td>{% if request.permission_type.value == 'LEAVE' %}Leave (retired){% else %}Activity{% endif %} Permission</td>
+        </tr>
         <tr>
           <th>Period</th>
           <td>
@@ -228,83 +675,123 @@
               to {{ request.end_date.strftime('%d %B %Y') }}
             {% endif %}
             {% if request.start_time and request.end_time %}
-              &nbsp;(<span style="font-family:var(--au-font)">{{ request.start_time.strftime('%I:%M %p') }} &ndash; {{ request.end_time.strftime('%I:%M %p') }}</span>)
+              <span class="letter-time">({{ request.start_time.strftime('%I:%M %p') }} &ndash; {{ request.end_time.strftime('%I:%M %p') }})</span>
             {% else %}
-              &nbsp;(All day)
+              <span class="letter-time">(All day)</span>
             {% endif %}
           </td>
         </tr>
-        <tr><th>Reason</th><td>{{ request.reason }}</td></tr>
-        <tr><th>Issued on</th><td>{{ request.created_at.strftime('%d %B %Y') }}</td></tr>
+        <tr>
+          <th>Reason</th>
+          <td>{{ request.reason }}</td>
+        </tr>
+        <tr>
+          <th>Issued on</th>
+          <td>{{ request.created_at.strftime('%d %B %Y') }}</td>
+        </tr>
         <tr>
           <th>Current status</th>
-          <td><strong>{{ request.status.value|title }}</strong>
-            {% if request.status.value == 'CANCELLED' %}
-              <br><span style="font-weight:400">Withdrawn by the student on
-              {{ request.updated_at.strftime('%d %B %Y at %I:%M %p') }}.</span>
-            {% endif %}
+          <td>
+            <span class="letter-pill letter-pill--{{ state }}">
+              <span class="letter-pill__dot" aria-hidden="true"></span>
+              {{ pills.get(S, S|title) }}
+            </span>
           </td>
         </tr>
-      </table>
+      </tbody>
+    </table>
 
-      {% if request.status.value == 'APPROVED' %}
-      <p class="letter-status-note">
-        This permission has been <strong>APPROVED</strong> by the faculty of the
-        Department of {{ student.department }}. The student is permitted to be
-        absent for the period stated above, subject to the conditions of the
-        institution.
-      </p>
-      {% elif request.status.value == 'REJECTED' %}
-      <p class="letter-status-note">
-        This permission has been <strong>REJECTED</strong> by the faculty of the
-        Department of {{ student.department }}. The student is not permitted to
-        be absent for the period stated above.
-      </p>
-      {% elif request.status.value == 'CANCELLED' %}
-      <p class="letter-status-note">
-        This request has been <strong>CANCELLED</strong> by the student and is no
-        longer under consideration. It confers no permission whatsoever.
-      </p>
-      {% elif request.status.value == 'PENDING' %}
-      <p class="letter-status-note">
-        This request is <strong>AWAITING VERIFICATION</strong> and has not yet
-        been approved or rejected. This document is not a grant of permission.
-      </p>
-      {% else %}
-      <p class="letter-status-note">
-        This request is <strong>{{ request.status.value }}</strong> and confers no
-        permission.
-      </p>
-      {% endif %}
-
-      {% if decision and decision.remarks %}
-      <div class="letter-remarks">
-        <strong>Remarks from the reviewing faculty:</strong><br>
-        {{ decision.remarks }}
-      </div>
-      {% endif %}
+    {% if decision and decision.remarks %}
+    <div class="letter-remarks">
+      <strong>Remarks from the reviewing faculty:</strong><br>
+      {{ decision.remarks }}
     </div>
+    {% endif %}
 
-    {# Name only, no signature blocks: the department attests to the record, and
-       the QR code is what a reader can check it against. #}
-    <div class="letter-approval">
-      {% if request.status.value == 'APPROVED' %}
-        <strong>Approved by</strong> {{ faculty_name }}{% if decision and decision.actioned_at %}, on {{ decision.actioned_at.strftime('%d %B %Y') }}{% endif %}
-        &middot; {{ DEPARTMENT_NAME }}, {{ UNIVERSITY_NAME }}
+    {# ---- Approval timeline ----
+
+         Four steps because that is what a reader needs answered: was it sent, has
+         the department looked at it, has it been approved, and what is the final
+         word. A lecturer's approval lands on step three rather than finishing the
+         document, which is the whole point of the second stage. #}
+    {% set reviewed = is_awaiting or is_approved or is_rejected or is_expired %}
+    {% set steps = [
+      {'state': 'done', 'icon': 'file-earmark-text', 'name': 'Request Submitted',
+       'sub': request.created_at.strftime('%d %b %Y')},
+      {'state': ('current' if is_pending else ('done' if reviewed and not is_cancelled else 'todo')),
+       'icon': 'search', 'name': 'Department Verification',
+       'sub': ('In Progress' if is_pending
+               else ('Reviewed by ' ~ faculty_name if reviewed and not is_cancelled and faculty_name and faculty_name != '—'
+                     else ('Not started' if is_cancelled else 'Verified')))},
+      {'state': ('current' if is_awaiting else ('done' if is_approved or is_expired else ('failed' if is_rejected else 'todo'))),
+       'icon': 'check-lg', 'name': 'Approval',
+       'sub': ('In Progress' if is_awaiting else ('Approved' if is_approved or is_expired else ('Rejected' if is_rejected else 'Pending')))},
+      {'state': ('done' if is_approved or is_expired else ('failed' if is_rejected or is_cancelled else 'todo')),
+       'icon': 'flag', 'name': 'Final Status',
+       'sub': ('Approved' if is_approved else ('Expired' if is_expired else ('Rejected' if is_rejected else ('Withdrawn' if is_cancelled else 'Pending'))))},
+    ] %}
+
+    <section class="letter-track">
+      <h2 class="letter-track__title">Approval Status</h2>
+      <ol class="track">
+        {% for step in steps %}
+        <li class="track__step track__step--{{ step.state }}">
+          <span class="track__dot"><i class="bi bi-{{ step.icon }}" aria-hidden="true"></i></span>
+          <span class="track__name">{{ step.name }}</span>
+          <span class="track__sub">{{ step.sub }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    {# ---- Attribution: who decided, named rather than signed ---- #}
+    {% set has_reviewer = faculty_name and faculty_name != '—' %}
+    <p class="letter-attr">
+      {% if is_approved and has_reviewer %}
+        <strong>Approved by {{ faculty_name }}</strong>
+        {% if decision and decision.actioned_at %}, on {{ decision.actioned_at.strftime('%d %B %Y') }}{% endif %}
+      {% elif has_reviewer %}
+        {{ pills.get(S, S|title) }} &middot; reviewed by <strong>{{ faculty_name }}</strong>
       {% else %}
-        <strong>{{ request.status.value|title }}</strong> &middot;
-        {{ DEPARTMENT_NAME }}, {{ UNIVERSITY_NAME }}
-        {% if faculty_name and faculty_name != '—' %}
-          &middot; reviewed by {{ faculty_name }}
+        {{ pills.get(S, S|title) }}
+      {% endif %}
+      &middot; {{ DEPARTMENT_NAME }}, {{ UNIVERSITY_NAME }}
+    </p>
+
+    <hr class="letter-rule">
+
+    {# ---- Closing notice ---- #}
+    {% set notice_tone = 'settled' if is_approved else ('closed' if is_rejected or is_cancelled or is_expired else '') %}
+    <aside class="letter-notice {{ 'letter-notice--' ~ notice_tone if notice_tone }}">
+      <span class="letter-notice__disc"><i class="bi bi-info-lg" aria-hidden="true"></i></span>
+      <p>
+        {% if is_pending %}
+          This request is <strong>AWAITING VERIFICATION</strong> and has not yet been approved
+          or rejected. This document is <strong>not a grant of permission</strong>.
+        {% elif is_awaiting %}
+          This request has been <strong>recommended by the faculty</strong> and awaits the final
+          approval of the Head of Department. This document is
+          <strong>not a grant of permission</strong>.
+        {% elif is_approved %}
+          This request was <strong>APPROVED</strong> by the Head of Department, {{ DEPARTMENT_NAME }},
+          and is valid for the period stated above.
+        {% elif is_rejected %}
+          This request was <strong>REJECTED</strong>. It does not grant any permission.
+        {% elif is_cancelled %}
+          This request was <strong>WITHDRAWN</strong> by the student and is no longer
+          under consideration. It confers no permission whatsoever.
+        {% else %}
+          This permission was <strong>APPROVED</strong> but the period it covered has passed.
+          It no longer grants permission.
         {% endif %}
-      {% endif %}
-    </div>
+      </p>
+    </aside>
 
-    <p class="letter-note">
+    <p class="letter-colophon">
       System-generated by the CSE Permission &amp; Leave Tracking System.
       {% if qr and qr.url %}
         Scan the QR code, or open
-        <span style="word-break:break-all">{{ qr.url }}</span>,
+        <a href="{{ qr.url }}">{{ qr.url }}</a>,
         to check this letter against the department record.
       {% endif %}
     </p>

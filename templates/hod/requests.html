@@ -29,15 +29,15 @@
     <select class="form-select form-select-sm" name="status" style="width:auto"
             onchange="this.form.submit()" aria-label="Filter by status">
       <option value="">All statuses</option>
-      {% for status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
-      <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
+      {% for status in ['AWAITING_HOD', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
+      <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title|replace('_', ' ') }}</option>
       {% endfor %}
     </select>
 
     <select class="form-select form-select-sm" name="type" style="width:auto"
             onchange="this.form.submit()" aria-label="Filter by type">
       <option value="">All types</option>
-      {% for kind in ['LEAVE', 'CLASSROOM'] %}
+      {% for kind in ['CLASSROOM'] %}
       <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
       {% endfor %}
     </select>
@@ -86,7 +86,17 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>
+            {{ roll(record.student_roll_number) }}
+            {# A group is filed by one student but covers several, so the count
+               belongs next to the name rather than being discovered on the
+               detail page. #}
+            {% if record.is_group %}
+            <span class="badge text-bg-light ms-1" title="Group permission">
+              <i class="bi bi-people"></i> {{ record.group_size }}
+            </span>
+            {% endif %}
+          </td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
@@ -95,7 +105,26 @@
           <td class="small text-nowrap">{{ record.faculty_name or '—' }}</td>
           <td>{{ status_badge(record.status) }}</td>
           <td class="table-au__actions">
-            <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
+            {# The HOD's decision, offered only on the rows that are actually
+               waiting on them. The route refuses anything else as well, so this
+               is a convenience rather than the enforcement. #}
+            {% if record.status.value == 'AWAITING_HOD' %}
+            <form method="post" class="d-flex gap-1"
+                  action="{{ url_for('hod.request_action', request_id=record.id) }}"
+                  onsubmit="return confirm('Approve this permission request?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="APPROVED">
+              <button type="submit" class="btn btn-sm btn-primary">Approve</button>
+            </form>
+            <form method="post" class="d-flex gap-1"
+                  action="{{ url_for('hod.request_action', request_id=record.id) }}"
+                  onsubmit="return confirm('Reject this permission request?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="REJECTED">
+              <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+            </form>
+            {% endif %}
+            <a href="{{ url_for('hod.request_detail', request_id=record.id) }}"
                class="btn btn-sm btn-outline-secondary">Open</a>
           </td>
         </tr>
@@ -108,6 +137,8 @@
     <span class="table-foot__stats">
       <span class="table-foot__stat">Approved
         <strong>{{ requests | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
+      <span class="table-foot__stat">Awaiting HOD
+        <strong>{{ requests | selectattr('status.value', 'equalto', 'AWAITING_HOD') | list | length }}</strong></span>
       <span class="table-foot__stat">Pending
         <strong>{{ requests | selectattr('status.value', 'equalto', 'PENDING') | list | length }}</strong></span>
       <span class="table-foot__stat">Rejected

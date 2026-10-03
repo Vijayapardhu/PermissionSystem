@@ -1,9 +1,9 @@
 from datetime import date, datetime, time, timedelta
 from typing import Optional, List
-
 from app.models import (
     ApprovalAction,
     ApprovalHistory,
+    DEAD_STATUSES,
     PermissionRequest,
     PermissionType,
     ProofDocument,
@@ -18,15 +18,40 @@ HISTORY = 'approval_history'
 # Keyword buckets behind the HOD's reason chart. The SQL version counted these
 # with ILIKE, which is a case-insensitive substring match; the same rule is
 # applied here in Python so the chart classifies exactly what it used to.
+#
+# The medical and personal buckets went with leave management. What is left
+# describes an activity request, and `other` absorbs the historical rows that
+# were filed against the retired type rather than forcing them into a bucket
+# they do not belong to.
 REASON_KEYWORDS = {
-    'medical': ('medical', 'health', 'doctor'),
-    'personal': ('personal', 'family'),
-    'event': ('event', 'workshop', 'seminar', 'conference'),
+    'event': ('event', 'workshop', 'seminar', 'conference', 'fest', 'club'),
+    'sports': ('sports', 'match', 'tournament', 'practice'),
+    'interview': ('interview', 'placement', 'internship'),
 }
 
 
 def _matches(reason: str, keyword: str) -> bool:
     return keyword in (reason or '').lower()
+
+
+def normalise_members(requester_id: int, member_ids=None) -> List[int]:
+    """The membership of a request: requester first, no duplicates, capped.
+
+    The requester is always member one and cannot be removed by submitting an
+    empty list, because a request with nobody on it has no meaning. The cap is
+    enforced here rather than only in the form so that a hand-rolled POST cannot
+    put twenty students on one letter.
+    """
+    ordered, seen = [], set()
+    for candidate in [requester_id] + list(member_ids or []):
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    return ordered[:MAX_GROUP_MEMBERS]
 
 
 def categorise_reason(reason: str) -> str:
@@ -62,14 +87,25 @@ def _to_time(value):
     return None
 
 
+MAX_GROUP_MEMBERS = 4
+
+
 class PermissionModel:
     @staticmethod
     def create(student_id: int, permission_type: PermissionType, reason: str,
                start_date: date, end_date: date, start_time: time = None,
                end_time: time = None,
-               assigned_faculty_id: int = None) -> PermissionRequest:
+               assigned_faculty_id: int = None,
+               member_ids: List[int] = None) -> PermissionRequest:
+        """Create one request covering one to four students.
+
+        `student_id` stays the requester and the only field the older code reads.
+        The full membership goes in `member_ids`, so a record written before
+        group permissions existed still reads correctly through `members`.
+        """
         row = store.insert(REQUESTS, {
             'student_id': student_id,
+            'member_ids': normalise_members(student_id, member_ids),
             'permission_type': permission_type.value,
             'reason': reason,
             'start_date': start_date,
@@ -89,12 +125,67 @@ class PermissionModel:
     @staticmethod
     def find_by_student(student_id: int, status: RequestStatus = None,
                         limit: int = 50, offset: int = 0) -> List[PermissionRequest]:
-        rows = store.documents(REQUESTS, student_id=student_id)
+        """Every request a student is on, whether they filed it or were added.
+
+        Two queries, because membership lives in two shapes: `student_id` for the
+        requester, and inside the `member_ids` array for everyone else. Asking
+        only one of them is what made a co-member unable to see the permission
+        they were covered by. Results are merged and de-duplicated by id, so a
+        requester matched by both queries appears once.
+        """
+        rows = list(store.documents(REQUESTS, student_id=student_id))
+        seen = {row.get('id') for row in rows}
+        for row in store.documents(REQUESTS,
+                                   array_contains={'member_ids': student_id}):
+            if row.get('id') not in seen:
+                seen.add(row.get('id'))
+                rows.append(row)
+
         requests = [PermissionModel._to_request(row) for row in rows]
         if status:
             requests = [r for r in requests if r.status == status]
         requests.sort(key=_newest_first)
         return requests[offset:offset + limit]
+
+    @staticmethod
+    def find_overlapping_for_students(student_ids, start_date: date,
+                                      end_date: date,
+                                      exclude_id: int = None) -> List[dict]:
+        """Live requests overlapping the window, for any of these students.
+
+        Returns one entry per clash as `{'student_id', 'student', 'request'}` so
+        the form can say *whose* permission is in the way. A duplicate on a
+        co-member is as much a duplicate as one on the requester, and naming the
+        student is the only way the message is actionable.
+
+        Read through each student's own rows rather than filtering a range:
+        Firestore would want a composite index for a status filter plus an
+        ordering, and that fails at request time rather than merely running slowly.
+        """
+        if not start_date or not end_date:
+            return []
+
+        clashes, seen = [], set()
+        for student_id in dict.fromkeys(student_ids or []):
+            for row in store.documents(REQUESTS, student_id=student_id):
+                existing = PermissionModel._to_request(row)
+                if exclude_id and existing.id == exclude_id:
+                    continue
+                if existing.status in DEAD_STATUSES:
+                    continue
+                if not existing.start_date or not existing.end_date:
+                    continue
+                if existing.start_date > end_date or existing.end_date < start_date:
+                    continue
+                if existing.id in seen:
+                    continue
+                seen.add(existing.id)
+                clashes.append({'student_id': student_id,
+                                'student': None,
+                                'request': existing})
+
+        clashes.sort(key=lambda c: _newest_first(c['request']))
+        return clashes
 
     @staticmethod
     def find_pending_for_faculty(faculty_id: int) -> List[PermissionRequest]:
@@ -143,6 +234,31 @@ class PermissionModel:
         return covering
 
     @staticmethod
+    def find_awaiting_hod(limit: int = 100) -> List[PermissionRequest]:
+        """The HOD's approval queue, oldest first.
+
+        One filtered read rather than a scan of the collection: unlike the
+        reason chart and the totals, this list is the HOD's actual to-do and it
+        is the one query worth keeping cheap.
+        """
+        rows = store.documents(REQUESTS, status=RequestStatus.AWAITING_HOD.value)
+        requests = [PermissionModel._to_request(row) for row in rows]
+        requests.sort(key=_oldest_first)
+        attach_students(requests[:limit])
+        return requests[:limit]
+
+    @staticmethod
+    def set_approved_members(request_id: int, member_ids: List[int]) -> bool:
+        """Record which members the HOD's approval actually covers.
+
+        Written as an explicit list rather than left implicit, because "the HOD
+        struck two students off" is a fact the letter and the register have to be
+        able to show months later.
+        """
+        return store.update(REQUESTS, request_id,
+                            {'approved_member_ids': list(member_ids)})
+
+    @staticmethod
     def update_status(request_id: int, status: RequestStatus,
                       faculty_id: int = None) -> bool:
         values = {'status': status.value}
@@ -166,10 +282,10 @@ class PermissionModel:
             'approved': 0,
             'rejected': 0,
             'pending': 0,
-            'leave_count': 0,
+            'awaiting_hod': 0,
             'classroom_count': 0,
         }
-        reasons = {'medical': 0, 'personal': 0, 'event': 0, 'other': 0}
+        reasons = {'event': 0, 'sports': 0, 'interview': 0, 'other': 0}
 
         for row in rows:
             status = row.get('status')
@@ -179,11 +295,15 @@ class PermissionModel:
                 stats['rejected'] += 1
             elif status == RequestStatus.PENDING.value:
                 stats['pending'] += 1
+            elif status == RequestStatus.AWAITING_HOD.value:
+                # Counted separately from pending: this is the HOD's own queue,
+                # not the department's backlog, and merging the two would hide
+                # exactly the work the HOD is accountable for.
+                stats['awaiting_hod'] += 1
 
-            kind = row.get('permission_type')
-            if kind == PermissionType.LEAVE.value:
-                stats['leave_count'] += 1
-            elif kind == PermissionType.CLASSROOM.value:
+            # Retired types are still counted in the totals but get no activity
+            # bucket, so a historical leave row cannot inflate the activity mix.
+            if row.get('permission_type') == PermissionType.CLASSROOM.value:
                 stats['classroom_count'] += 1
 
             reasons[categorise_reason(row.get('reason'))] += 1
@@ -208,35 +328,67 @@ class PermissionModel:
             assigned_faculty_id=row.get('assigned_faculty_id'),
             created_at=row.get('created_at'),
             updated_at=row.get('updated_at') or row.get('created_at'),
+            member_ids=[int(m) for m in (row.get('member_ids') or [])
+                        if isinstance(m, (int, float)) or str(m).isdigit()],
+            approved_member_ids=(
+                [int(m) for m in row['approved_member_ids']
+                 if isinstance(m, (int, float)) or str(m).isdigit()]
+                if isinstance(row.get('approved_member_ids'), list) else None),
         )
+
+
+def attach_members(requests: List[PermissionRequest]) -> None:
+    """Fill in name and roll number for every student on every request.
+
+    One lookup of the students involved, keyed by id, rather than a read per
+    member per request: a register page of a hundred group permissions would
+    otherwise be four hundred round trips. The details are attached to the
+    request objects the caller already holds, so nothing above this line knows
+    the difference.
+    """
+    member_ids = set()
+    for request in requests:
+        member_ids.update(request.members)
+    if not member_ids:
+        return
+
+    directory = {}
+    for member_id in member_ids:
+        row = store.get('users', member_id)
+        if row:
+            directory[member_id] = {
+                'id': member_id,
+                'name': row.get('name'),
+                'roll_number': row.get('roll_number'),
+                'department': row.get('department'),
+            }
+
+    for request in requests:
+        details = [directory[m] for m in request.members if m in directory]
+        request.member_details = details
+        # The requester stays the single-student view every existing template
+        # already reads, so a group is an addition rather than a rewrite.
+        owner = directory.get(request.student_id)
+        if owner:
+            request.student_name = owner['name']
+            request.student_roll_number = owner['roll_number']
+            request.student_identifier = (
+                owner['roll_number'] or owner['name'])
+            request.student_phone = None
+        else:
+            request.member_details = details
+        approved = set(request.approved_members)
+        request.approved_member_details = [d for d in details if d['id'] in approved]
+        request.dropped_member_details = [d for d in details if d['id'] not in approved]
 
 
 def attach_students(requests: List[PermissionRequest]) -> None:
     """Fill in the student fields the old JOIN used to select.
 
-    One lookup of the students involved, keyed by id, rather than a read per
-    request. The fields are attached to the request objects the caller already
-    holds, so nothing above this line knows the difference.
+    Kept as a thin alias of `attach_members`: a group request still has a single
+    requester, so every caller that wanted "who filed this" still gets it.
     """
-    student_ids = {r.student_id for r in requests if r.student_id}
-    if not student_ids:
-        return
-
-    students = {}
-    for student_id in student_ids:
-        row = store.get('users', student_id)
-        if row:
-            students[student_id] = row
-
-    for request in requests:
-        student = students.get(request.student_id)
-        if not student:
-            continue
-        request.student_name = student.get('name')
-        request.student_roll_number = student.get('roll_number')
-        request.student_identifier = (
-            student.get('roll_number') or student.get('name'))
-        request.student_phone = student.get('phone')
+    attach_members(requests)
 
 
 def _newest_first(request) -> tuple:

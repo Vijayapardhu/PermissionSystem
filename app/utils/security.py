@@ -9,7 +9,6 @@ from datetime import datetime
 from flask import abort, current_app, flash, g, request, session
 from werkzeug.utils import secure_filename
 
-from app.models import UserRole
 from app.models.firestore import DatabaseUnavailable
 from app.models.user import UserModel
 
@@ -220,17 +219,3 @@ def login_required(view):
             return redirect(url_for('auth.login', next=request_referrer_path()))
         return view(*args, **kwargs)
     return wrapped
-
-
-def roles_required(*allowed_roles: UserRole):
-    """Allow only the listed roles through, otherwise 403."""
-    def decorator(view):
-        @functools.wraps(view)
-        @login_required
-        def wrapped(*args, **kwargs):
-            user = current_user()
-            if user.role not in allowed_roles:
-                abort(403)
-            return view(*args, **kwargs)
-        return wrapped
-    return decorator

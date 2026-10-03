@@ -48,7 +48,7 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
@@ -68,8 +68,6 @@
   <div class="table-foot">
     <span>{{ pending | length }} request{{ '' if pending|length == 1 else 's' }} awaiting your decision</span>
     <span class="table-foot__stats">
-      <span class="table-foot__stat">Leave
-        <strong>{{ pending | selectattr('permission_type.value', 'equalto', 'LEAVE') | list | length }}</strong></span>
       <span class="table-foot__stat">Classroom
         <strong>{{ pending | selectattr('permission_type.value', 'equalto', 'CLASSROOM') | list | length }}</strong></span>
     </span>
@@ -106,7 +104,7 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap small">

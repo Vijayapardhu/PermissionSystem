@@ -15,17 +15,15 @@
     </p>
   </div>
   <div class="page-head__actions">
-    <a href="{{ url_for('student.new_request', type='LEAVE') }}" class="btn btn-primary btn-pill">
-      <i class="bi bi-plus-circle"></i> New Leave Permission
-    </a>
-    <a href="{{ url_for('student.new_request', type='CLASSROOM') }}" class="btn btn-outline-primary btn-pill">
-      <i class="bi bi-door-open"></i> Classroom Permission
+    <a href="{{ url_for('student.new_request') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-circle"></i> New Activity Permission
     </a>
   </div>
 </div>
 
 <div class="stat-grid">
   {{ stat('Pending', counts.get('PENDING', 0), 'hourglass-split', 'warning') }}
+  {{ stat('Awaiting HOD', counts.get('AWAITING_HOD', 0), 'person-check', 'primary') }}
   {{ stat('Approved', counts.get('APPROVED', 0), 'check-circle', 'success') }}
   {{ stat('Rejected', counts.get('REJECTED', 0), 'x-circle', 'danger') }}
   {{ stat('All Requests', counts.values() | sum, 'journal-text', 'primary') }}
@@ -78,12 +76,13 @@
     <span class="table-foot__stats">
       <span class="table-foot__stat">Approved <strong>{{ counts.get('APPROVED', 0) }}</strong></span>
       <span class="table-foot__stat">Pending <strong>{{ counts.get('PENDING', 0) }}</strong></span>
+      <span class="table-foot__stat">Awaiting HOD <strong>{{ counts.get('AWAITING_HOD', 0) }}</strong></span>
       <span class="table-foot__stat">Rejected <strong>{{ counts.get('REJECTED', 0) }}</strong></span>
     </span>
   </div>
   {% else %}
     {{ empty_state('inbox', 'No permission requests yet',
-                   'Use the buttons above to submit your first leave or classroom permission.') }}
+                   'Use the button above to submit your first activity permission.') }}
   {% endif %}
 </div>
 {% endblock %}

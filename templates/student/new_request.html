@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import csrf_field, roll with context %}
+{% from '_macros.html' import csrf_field, date, roll, status_badge with context %}
 {% block title %}New Permission Request &middot; {{ APP_NAME }}{% endblock %}
 
 {% block main_class %}page-wrap-narrow{% endblock %}
@@ -9,7 +9,8 @@
   <div>
     <h1 class="page-head__title">Submit a Permission Request</h1>
     <p class="page-head__sub">
-      Routed to a CSE lecturer for verification. You will be emailed once a decision is made.
+      Routed to a CSE lecturer for verification, then to the Head of Department
+      for final approval. You will be emailed at each step.
     </p>
   </div>
   <div class="page-head__actions">
@@ -22,30 +23,114 @@
 <form method="post" enctype="multipart/form-data" novalidate>
   {{ csrf_field() }}
 
+  {# ---- Duplicate check.
+
+     Shown only after the server has found live requests overlapping these dates,
+     which is what `conflicts` carries. The student is not blocked: two genuine
+     permissions can fall on the same day. They have to acknowledge the overlap,
+     and the checkbox is what the service reads as `duplicate_ack`.
+
+     The proof field is empty because nothing was uploaded on the attempt that
+     raised this -- the check runs before the upload, so there is no orphaned
+     object in the bucket and no request holding a file nobody submitted. #}
+  {% if conflicts %}
+  <div class="card-au mb-3" style="border-left:3px solid var(--au-warning)">
+    <div class="card-au__head">
+      <h2 class="card-au__title">
+        <i class="bi bi-exclamation-triangle"></i>
+        Possible duplicate &middot; {{ conflicts|length }} overlapping request{{ '' if conflicts|length == 1 else 's' }}
+      </h2>
+    </div>
+    <div class="card-au__body">
+      <p class="mb-3">
+        You already have {{ 'a live permission request' if conflicts|length == 1 else 'live permission requests' }}
+        covering {{ 'these dates' if conflicts|length == 1 else 'some of these dates' }}.
+        Check the details below before continuing &mdash; submitting again may be a
+        mistake, or may be exactly what you need.
+      </p>
+
+      <div class="au-table-wrap mb-3">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th>Student</th>
+              <th>Reference</th>
+              <th>Type</th>
+              <th>From</th>
+              <th>To</th>
+              <th>Status</th>
+              <th class="table-au__actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for record in conflicts %}
+            <tr>
+              {# Named, not counted: on a group permission the clash is usually
+                 a classmate's, and "you already have a request" would be a lie. #}
+              <td class="table-au__strong text-nowrap">
+                {% set who = clash_students.get(loop.index0) if clash_students else None %}
+                {% if clash_students is not none %}
+                  {{ (who.roll_number if who else None) or '—' }}
+                {% endif %}
+              </td>
+              <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+              <td class="text-nowrap">{{ record.permission_type.value|title }}</td>
+              <td class="text-nowrap">{{ date(record.start_date) }}</td>
+              <td class="text-nowrap">{{ date(record.end_date) }}</td>
+              <td>{{ status_badge(record.status) }}</td>
+              <td class="table-au__actions">
+                <a href="{{ url_for('student.request_detail', request_id=record.id) }}"
+                   class="btn btn-sm btn-outline-secondary">Open</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="duplicate_ack"
+               name="duplicate_ack" value="1" required>
+        <label class="form-check-label" for="duplicate_ack">
+          I have reviewed the overlapping request{{ '' if conflicts|length == 1 else 's' }} above
+          and still want to submit this one.
+        </label>
+      </div>
+      <p class="form-text mb-0">
+        <i class="bi bi-info-circle"></i>
+        Nothing has been submitted yet, and the proof document below has to be
+        selected again.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
+  {#
+     Leave management is retired, so there is one permission type left. The radio
+     group is kept rather than replaced with a hidden input: it keeps the field
+     posted under the same name the service validates, and leaves room to add a
+     type back without touching the form's plumbing. The value is a fixed
+     constant, so there is nothing here for a student to get wrong.
+  #}
   <div class="card-au mb-3">
     <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-toggle-on"></i> 1 &middot; Permission Type</h2></div>
     <div class="card-au__body">
-      {% set chosen = form.get('permission_type') or default_type %}
       <div class="pick-grid">
         <div>
-          <input class="btn-check" type="radio" name="permission_type" id="typeLeave"
-                 value="LEAVE" {{ 'checked' if chosen == 'LEAVE' }}>
-          <label class="pick d-block" for="typeLeave">
-            <i class="bi bi-calendar-minus pick__icon"></i>
-            <div class="pick__title">Leave Permission</div>
-            <div class="pick__hint">Absent for a date range</div>
-          </label>
-        </div>
-        <div>
-          <input class="btn-check" type="radio" name="permission_type" id="typeClassroom"
-                 value="CLASSROOM" {{ 'checked' if chosen == 'CLASSROOM' }}>
-          <label class="pick d-block" for="typeClassroom">
+          <input class="btn-check" type="radio" name="permission_type" id="typeActivity"
+                 value="CLASSROOM" checked>
+          <label class="pick d-block" for="typeActivity">
             <i class="bi bi-door-open pick__icon"></i>
-            <div class="pick__title">Classroom Permission</div>
-            <div class="pick__hint">Miss a single class or event</div>
+            <div class="pick__title">Activity Permission</div>
+            <div class="pick__hint">A co-curricular or extracurricular event</div>
           </label>
         </div>
       </div>
+      <p class="form-text mb-0 mt-2">
+        <i class="bi bi-info-circle"></i>
+        One type of permission is issued: for a co-curricular or extracurricular
+        activity. Leave requests are no longer handled here.
+      </p>
     </div>
   </div>
 
@@ -73,8 +158,64 @@
     </div>
   </div>
 
+  {# ---- Group members ----
+
+       Up to three others alongside the requester, four on the letter. The
+       chosen students are held as hidden inputs so the form posts without any
+       JavaScript having to be trusted, and the chips are rebuilt from the same
+       server-rendered list on a re-render -- a validation failure must not lose
+       the group the student spent two minutes assembling. #}
+  {% set chosen_members = selected_members or [] %}
+  {% set max_extra = 3 %}
   <div class="card-au mb-3">
-    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-calendar-week"></i> 3 &middot; Schedule &amp; Reason</h2></div>
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-people"></i> 3 &middot; Who This Covers</h2>
+    </div>
+    <div class="card-au__body">
+      <div class="member-picker">
+        <div class="member-picker__search">
+          <label for="member_q" class="form-label">
+            Add a student <span class="text-muted fw-normal">(optional, up to {{ max_extra }} more)</span>
+          </label>
+          <input type="search" class="form-control" id="member_q" autocomplete="off"
+                 placeholder="Search by PIN or name, e.g. 26B21CS058"
+                 role="combobox" aria-expanded="false" aria-controls="member_results"
+                 aria-autocomplete="list">
+          <ul class="member-picker__results" id="member_results" role="listbox"
+              aria-label="Matching students" hidden></ul>
+        </div>
+
+        <div class="member-picker__chosen">
+          <p class="form-text mb-2">
+            <i class="bi bi-shield-check"></i>
+            You are always on this letter. Everyone added here is covered by the
+            same permission and the same decision.
+          </p>
+          <ul class="member-chips" id="member_chosen">
+            {% for member in chosen_members %}
+            <li class="member-chip">
+              <input type="hidden" name="member_ids" value="{{ member.id }}">
+              <span class="member-chip__pin">{{ member.roll_number or member.name }}</span>
+              {% if member.roll_number and member.name %}
+              <span class="member-chip__name">{{ member.name }}</span>
+              {% endif %}
+              <button type="button" class="member-chip__remove" data-member-id="{{ member.id }}"
+                      aria-label="Remove {{ member.roll_number or member.name }}">
+                <i class="bi bi-x"></i>
+              </button>
+            </li>
+            {% endfor %}
+          </ul>
+          <p class="form-text mb-0" id="member_count">
+            {{ chosen_members|length }} of {{ max_extra + 1 }} student{{ '' if (max_extra + 1) == 1 else 's' }} on this letter
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-au mb-3">
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-calendar-week"></i> 4 &middot; Schedule &amp; Reason</h2></div>
     <div class="card-au__body">
       <div class="row g-3">
         <div class="col-md-6">
@@ -103,8 +244,8 @@
                     minlength="10" maxlength="1000"
                     placeholder="Explain why the permission is needed (at least 10 characters).">{{ form.get('reason', '') }}</textarea>
           <div class="form-text">
-            Mention Medical, Personal, Family, Event, Club or Interview so the HOD
-            analytics can categorise it correctly.
+            Name the activity and the club or organising body, so the HOD analytics
+            can categorise it.
           </div>
         </div>
       </div>
@@ -112,7 +253,7 @@
   </div>
 
   <div class="card-au mb-4">
-    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-paperclip"></i> 4 &middot; Proof Document</h2></div>
+    <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-paperclip"></i> 5 &middot; Proof Document</h2></div>
     <div class="card-au__body">
       <label for="proof" class="form-label">Supporting document <span class="text-danger">*</span></label>
       <input type="file" class="form-control" id="proof" name="proof" accept=".pdf,.jpg,.jpeg,.png" required>
@@ -129,4 +270,121 @@
     <a href="{{ url_for('student.dashboard') }}" class="btn btn-outline-secondary btn-pill">Cancel</a>
   </div>
 </form>
+
+<script>
+  /* The member picker.
+     Progressive enhancement on purpose: the chosen students are already in the
+     markup as hidden inputs, so the form posts correctly with scripting off and
+     the server stays the only thing that decides who is on the letter. This adds
+     the typeahead and the chips. */
+  (function () {
+    const MAX = {{ max_extra }};
+    const search = document.getElementById('member_q');
+    const results = document.getElementById('member_results');
+    const chosen = document.getElementById('member_chosen');
+    const counter = document.getElementById('member_count');
+    if (!search || !results || !chosen) return;
+
+    const selected = new Map();
+    chosen.querySelectorAll('input[name="member_ids"]').forEach((input) => {
+      const chip = input.closest('.member-chip');
+      selected.set(input.value, {
+        pin: (chip.querySelector('.member-chip__pin') || {}).textContent || '',
+        name: (chip.querySelector('.member-chip__name') || {}).textContent || ''
+      });
+    });
+
+    let timer = null;
+
+    function refreshCounter() {
+      const total = selected.size + 1; // the requester is always on it
+      counter.textContent = total + ' of ' + (MAX + 1) + ' student' +
+        (MAX + 1 === 1 ? '' : 's') + ' on this letter';
+    }
+
+    function addChip(member) {
+      if (selected.has(String(member.id))) return false;
+      if (selected.size >= MAX) return false;
+      selected.set(String(member.id), { pin: member.roll_number || member.name, name: member.name || '' });
+
+      const li = document.createElement('li');
+      li.className = 'member-chip';
+      li.innerHTML =
+        '<input type="hidden" name="member_ids" value="' + member.id + '">' +
+        '<span class="member-chip__pin"></span>' +
+        '<span class="member-chip__name"></span>' +
+        '<button type="button" class="member-chip__remove" aria-label="Remove">' +
+        '<i class="bi bi-x"></i></button>';
+      li.querySelector('.member-chip__pin').textContent = member.roll_number || member.name || '';
+      li.querySelector('.member-chip__name').textContent =
+        (member.roll_number && member.name) ? member.name : '';
+      li.querySelector('.member-chip__name').hidden =
+        !(member.roll_number && member.name);
+      chosen.appendChild(li);
+      refreshCounter();
+      return true;
+    }
+
+    function removeChip(id) {
+      selected.delete(String(id));
+      chosen.querySelectorAll('input[name="member_ids"]').forEach((input) => {
+        if (input.value === String(id)) input.closest('.member-chip').remove();
+      });
+      refreshCounter();
+    }
+
+    chosen.addEventListener('click', function (event) {
+      const button = event.target.closest('.member-chip__remove');
+      if (!button) return;
+      const chip = button.closest('.member-chip');
+      const id = chip.querySelector('input[name="member_ids"]').value;
+      removeChip(id);
+      results.hidden = true;
+      search.focus();
+    });
+
+    function render(matches) {
+      results.innerHTML = '';
+      if (!matches.length) { results.hidden = true; return; }
+      matches.forEach((member) => {
+        const li = document.createElement('li');
+        li.setAttribute('role', 'option');
+        li.className = 'member-result';
+        if (selected.has(String(member.id))) li.classList.add('is-added');
+        const main = document.createElement('span');
+        main.className = 'member-result__pin';
+        main.textContent = member.roll_number || member.name;
+        const sub = document.createElement('span');
+        sub.className = 'member-result__name';
+        sub.textContent = (member.roll_number && member.name) ? member.name : '';
+        li.appendChild(main);
+        li.appendChild(sub);
+        li.addEventListener('click', function () {
+          if (addChip(member)) { search.value = ''; render([]); search.focus(); }
+        });
+        results.appendChild(li);
+      });
+      results.hidden = false;
+    }
+
+    search.addEventListener('input', function () {
+      const q = search.value.trim();
+      clearTimeout(timer);
+      if (q.length < 2) { results.hidden = true; return; }
+      timer = setTimeout(function () {
+        fetch({{ url_for('student.member_search')|tojson }} + '?q=' + encodeURIComponent(q),
+              { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : { members: [] }; })
+          .then(function (data) { render(data.members || []); })
+          .catch(function () { render([]); });
+      }, 220);
+    });
+
+    search.addEventListener('blur', function () {
+      setTimeout(function () { results.hidden = true; }, 160);
+    });
+
+    refreshCounter();
+  })();
+</script>
 {% endblock %}

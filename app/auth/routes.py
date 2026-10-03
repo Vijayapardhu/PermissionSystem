@@ -17,6 +17,7 @@ from flask import (
 from app.auth import microsoft
 from app.models import UserRole
 from app.models.user import UserModel
+from app.permissions.pages import permission_required
 from app.utils.security import (
     csrf_token, current_user, database_unavailable, is_university_email,
     is_valid_email, login_required, rotate_csrf_token,
@@ -70,7 +71,9 @@ def verify_letter(reference: str):
     exist. Answering 403 to a forged signature and 404 to a missing one would
     hand anyone a way to test which reference numbers are real.
     """
-    from app.models.permission import ApprovalModel, PermissionModel
+    from app.models.permission import (
+        ApprovalModel, PermissionModel, attach_members,
+    )
     from app.models.user import UserModel
     from app.utils.qr import reference_for, resolve_reference
 
@@ -81,6 +84,11 @@ def verify_letter(reference: str):
 
     try:
         record = PermissionModel.find_by_id(request_id)
+        # A group letter is verified by the people standing in front of it, so
+        # every student it covers has to be named here. Only the members are
+        # exposed -- never who else was on the request or anything else private.
+        if record is not None:
+            attach_members([record])
     except Exception:
         current_app.logger.exception('Verification lookup failed for %s', reference)
         abort(503, description=(
@@ -123,8 +131,8 @@ def landing():
 
 
 STUDENT_TAGLINE = (
-    'Submit leave and classroom permission requests, track your '
-    'approval status, and download an official permission letter.'
+    'Submit activity permission requests, track their approval, and print '
+    'an official permission letter.'
 )
 
 FACULTY_TAGLINE = (
@@ -288,7 +296,7 @@ def dev_login():
 
 
 @auth.route('/account')
-@login_required
+@permission_required('auth.profile')
 def profile():
     """Read-only view of the signed-in identity and active sessions."""
     from app.models.permission import PermissionModel

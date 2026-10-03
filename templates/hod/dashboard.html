@@ -25,6 +25,9 @@
   {{ stat('Approved', stats.approved, 'check-circle', 'success') }}
   {{ stat('Rejected', stats.rejected, 'x-circle', 'danger') }}
   {{ stat('Pending', stats.pending, 'hourglass-split', 'warning') }}
+  {# The HOD's own queue, called out separately from Pending: these are the ones
+     only the HOD can move. #}
+  {{ stat('Awaiting HOD', stats.awaiting_hod, 'person-check', 'primary') }}
 </div>
 
 <div class="row g-3 mb-4">
@@ -49,7 +52,7 @@
 
   <div class="col-12 col-lg-6">
     <div class="card-au h-100">
-      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-bar-chart"></i> Leave vs Classroom</h2></div>
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-bar-chart"></i> Activity mix</h2></div>
       <div class="card-au__body">
         <canvas id="typeChart" height="245"
                 data-labels='{{ type_chart.labels | tojson }}'
@@ -58,7 +61,6 @@
       <div class="table-foot">
         <span>By request type</span>
         <span class="table-foot__stats">
-          <span class="table-foot__stat">Leave <strong>{{ stats.leave_count }}</strong></span>
           <span class="table-foot__stat">Classroom <strong>{{ stats.classroom_count }}</strong></span>
         </span>
       </div>
@@ -95,14 +97,14 @@
       <select class="form-select form-select-sm" name="status" onchange="this.form.submit()"
               style="width:auto" aria-label="Filter by status">
         <option value="">All statuses</option>
-        {% for status in ['PENDING', 'APPROVED', 'REJECTED'] %}
-        <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
+        {% for status in ['AWAITING_HOD', 'PENDING', 'APPROVED', 'REJECTED'] %}
+        <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title|replace('_', ' ') }}</option>
         {% endfor %}
       </select>
       <select class="form-select form-select-sm" name="type" onchange="this.form.submit()"
               style="width:auto" aria-label="Filter by type">
         <option value="">All types</option>
-        {% for kind in ['LEAVE', 'CLASSROOM'] %}
+        {% for kind in ['CLASSROOM'] %}
         <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
         {% endfor %}
       </select>
@@ -129,7 +131,7 @@
         {% for record in approved_today %}
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
@@ -145,8 +147,6 @@
   <div class="table-foot">
     <span>{{ approved_today | length }} student{{ '' if approved_today|length == 1 else 's' }} with permission in effect today</span>
     <span class="table-foot__stats">
-      <span class="table-foot__stat">Leave
-        <strong>{{ approved_today | selectattr('permission_type.value', 'equalto', 'LEAVE') | list | length }}</strong></span>
       <span class="table-foot__stat">Classroom
         <strong>{{ approved_today | selectattr('permission_type.value', 'equalto', 'CLASSROOM') | list | length }}</strong></span>
     </span>
@@ -183,7 +183,7 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
@@ -203,6 +203,8 @@
     <span class="table-foot__stats">
       <span class="table-foot__stat">Approved
         <strong>{{ records | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
+      <span class="table-foot__stat">Awaiting HOD
+        <strong>{{ records | selectattr('status.value', 'equalto', 'AWAITING_HOD') | list | length }}</strong></span>
       <span class="table-foot__stat">Pending
         <strong>{{ records | selectattr('status.value', 'equalto', 'PENDING') | list | length }}</strong></span>
       <span class="table-foot__stat">Rejected

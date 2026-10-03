@@ -1,0 +1,200 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, date, status_badge, time_range, type_badge with context %}
+{% block title %}Request REQ-{{ '%04d' % request.id }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">
+      Request REQ-{{ '%04d' % request.id }}
+      {% if request.is_group %}<span class="badge text-bg-light ms-1">Group of {{ request.group_size }}</span>{% endif %}
+    </h1>
+    <p class="page-head__sub">
+      Submitted {{ request.created_at.strftime('%d %B %Y at %I:%M %p') }}
+      by {{ request.student_roll_number or request.student_name }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {{ status_badge(request.status) }}
+    <a href="{{ url_for('student.request_letter', request_id=request.id) }}"
+       class="btn btn-outline-secondary btn-pill no-print" target="_blank" rel="noopener">
+      <i class="bi bi-file-earmark-text"></i> Preview letter
+    </a>
+    <a href="{{ url_for('hod.requests') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All requests
+    </a>
+  </div>
+</div>
+
+{# ---- Who this covers ---- #}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-people"></i> Students on this request</h2>
+    <span class="form-text">{{ request.group_size }} student{{ '' if request.group_size == 1 else 's' }}</span>
+  </div>
+  <div class="card-au__body">
+    {% set members = request.member_details or [] %}
+    <table class="table-au table-au--flush">
+      <tbody>
+        {% for member in members %}
+        <tr>
+          <td class="table-au__strong text-nowrap" style="width:1%">{{ member.roll_number or '—' }}</td>
+          <td>{{ member.name if member.name != member.roll_number else '' }}</td>
+          <td class="text-end">
+            {% if loop.first %}<span class="form-text">Submitted it</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if request.dropped_member_details %}
+    <p class="form-text mt-2 mb-0">
+      <i class="bi bi-dash-circle"></i>
+      Not covered by the approval:
+      {% for member in request.dropped_member_details %}{{ member.roll_number or member.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="card-au mb-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-text"></i> Request Details</h2></div>
+      <div class="card-au__body">
+        <dl class="definition">
+          <dt>Permission type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
+          <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
+          <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
+          <dt>Reason</dt><dd>{{ request.reason }}</dd>
+          <dt>Submitted by</dt><dd>{{ request.student_name }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {% if proofs %}
+    <div class="card-au mb-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-paperclip"></i> Proof</h2></div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for proof in proofs %}
+          <li class="mb-2">
+            <a href="{{ url_for('faculty.download_proof', proof_id=proof.id) }}">
+              <i class="bi bi-download"></i> {{ proof.original_filename }}
+            </a>
+            <span class="form-text">{{ (proof.file_size / 1024)|round(1) }} KB</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if history %}
+    <div class="card-au mb-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-clock-history"></i> Approval history</h2></div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for entry in history %}
+          <li class="mb-2">
+            <strong>{{ entry.faculty_name or '—' }}</strong>
+            {{ 'approved' if entry.action.value == 'APPROVED' else 'rejected' }} it
+            <span class="form-text">on {{ entry.actioned_at.strftime('%d %B %Y at %I:%M %p') }}</span>
+            {% if entry.remarks %}<div class="small text-muted">{{ entry.remarks }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ---- The decision ---- #}
+  <div class="col-12 col-lg-5">
+    {% if request.status.value == 'AWAITING_HOD' %}
+    <div class="card-au" style="border-left:3px solid var(--au-primary)">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your Decision</h2>
+      </div>
+      <div class="card-au__body">
+        {# On a group this is the whole point of the screen: the HOD keeps the
+           students they are covering and strikes the rest. The checkboxes post
+           as `member_ids`, and the service refuses an approval that would leave
+           nobody covered rather than quietly defaulting to everyone. #}
+        {% if request.is_group %}
+        <p class="text-muted small mb-2">
+          <i class="bi bi-info-circle"></i>
+          Untick anyone this permission should <strong>not</strong> cover. They
+          are removed from the letter and told so.
+        </p>
+        <div class="mb-3">
+          {% for member in members %}
+          <div class="form-check">
+            {# Checked against the recorded decision, not unconditionally: a
+               member the HOD already struck off must stay unticked, or
+               re-approving the request would quietly put them back on the
+               letter. #}
+            <input class="form-check-input" type="checkbox" name="member_ids"
+                   value="{{ member.id }}" id="member_{{ member.id }}"
+                   {% if member.id in request.approved_members %}checked{% endif %}>
+            <label class="form-check-label" for="member_{{ member.id }}">
+              {{ member.roll_number or '—' }}
+              {# A student's display name is often their PIN; printing both
+                   repeats the same string. #}
+              {% if member.name and member.name != member.roll_number %}
+              <span class="text-muted small">{{ member.name }}</span>
+              {% endif %}
+              {% if member.id not in request.approved_members %}
+              <span class="badge text-bg-light ms-1">not covered</span>
+              {% endif %}
+            </label>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('hod.request_action', request_id=request.id) }}"
+              id="hod_decision"
+              onsubmit="return confirm('Record this decision on REQ-{{ '%04d' % request.id }}?');">
+          {{ csrf_field() }}
+          {# Load-bearing. Unchecked boxes are simply absent from the POST, so an
+             empty `member_ids` is ambiguous: it could mean "solo request, no
+             checkboxes rendered" or "the HOD unticked all four". This marker is
+             what lets the route tell those apart, so unticking everyone reaches
+             the service and is refused rather than silently approving the lot. #}
+          {% if request.is_group %}
+          <input type="hidden" name="member_scope" value="group">
+          {% endif %}
+          <label for="remarks" class="form-label">
+            Remarks <span class="text-muted fw-normal">(required when rejecting)</span>
+          </label>
+          <textarea class="form-control mb-3" id="remarks" name="remarks" rows="3"
+                    placeholder="A note for the students and the record."></textarea>
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" name="action" value="APPROVED"
+                    class="btn btn-success btn-pill px-4">
+              <i class="bi bi-check-circle"></i> Approve
+            </button>
+            <button type="submit" name="action" value="REJECTED"
+                    class="btn btn-outline-danger btn-pill px-4">
+              <i class="bi bi-x-circle"></i> Reject
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <div class="card-au">
+      <div class="card-au__body">
+        <p class="mb-0 text-muted">
+          <i class="bi bi-info-circle"></i>
+          This request is <strong>{{ request.status.value|replace('_', ' ')|title }}</strong>
+          and is no longer waiting on a decision from you.
+        </p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

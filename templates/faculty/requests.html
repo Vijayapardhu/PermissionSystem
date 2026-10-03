@@ -26,7 +26,7 @@
     <select class="form-select form-select-sm" name="status" style="width:auto"
             onchange="this.form.submit()" aria-label="Filter by status">
       <option value="">All statuses</option>
-      {% for status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
+      {% for status in ['PENDING', 'AWAITING_HOD', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
       <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
       {% endfor %}
     </select>
@@ -34,7 +34,7 @@
     <select class="form-select form-select-sm" name="type" style="width:auto"
             onchange="this.form.submit()" aria-label="Filter by type">
       <option value="">All types</option>
-      {% for kind in ['LEAVE', 'CLASSROOM'] %}
+      {% for kind in ['CLASSROOM'] %}
       <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
       {% endfor %}
     </select>
@@ -85,7 +85,7 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>{{ roll(record.student_roll_number) }}</td>
+          <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>

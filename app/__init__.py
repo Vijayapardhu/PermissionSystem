@@ -25,6 +25,7 @@ def create_app(config_object=Config) -> Flask:
 
     _register_extensions(app)
     _register_blueprints(app)
+    _register_page_permissions(app)
     _register_health_check(app)
     _register_favicon(app)
     _register_static_cachebusting(app)
@@ -34,6 +35,19 @@ def create_app(config_object=Config) -> Flask:
     _register_error_handlers(app)
 
     return app
+
+
+def _register_page_permissions(app: Flask) -> None:
+    """Refuse to boot when a route has no page grant.
+
+    Runs after the blueprints so every endpoint is on the map, and it raises
+    rather than warning: an endpoint nothing covers is reachable by any
+    signed-in account, and a deploy that fails loudly beats one that quietly
+    publishes an internal page.
+    """
+    from app.permissions.pages import _assert_every_endpoint_is_mapped
+
+    _assert_every_endpoint_is_mapped(app)
 
 
 def _register_health_check(app: Flask) -> None:
@@ -216,11 +230,14 @@ def _register_template_helpers(app: Flask) -> None:
         # Expose the path under its own name: templates pass a PermissionRequest
         # as `request`, which would shadow Flask's `request` proxy and break any
         # use of request.path in the layout.
-        from app.utils.nav import group_sections, nav_for
+        from app.permissions.pages import can_access, visible_nav
+        from app.utils.nav import group_sections
         from app.utils.security import current_user as _current_user
 
         user = _current_user()
-        items = nav_for(user.role.value) if user else []
+        # Filtered through the page grants rather than the raw role list, so the
+        # sidebar can only offer a page the route behind it will actually serve.
+        items = visible_nav(user.role.value) if user else []
         return {
             'APP_NAME': app.config['APP_NAME'],
             'UNIVERSITY_NAME': app.config['UNIVERSITY_NAME'],
@@ -231,9 +248,13 @@ def _register_template_helpers(app: Flask) -> None:
             'current_path': request.path,
             'nav_items': items,
             'nav_sections': group_sections(items),
+            # For templates that link somewhere the sidebar does not list, such as
+            # the print button on a letter or a row action in a table.
+            'can_access': can_access,
             'show_sidebar': bool(user) and user.role.value in SIDEBAR_ROLES,
             'status_classes': {
                 'PENDING': 'bg-warning text-dark',
+                'AWAITING_HOD': 'bg-info text-dark',
                 'APPROVED': 'bg-success',
                 'REJECTED': 'bg-danger',
                 'CANCELLED': 'bg-secondary',
@@ -241,6 +262,7 @@ def _register_template_helpers(app: Flask) -> None:
             },
             'status_icons': {
                 'PENDING': 'hourglass-split',
+                'AWAITING_HOD': 'person-check',
                 'APPROVED': 'check-circle',
                 'REJECTED': 'x-circle',
                 'CANCELLED': 'slash-circle',

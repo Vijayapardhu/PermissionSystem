@@ -22,16 +22,26 @@
       overflow: hidden;
       box-shadow: 0 12px 32px rgba(16, 24, 40, .1);
     }
+    /* Centred lockup: the mark is the whole letterhead. The university name is
+       no longer spelled out beside it -- the mark already carries it, and the
+       page title and footer both name it too. */
     .verify-card__head {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      gap: .9rem;
-      padding: 1.1rem 1.25rem;
+      justify-content: center;
+      gap: .5rem;
+      padding: 1.4rem 1.25rem;
       border-bottom: 1px solid var(--au-border, #dfe4ec);
+      text-align: center;
     }
-    .verify-card__head img { height: 34px; width: auto; }
-    .verify-card__head strong { display: block; font-size: .95rem; letter-spacing: .02em; }
-    .verify-card__head span { font-size: .72rem; color: var(--au-text-faint, #64748b); }
+    .verify-card__head img { height: 44px; width: auto; }
+    .verify-card__head span {
+      font-size: .7rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--au-text-faint, #64748b);
+    }
 
     .verify-state {
       display: flex;
@@ -50,11 +60,18 @@
       text-transform: uppercase;
       opacity: .75;
     }
-    .verify-state--approved  { background: #f0fdf6; color: #046c4e; }
-    .verify-state--rejected  { background: #fef2f2; color: #991b1b; }
-    .verify-state--pending   { background: #fffbeb; color: #92400e; }
-    .verify-state--cancelled { background: #f8fafc; color: #334155; }
-    .verify-state--expired   { background: #f1f5f9; color: #0f172a; }
+    <!-- Three tones, not one per status.
+
+         A stranger reads this page to answer one question: may this person be
+         out? Green answers yes, red answers no, and grey answers "nobody has
+         decided yet" -- which is every state that is still in flight or has been
+         withdrawn. Collapsing the six statuses onto three tones means a status
+         added later cannot quietly introduce a fourth colour, and it stops a
+         pending request borrowing an amber that reads as a warning rather than as
+         an absence of decision. -->
+    .verify-state--green { background: #f0fdf6; color: #046c4e; }
+    .verify-state--red   { background: #fef2f2; color: #991b1b; }
+    .verify-state--grey  { background: #f1f5f9; color: #334155; }
 
     .verify-rows { margin: 0; }
     .verify-row {
@@ -74,6 +91,22 @@
     .verify-row dd { flex: 1; margin: 0; font-weight: 600; word-break: break-word; }
     .verify-row dd.is-quiet { font-weight: 400; }
 
+    /* Group permissions: one line per student, PIN first so it can be matched
+       against an ID card without reading the name. */
+    .verify-members { margin: 0; padding: 0; list-style: none; }
+    .verify-members li {
+      display: flex;
+      gap: .6rem;
+      align-items: baseline;
+      padding: .12rem 0;
+    }
+    .verify-members__excluded {
+      margin: .4rem 0 0;
+      font-size: .78rem;
+      font-weight: 400;
+      color: var(--au-text-faint, #64748b);
+    }
+
     .verify-foot {
       padding: .9rem 1.25rem;
       background: #f8fafc;
@@ -81,7 +114,10 @@
       font-size: .72rem;
       color: var(--au-text-faint, #64748b);
     }
-    .verify-foot strong { color: #046c4e; }
+    /* Neutral rather than green: "Verified" is a statement about the signature,
+       not about the outcome, and colouring it green next to a red status reads as
+       part of the verdict. */
+    .verify-foot strong { color: #0f172a; }
   </style>
 </head>
 <body class="verify-shell">
@@ -91,26 +127,72 @@
       <img src="{{ asset('images/aditya-logo.png') }}"
            alt="{{ UNIVERSITY_NAME }}"
            class="au-wordmark au-wordmark--invert-keep">
-      <div>
-        <strong>{{ UNIVERSITY_NAME|upper }}</strong>
-        <span>{{ DEPARTMENT_NAME }}</span>
-      </div>
+      <span>{{ DEPARTMENT_NAME }}</span>
     </div>
 
-    {% set state = record.status.value|lower %}
+    {# Three tones, mapped here rather than in the stylesheet so the rule set
+       cannot grow a fourth colour. #}
+    {% set status = record.status.value %}
+    {% set tone = 'green' if status == 'APPROVED'
+                 else ('red' if status == 'REJECTED' else 'grey') %}
     {% set icons = {
       'APPROVED': 'check-circle-fill', 'REJECTED': 'x-circle-fill',
-      'PENDING': 'hourglass-split', 'CANCELLED': 'slash-circle',
+      'PENDING': 'hourglass-split', 'AWAITING_HOD': 'person-check',
+      'CANCELLED': 'slash-circle',
       'EXPIRED': 'clock-history' } %}
-    <div class="verify-state verify-state--{{ state }}">
-      <i class="bi bi-{{ icons.get(record.status.value, 'question-circle') }}"></i>
+    {# This page is read by whoever is handed the letter, so the wording has to
+       say plainly that a recommended request is not a permission yet. #}
+    {% set wording = {
+      'PENDING': 'AWAITING VERIFICATION',
+      'AWAITING_HOD': 'RECOMMENDED - AWAITING HOD APPROVAL',
+      'APPROVED': 'APPROVED',
+      'REJECTED': 'REJECTED',
+      'CANCELLED': 'CANCELLED',
+      'EXPIRED': 'EXPIRED' } %}
+    <div class="verify-state verify-state--{{ tone }}">
+      <i class="bi bi-{{ icons.get(status, 'question-circle') }}"></i>
       <div>
         <small>Status verified against the department record</small>
-        {{ record.status.value }}
+        {{ wording.get(status, status) }}
       </div>
     </div>
 
     <dl class="verify-rows">
+      {# `record`, not `request`: this template receives the request row as
+         `record`, and Flask's own `request` global is the HTTP request, which
+         has no `is_group` on it. Naming the wrong one silently evaluates false
+         and the block never renders. #}
+      {% if record.is_group %}
+      {# Everyone the letter covers, not just whoever filed it: the person
+         standing in front of a gatekeeper needs to find their own PIN on the
+         screen, and needs to see who else shares the permission. #}
+      <div class="verify-row verify-row--members">
+        <dt>Students covered</dt>
+        <dd>
+          <ul class="verify-members">
+            {% for member in (record.approved_member_details
+                              if status == 'APPROVED' else record.member_details) or [] %}
+            <li>
+              <strong>{{ member.roll_number or '—' }}</strong>
+              {# A student's Microsoft display name is very often their PIN, so
+                   showing both prints the same string twice. #}
+              {% if member.name and member.name != member.roll_number %}
+              <span class="is-quiet">{{ member.name }}</span>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% if status == 'APPROVED' and record.dropped_member_details %}
+          <p class="verify-members__excluded">
+            Submitted but <strong>not covered</strong>:
+            {% for member in record.dropped_member_details %}
+              {{ member.roll_number or member.name }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </p>
+          {% endif %}
+        </dd>
+      </div>
+      {% endif %}
       <div class="verify-row">
         <dt>PIN / Roll number</dt>
         <dd>{{ student.roll_number if student and student.roll_number else '—' }}</dd>
@@ -129,7 +211,7 @@
       </div>
       <div class="verify-row">
         <dt>Permission type</dt>
-        <dd>{{ record.permission_type.value|title }} Permission</dd>
+        <dd>{% if record.permission_type.value == 'LEAVE' %}Leave (retired){% else %}Activity{% endif %} Permission</dd>
       </div>
       <div class="verify-row">
         <dt>Period</dt>

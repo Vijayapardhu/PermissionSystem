@@ -25,13 +25,14 @@
     <div class="card-au h-100">
       <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-bar-chart"></i> By Permission Type</h2></div>
       <div class="card-au__body">
+        {# One type is issued, so the chart is one bar. The labels and the values
+           must stay the same length or Chart.js throws on the mismatch. #}
         <canvas id="typeChart" height="230"
-                data-labels='["Leave", "Classroom"]'
-                data-values='{{ [stats.leave, stats.classroom] | tojson }}'></canvas>
+                data-labels='["Activity"]'
+                data-values='{{ [stats.classroom] | tojson }}'></canvas>
       </div>
       <div class="table-foot">
-        <span class="table-foot__stat">Leave <strong>{{ stats.leave }}</strong></span>
-        <span class="table-foot__stat">Classroom <strong>{{ stats.classroom }}</strong></span>
+        <span class="table-foot__stat">Activity <strong>{{ stats.classroom }}</strong></span>
       </div>
     </div>
   </div>

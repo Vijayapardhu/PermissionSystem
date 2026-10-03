@@ -31,11 +31,13 @@
 {# ---- Status banner: states the outcome plainly, cancelled included ---- #}
 {% set icons = {
   'APPROVED': 'check-circle', 'REJECTED': 'x-circle', 'PENDING': 'hourglass-split',
+  'AWAITING_HOD': 'person-check',
   'CANCELLED': 'slash-circle', 'EXPIRED': 'clock-history' } %}
 {% set wording = {
   'APPROVED': 'Approved',
   'REJECTED': 'Rejected',
   'PENDING': 'Awaiting verification',
+  'AWAITING_HOD': 'Awaiting HOD approval',
   'CANCELLED': 'Cancelled',
   'EXPIRED': 'Expired' } %}
 <div class="status-banner status-banner--{{ request.status.value|lower }}">
@@ -46,13 +48,17 @@
       {{ wording.get(request.status.value, request.status.value|title) }}
       {% if request.status.value == 'PENDING' %}
         <span class="status-banner__hint">&mdash; a lecturer will review it shortly</span>
+      {% elif request.status.value == 'AWAITING_HOD' %}
+        <span class="status-banner__hint">&mdash; recommended by faculty, not yet a grant of permission</span>
       {% elif request.status.value == 'CANCELLED' %}
         <span class="status-banner__hint">&mdash; withdrawn on
           {{ request.updated_at.strftime('%d %B %Y at %I:%M %p') }}</span>
       {% endif %}
     </div>
   </div>
-  {% if request.status.value == 'PENDING' %}
+  {# Withdrawable until the HOD decides, matching cancel_request(): a request
+     still under review has not been signed by anybody. #}
+  {% if request.status.value in ('PENDING', 'AWAITING_HOD') %}
   <form method="post" action="{{ url_for('student.withdraw', request_id=request.id) }}"
         class="no-print" onsubmit="return confirm('Withdraw this request?');">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -72,6 +78,28 @@
           <dt>Phone number</dt><dd>{{ student.phone or '—' }}</dd>
           <dt>Email</dt><dd>{{ student.email }}</dd>
           <dt>Department</dt><dd>{{ student.department }}</dd>
+
+          {# A group permission covers several students, and a co-member opening
+             this page needs to see who else is on it with them. #}
+          {% if request.is_group %}
+          <dt>Covers</dt>
+          <dd>
+            {{ request.group_size }} students
+            <ul class="list-unstyled mt-1 mb-0 small">
+              {% for member in request.member_details or [] %}
+              <li>
+                <span class="fw-semibold">{{ member.roll_number or '—' }}</span>
+                {% if member.name and member.name != member.roll_number %}<span class="text-muted">{{ member.name }}</span>{% endif %}
+                {% if member.id == user.id %}<span class="badge text-bg-light ms-1">you</span>{% endif %}
+                {% if member.id in (request.dropped_members or [])
+                      and request.status.value == 'APPROVED' %}
+                <span class="badge text-bg-light ms-1">not covered</span>
+                {% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+          </dd>
+          {% endif %}
         </dl>
       </div>
     </div>

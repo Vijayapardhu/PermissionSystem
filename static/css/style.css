@@ -37,6 +37,76 @@
   border-radius: 50%;
 }
 
+/* ---------- Group permission member picker ---------- */
+
+/* The search box and the chosen chips sit side by side on a wide form and stack
+   on a narrow one, because the list of chosen students grows downwards and a
+   fixed two-column layout would make the form jump as it fills. */
+.member-picker { display: grid; gap: 1.1rem; grid-template-columns: 1fr; }
+@media (min-width: 62rem) {
+  .member-picker { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+.member-picker__search { position: relative; }
+
+.member-picker__results {
+  position: absolute;
+  z-index: 20;
+  left: 0; right: 0; top: calc(100% + .25rem);
+  margin: 0;
+  padding: .25rem;
+  list-style: none;
+  max-height: 15rem;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--au-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(16, 24, 40, .14);
+}
+.member-result {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  padding: .45rem .6rem;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: .88rem;
+}
+.member-result:hover, .member-result:focus { background: var(--au-primary-soft); }
+.member-result.is-added { opacity: .5; cursor: default; }
+.member-result__pin { font-weight: 600; }
+.member-result__name { color: var(--au-text-muted); font-size: .8rem; }
+
+.member-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin: 0 0 .5rem;
+  padding: 0;
+  list-style: none;
+}
+.member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .3rem .3rem .3rem .7rem;
+  background: var(--au-primary-soft);
+  border: 1px solid rgba(0, 78, 146, .18);
+  border-radius: 20px;
+  font-size: .82rem;
+}
+.member-chip__pin { font-weight: 600; }
+.member-chip__name { color: var(--au-text-muted); font-size: .76rem; }
+.member-chip__remove {
+  border: 0;
+  background: transparent;
+  color: var(--au-text-muted);
+  line-height: 1;
+  padding: .15rem .3rem;
+  border-radius: 50%;
+}
+.member-chip__remove:hover { background: rgba(0, 78, 146, .14); color: var(--au-primary-dark); }
+
 :root {
   /* Brand */
   --au-primary: #004e92;
@@ -751,6 +821,12 @@ a:hover { text-decoration: underline; }
 .status-banner--pending   { border-color: var(--au-warning); border-left-color: var(--au-warning); background: var(--au-warning-soft); }
 .status-banner--pending   .status-banner__icon,
 .status-banner--pending   .status-banner__value { color: var(--au-warning-text); }
+/* Recommended by the lecturer, waiting on the HOD. Deliberately not a success
+   colour: the permission is not granted yet, and tinting it green would say
+   otherwise on the one page a student reads to find out whether they may leave. */
+.status-banner--awaiting_hod { border-color: var(--au-primary); border-left-color: var(--au-primary); background: var(--au-primary-soft); }
+.status-banner--awaiting_hod .status-banner__icon,
+.status-banner--awaiting_hod .status-banner__value { color: var(--au-primary-dark); }
 .status-banner--cancelled { border-color: var(--au-border-strong); border-left-color: #64748b; background: var(--au-surface-panel); }
 .status-banner--cancelled .status-banner__icon,
 .status-banner--cancelled .status-banner__value { color: #475569; }

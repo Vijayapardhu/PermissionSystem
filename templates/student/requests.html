@@ -20,7 +20,7 @@
     <span class="toolbar__label">Filter</span>
     <button type="submit" name="status" value=""
             class="chip {{ 'is-active' if not selected_status }}">All</button>
-    {% for status in ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] %}
+    {% for status in ['PENDING', 'AWAITING_HOD', 'APPROVED', 'REJECTED', 'CANCELLED'] %}
     <button type="submit" name="status" value="{{ status }}"
             class="chip {{ 'is-active' if selected_status and selected_status.value == status }}">
       {{ status|title }}
@@ -48,7 +48,16 @@
         {% for record in requests %}
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
-          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td class="table-au__strong text-nowrap">
+            REQ-{{ '%04d' % record.id }}
+            {# A co-member sees the same row as the requester, so the group size
+               is the only thing that tells them why. #}
+            {% if record.is_group %}
+            <span class="badge text-bg-light ms-1" title="Group permission">
+              <i class="bi bi-people"></i> {{ record.group_size }}
+            </span>
+            {% endif %}
+          </td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
           <td class="text-nowrap">{{ date(record.end_date) }}</td>
@@ -58,7 +67,10 @@
           <td class="table-au__actions">
             <a href="{{ url_for('student.request_detail', request_id=record.id) }}"
                class="btn btn-sm btn-outline-secondary">View</a>
-            {% if record.status.value == 'PENDING' %}
+            {# Withdrawing is the requester's alone -- it would void the letter for
+               everyone on it, so a co-member is not offered it. #}
+            {% if record.status.value in ('PENDING', 'AWAITING_HOD')
+                  and record.student_id == user.id %}
             <form method="post" class="d-inline"
                   action="{{ url_for('student.withdraw', request_id=record.id) }}"
                   onsubmit="return confirm('Withdraw request REQ-{{ '%04d' % record.id }}?');">

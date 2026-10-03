@@ -1075,6 +1075,93 @@ for path in ['/faculty/requests/1/action', '/student/requests/1/withdraw']:
 
 check('role guard blocks a student from the HOD dashboard', True)
 
+# ---- Page-level permissions ----
+#
+# The route decorator and the sidebar used to carry the role list separately, so
+# nothing checked they agreed. These assert the table is exhaustive and that the
+# navigation is derived from it.
+print()
+print('-' * 70)
+print('9z. PAGE-LEVEL PERMISSIONS')
+print('-' * 70)
+
+from app.permissions.pages import (  # noqa: E402
+    PAGE_PERMISSIONS, PUBLIC_ENDPOINTS, can_access, page_allows,
+    permission_required, visible_nav,
+)
+from app.models import UserRole as _Role  # noqa: E402
+
+# The boot-time check is what makes "no permission, no page" true rather than
+# aspirational, so assert it has something to complain about.
+_gaps = sorted(
+    r.endpoint for r in guard_app.url_map.iter_rules()
+    if r.endpoint not in PAGE_PERMISSIONS
+    and r.endpoint not in PUBLIC_ENDPOINTS
+)
+check('every endpoint has a page grant or is exempt', not _gaps,
+      f'open to any signed-in account: {_gaps}')
+
+# The sign-in half of the flow and the public verification page have to work
+# before anyone holds a grant, so they are exempt by name.
+check('the public verification page stays reachable without a grant',
+      'auth.verify_letter' in PUBLIC_ENDPOINTS)
+check('the sign-in entry points stay exempt',
+      {'auth.login', 'auth.callback', 'auth.microsoft_login'}
+      <= PUBLIC_ENDPOINTS)
+
+# A typo in a page key would otherwise compile to a route nobody holds a grant
+# for, which reads as a mysterious refusal rather than a misspelling.
+_threw = False
+try:
+    permission_required('faculty.dashbord')  # note the transposition
+except RuntimeError:
+    _threw = True
+check('an unknown page key is refused at decoration time', _threw,
+      'a misspelled page key would compile into a route nobody can open')
+
+# Cross-role refusals, read off the table rather than off a decorator.
+for _page, _role, _allowed in [
+    ('hod.students', _Role.STUDENT, False),
+    ('hod.students', _Role.LECTURER, False),
+    ('hod.students', _Role.HOD, True),
+    ('student.new_request', _Role.HOD, False),
+    ('student.new_request', _Role.STUDENT, True),
+    ('faculty.action', _Role.HOD, False),
+    ('faculty.action', _Role.LECTURER, True),
+    ('auth.profile', _Role.STUDENT, True),
+    ('student.request_letter', _Role.LECTURER, True),
+]:
+    check(f'{_role.value} {"may" if _allowed else "may not"} open {_page}',
+          page_allows(_page, _role) is _allowed)
+
+# A grant is written with the enum and reached at runtime with the role's string
+# value, because that is what the session row holds. Both spellings must agree.
+check('a grant holds whether the role arrives as an enum or as text',
+      page_allows('hod.students', _Role.HOD)
+      and page_allows('hod.students', 'HOD')
+      and not page_allows('hod.students', 'STUDENT'))
+
+check('nobody is refused when signed out', can_access(None, 'hod.dashboard') is False)
+
+# The sidebar may only offer what the route behind it will serve.
+for _role_value, _forbidden in [
+    ('STUDENT', 'hod.students'),
+    ('STUDENT', 'faculty.reports'),
+    ('LECTURER', 'hod.print_report'),
+    ('HOD', 'student.new_request'),
+]:
+    _offered = [i['endpoint'] for i in visible_nav(_role_value)]
+    check(f'{_role_value} sidebar hides {_forbidden}', _forbidden not in _offered)
+    check(f'  -> and still offers its own pages', len(_offered) > 0)
+
+# Every sidebar entry a role keeps must correspond to a page it may open.
+for _role_value in ('STUDENT', 'LECTURER', 'HOD'):
+    _bad = [i['endpoint'] for i in visible_nav(_role_value)
+            if not page_allows(i['endpoint'], _role_value)]
+    check(f'{_role_value} sidebar offers nothing it cannot open', not _bad,
+          f'offers {_bad}')
+
+
 from app.utils.security import (
     csrf_token as _csrf2, rotate_csrf_token as _rotate,
 )
@@ -1279,11 +1366,13 @@ print('=' * 70)
 from datetime import datetime
 
 from app.models import (
-    ApprovalAction, ApprovalHistory, PermissionRequest, PermissionType,
-    ProofDocument, RequestStatus, User, UserRole,
+    ApprovalAction, ApprovalHistory, DEAD_STATUSES, PermissionRequest,
+    PermissionType, ProofDocument, RequestStatus, User, UserRole,
 )
 from app.models import permission as perm_mod
 from app.models import user as user_mod
+from app.student import routes as student_routes
+from app.faculty import routes as faculty_routes
 
 NOW = datetime(2026, 10, 1, 9, 30)
 
@@ -1301,7 +1390,7 @@ LECTURER = make_user(2, UserRole.LECTURER, 'Dr. Kumar')
 HOD = make_user(3, UserRole.HOD, 'Dr. HOD')
 
 
-def make_request(rid, status=RequestStatus.PENDING, ptype=PermissionType.LEAVE):
+def make_request(rid, status=RequestStatus.PENDING, ptype=PermissionType.CLASSROOM):
     record = PermissionRequest(
         id=rid, student_id=STUDENT.id, permission_type=ptype,
         reason='Medical appointment with the dentist at the city hospital',
@@ -1335,6 +1424,56 @@ def make_history(hid, rid):
     return entry
 
 
+# The directory the real attach_members builds, resolved from fixtures instead of
+# the store. Mirrors the real function's output shape exactly -- including the
+# approved and dropped partitions -- so the templates are exercised against the
+# same fields production fills in.
+FIXTURE_DIRECTORY = {
+    STUDENT.id: {'id': STUDENT.id, 'name': STUDENT.name,
+                 'roll_number': STUDENT.roll_number,
+                 'department': STUDENT.department},
+    LECTURER.id: {'id': LECTURER.id, 'name': LECTURER.name,
+                  'roll_number': LECTURER.roll_number,
+                  'department': LECTURER.department},
+    HOD.id: {'id': HOD.id, 'name': HOD.name, 'roll_number': HOD.roll_number,
+             'department': HOD.department},
+}
+for _i in (7, 8, 9, 10):
+    FIXTURE_DIRECTORY[_i] = {
+        'id': _i, 'name': f'Classmate {_i}', 'roll_number': f'26B21CS0{_i:02d}',
+        'department': 'CSE'}
+
+
+def _attach_fixture_members(requests):
+    for request in requests:
+        details = [FIXTURE_DIRECTORY[m] for m in request.members
+                   if m in FIXTURE_DIRECTORY]
+        request.member_details = details
+        owner = FIXTURE_DIRECTORY.get(request.student_id)
+        if owner:
+            request.student_name = owner['name']
+            request.student_roll_number = owner['roll_number']
+            request.student_identifier = (
+                owner['roll_number'] or owner['name'])
+            request.student_phone = None
+        approved = set(request.approved_members)
+        request.approved_member_details = [d for d in details if d['id'] in approved]
+        request.dropped_member_details = [d for d in details if d['id'] not in approved]
+
+
+def _greq(rid, members=(), status=RequestStatus.PENDING, approved=None):
+    """A request carrying a group membership, for the render assertions.
+
+    Defined with the other fixtures rather than inside the group section: the
+    public verification page is exercised much earlier in the file, and a helper
+    defined later would only fail at call time as a NameError.
+    """
+    record = make_request(rid, status)
+    record.member_ids = list(members)
+    record.approved_member_ids = list(approved) if approved is not None else None
+    return record
+
+
 def patch_models(user):
     originals = {
         'find_by_id': user_mod.UserModel.find_by_id,
@@ -1347,7 +1486,17 @@ def patch_models(user):
         'get_stats_for_hod': perm_mod.PermissionModel.get_stats_for_hod,
         'proof_by_request': perm_mod.ProofModel.find_by_request,
         'history_by_request': perm_mod.ApprovalModel.find_by_request,
+        # The views import attach_members by name, so patching the model module
+        # alone would leave them calling the real one -- which reads the store and
+        # answers 503 for every letter and request page in the harness.
+        'attach_members_model': perm_mod.attach_members,
+        'attach_members_student': student_routes.attach_members,
+        'attach_members_faculty': faculty_routes.attach_members,
     }
+
+    perm_mod.attach_members = _attach_fixture_members
+    student_routes.attach_members = _attach_fixture_members
+    faculty_routes.attach_members = _attach_fixture_members
 
     user_mod.UserModel.find_by_id = staticmethod(lambda _id: user)
     user_mod.UserModel.get_hods = staticmethod(lambda: [HOD])
@@ -1368,7 +1517,8 @@ def patch_models(user):
         lambda *a, **k: [make_request(1024, RequestStatus.APPROVED)])
     perm_mod.PermissionModel.get_stats_for_hod = staticmethod(lambda *a, **k: {
         'total': 128, 'approved': 96, 'rejected': 21, 'pending': 11,
-        'leave_count': 32, 'classroom_count': 18,
+        'awaiting_hod': 7,
+        'classroom_count': 18,
     })
     perm_mod.ProofModel.find_by_request = staticmethod(
         lambda rid: [make_proof(7, rid)])
@@ -1387,6 +1537,9 @@ def patch_models(user):
         perm_mod.PermissionModel.get_stats_for_hod = originals['get_stats_for_hod']
         perm_mod.ProofModel.find_by_request = originals['proof_by_request']
         perm_mod.ApprovalModel.find_by_request = originals['history_by_request']
+        perm_mod.attach_members = originals['attach_members_model']
+        student_routes.attach_members = originals['attach_members_student']
+        faculty_routes.attach_members = originals['attach_members_faculty']
 
     return restore
 
@@ -1401,7 +1554,7 @@ page_matrix = [
     (UserRole.LECTURER, '/faculty/dashboard'),
     (UserRole.LECTURER, '/faculty/requests/1025'),
     (UserRole.HOD, '/hod/dashboard'),
-    (UserRole.HOD, '/hod/dashboard?status=APPROVED&type=LEAVE'),
+    (UserRole.HOD, '/hod/dashboard?status=APPROVED&type=CLASSROOM'),
     (UserRole.HOD, '/hod/report/print'),
     (UserRole.HOD, '/hod/report/print?date=2026-10-01&status=APPROVED'),
 ]
@@ -1457,7 +1610,7 @@ try:
         sess['_fresh'] = True
     page = client.get('/hod/dashboard').get_data(as_text=True)
     check('HOD dashboard emits doughnut chart data',
-          'id="statusChart"' in page and 'Leave Permission' in page)
+          'id="statusChart"' in page and 'Activity Permission' in page)
     check('HOD dashboard emits reason chart data',
           'id="reasonChart"' in page)
     check('HOD dashboard emits 7-day trend',
@@ -1795,6 +1948,44 @@ try:
 
     check('letter shows the university', 'Aditya University' in page)
     check('letter uses the full wordmark', 'au-wordmark' in page)
+
+    # The wordmark is a letterhead now rather than a faint centred watermark,
+    # sitting left with the QR on the right above a gold rule. A watermark left
+    # behind would sit behind the body text as well, so its absence is asserted.
+    check('letter puts the wordmark in the letterhead',
+          'lt-head__logo' in page and 'lt-head' in page)
+    check('letter places the QR on the right of the letterhead',
+          'lt-head__qr' in page)
+    check('letter rules the letterhead with a gold line',
+          '--lt-gold' in page and 'border-bottom: 2px solid var(--lt-gold)' in page)
+    check('letter no longer watermarks the mark behind the text',
+          'letter-watermark' not in page)
+    # The QR plate was a box drawn on the paper; the code is white on white and
+    # carries its own quiet zone, so the surrounding border goes with it.
+    check('letter QR has no border box around it',
+          'border: 1px solid #cbd5e1; padding: 3px' not in page
+          and re.search(r'\.lt-head__qr img\s*\{[^}]*border:\s*0', page) is not None)
+
+    # The design's approval timeline, which is what tells a reader where a
+    # request actually stopped.
+    check('letter carries an approval timeline', 'letter-track' in page
+          and 'Approval Status' in page)
+    check('  -> with the four stages from the design',
+          all(word in page for word in ['Request Submitted',
+                                        'Department Verification',
+                                        'Approval', 'Final Status']))
+    check('  -> and the request details table', 'Request Details' in page)
+    check('  -> and a closing notice', 'letter-notice' in page)
+
+    # Every panel in the design is a background fill, and a print pipeline drops
+    # those unless the document insists. Without this the printed sheet keeps the
+    # gold rules and the text and loses every panel, which reads as an undesigned
+    # printout rather than as a missing setting.
+    check('letter insists on printing its own backgrounds',
+          'print-color-adjust: exact' in page
+          and '-webkit-print-color-adjust: exact' in page,
+          'printed sheet loses every panel without it')
+
     check('letter carries a reference number', 'REQ-1024' in page)
     check('letter states the student roll number', '26B21CS058' in page)
     check('letter has a status block', 'Status of this request' in page)
@@ -2401,6 +2592,76 @@ try:
     check('  -> the page leaks no connection detail',
           'postgres' not in _body.lower() and 'psycopg' not in _body.lower())
 
+    # Three tones, not one per status: green grants, red refuses, grey says
+    # nobody has decided. A stranger opens this page to answer one question, so
+    # the colour has to survive a status being added later.
+    _verify_mod = re.search(r'class="verify-state verify-state--(\w+)"', _body)
+    check('  -> an approved record verifies green',
+          _verify_mod and _verify_mod.group(1) == 'green',
+          f'got {_verify_mod.group(1) if _verify_mod else "no tone"}')
+    check('  -> the university name is not spelled out in the letterhead',
+          'ADITYA UNIVERSITY' not in _body)
+    check('  -> the mark is centred above the department line',
+          'flex-direction: column' in _body)
+    check('  -> only three tones exist, so no status can add a fourth',
+          all(f'verify-state--{t}' in _body for t in ('green', 'red', 'grey'))
+          and not any(f'verify-state--{s}' in _body for s in
+                      ('approved', 'rejected', 'pending', 'awaiting_hod',
+                       'cancelled', 'expired')))
+
+    # The rest of the statuses must all land on grey rather than borrowing a
+    # verdict colour.
+    for _status, _want in [(RequestStatus.REJECTED, 'red'),
+                           (RequestStatus.PENDING, 'grey'),
+                           (RequestStatus.AWAITING_HOD, 'grey'),
+                           (RequestStatus.CANCELLED, 'grey'),
+                           (RequestStatus.EXPIRED, 'grey')]:
+        perm_mod.PermissionModel.find_by_id = staticmethod(
+            lambda rid, _s=_status: make_request(rid, _s))
+        _r = _verify_client.get('/verify/' + _verify_ref)
+        _m = re.search(r'class="verify-state verify-state--(\w+)"',
+                        _r.get_data(as_text=True))
+        check(f'  -> {_status.value} verifies {_want}',
+              _m and _m.group(1) == _want,
+              f'got {_m.group(1) if _m else "no tone"}')
+
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: make_request(rid, RequestStatus.APPROVED))
+
+    # A group letter has to name everyone it covers, and it has to say who was
+    # struck off. The verify template receives the row as `record`; naming Flask's
+    # own `request` global instead evaluates false silently and renders nothing,
+    # which is how this went missing the first time.
+    for _gid, _status, _kept in [
+            (2001, RequestStatus.APPROVED, [1, 7]),
+            (2002, RequestStatus.AWAITING_HOD, None),
+            (2003, RequestStatus.PENDING, None)]:
+        perm_mod.PermissionModel.find_by_id = staticmethod(
+            lambda rid, _g=_gid, _s=_status, _k=_kept:
+                _greq(rid, [1, 7, 8, 9], _s, approved=_k))
+
+        _g_body = _verify_client.get('/verify/' + _verify_ref).get_data(as_text=True)
+        _listed = [1, 7] if _kept is not None else [1, 7, 8, 9]
+        _pins = [FIXTURE_DIRECTORY[i]['roll_number'] for i in _listed]
+        check(f'  -> a {_status.value.lower()} group letter lists every PIN',
+              'verify-row--members' in _g_body
+              and all(p in _g_body for p in _pins),
+              f'missing {[p for p in _pins if p not in _g_body]}')
+
+    # The dropped student is named on the public page, not merely counted.
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: _greq(rid, [1, 7, 8, 9], RequestStatus.APPROVED,
+                          approved=[1, 7, 9]))
+    _v_body = _verify_client.get('/verify/' + _verify_ref).get_data(as_text=True)
+    check('  -> a student struck off by the HOD is named as not covered',
+          FIXTURE_DIRECTORY[8]['roll_number'] in _v_body
+          and 'not covered' in _v_body)
+    check('  -> and the members still covered are all present',
+          all(FIXTURE_DIRECTORY[i]['roll_number'] in _v_body for i in (1, 7, 9)))
+
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: make_request(rid, RequestStatus.APPROVED))
+
     check('a forged link 404s',
           _verify_client.get('/verify/REQ-1024.forged').status_code == 404)
     check('a bare reference 404s',
@@ -2518,6 +2779,855 @@ check('the default favicon request is answered', _favicon.status_code == 200,
       f'got {_favicon.status_code}')
 check('  -> and it is an image, not an error page',
       (_favicon.mimetype or '').startswith('image/'), str(_favicon.mimetype))
+
+print()
+print('=' * 70)
+print('9z2. DUPLICATE DETECTION AND THE TWO-STAGE APPROVAL')
+print('=' * 70)
+
+# These two are the heart of the stated motive -- a duplicate check between
+# submission and review, and an HOD approval that actually grants the permission
+# -- and neither had any coverage, so they are exercised here against the
+# service layer directly rather than through a route.
+from datetime import date as _date  # noqa: E402
+from app.permissions import service as svc  # noqa: E402
+from app.utils import email as mail_mod  # noqa: E402
+
+
+def _overlapping(rows):
+    """A stand-in for the model query, so the overlap rule itself is what is
+    under test rather than the datastore. Mirrors the group signature and the
+    clash-dict shape, so the service is exercised against what it really gets."""
+    def _find(student_ids, start_date, end_date, exclude_id=None):
+        if isinstance(student_ids, int):
+            student_ids = [student_ids]
+        out, seen = [], set()
+        for sid in dict.fromkeys(student_ids or []):
+            for r in rows:
+                if exclude_id and r.id == exclude_id:
+                    continue
+                if r.status in DEAD_STATUSES:
+                    continue
+                if r.start_date > end_date or r.end_date < start_date:
+                    continue
+                if r.id in seen:
+                    continue
+                seen.add(r.id)
+                out.append({'student_id': sid, 'student': None, 'request': r})
+        return out
+    return _find
+
+
+def _with_service_patches(rows_by_id, overlaps, **extra):
+    """Patch everything submit/act touch, and hand back a restore plus a log."""
+    log = {'status': [], 'history': [], 'created': [], 'mails': [],
+           'approved': None}
+
+    originals = {
+        'find_by_id': perm_mod.PermissionModel.find_by_id,
+        'update_status': perm_mod.PermissionModel.update_status,
+        'find_overlapping': perm_mod.PermissionModel.find_overlapping_for_students,
+        'history_create': perm_mod.ApprovalModel.create,
+        'req_create': perm_mod.PermissionModel.create,
+        'set_approved': perm_mod.PermissionModel.set_approved_members,
+        'proof_create': perm_mod.ProofModel.create,
+        'find_user': user_mod.UserModel.find_by_id,
+        'get_hods': user_mod.UserModel.get_hods,
+        'pick_faculty': svc.pick_faculty,
+        'store': svc.validate_and_store,
+        'notify_new': mail_mod.notify_faculty_of_new_request,
+        'notify_student': mail_mod.notify_student_of_decision,
+        'notify_hod_rec': mail_mod.notify_hod_of_recommendation,
+        'notify_hod_dec': mail_mod.notify_hod_of_decision,
+        'notify_hod_verdict': mail_mod.notify_student_of_hod_decision,
+        'notify_member_added': mail_mod.notify_member_added_to_request,
+        'notify_not_covered': mail_mod.notify_member_not_covered,
+        'set_approved': perm_mod.PermissionModel.set_approved_members,
+    }
+
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: rows_by_id.get(rid))
+    perm_mod.PermissionModel.update_status = staticmethod(
+        lambda rid, status, faculty_id=None: log['status'].append(
+            (rid, status)) or True)
+    perm_mod.PermissionModel.find_overlapping_for_students = staticmethod(overlaps)
+    perm_mod.PermissionModel.set_approved_members = staticmethod(
+        lambda rid, ids: log.__setitem__('approved', list(ids)) or True)
+    perm_mod.ApprovalModel.create = staticmethod(
+        lambda *a, **k: log['history'].append((a, k)) or None)
+    user_mod.UserModel.find_by_id = staticmethod(lambda _id: STUDENT)
+    user_mod.UserModel.get_hods = staticmethod(lambda: [HOD])
+    svc.pick_faculty = lambda _student: LECTURER
+    svc.validate_and_store = lambda _f: {
+        'original_filename': 'doctor-letter.pdf',
+        'stored_filename': 'abc123.pdf',
+        'file_path': '2026/10/abc123.pdf',
+        'file_type': 'pdf',
+        'file_size': 48213,
+    }
+    perm_mod.PermissionModel.create = staticmethod(
+        lambda **k: log['created'].append(k) or make_request(9001))
+    perm_mod.ProofModel.create = staticmethod(lambda **k: None)
+    mail_mod.notify_faculty_of_new_request = lambda *a, **k: True
+    mail_mod.notify_student_of_decision = lambda *a, **k: log['mails'].append(
+        'student-faculty') or True
+    mail_mod.notify_hod_of_recommendation = lambda *a, **k: log['mails'].append(
+        'hod-recommendation') or True
+    mail_mod.notify_hod_of_decision = lambda *a, **k: log['mails'].append(
+        'hod-decision') or True
+    mail_mod.notify_student_of_hod_decision = lambda *a, **k: log['mails'].append(
+        'student-hod') or True
+    mail_mod.notify_member_added_to_request = lambda *a, **k: log['mails'].append(
+        'member-added') or True
+    mail_mod.notify_member_not_covered = lambda *a, **k: log['mails'].append(
+        'not-covered') or True
+
+    for key, value in extra.items():
+        setattr(svc, key, value)
+
+    def restore():
+        perm_mod.PermissionModel.find_by_id = originals['find_by_id']
+        perm_mod.PermissionModel.update_status = originals['update_status']
+        perm_mod.PermissionModel.find_overlapping_for_students = \
+            originals['find_overlapping']
+        perm_mod.ApprovalModel.create = originals['history_create']
+        perm_mod.PermissionModel.create = originals['req_create']
+        perm_mod.ProofModel.create = originals['proof_create']
+        user_mod.UserModel.find_by_id = originals['find_user']
+        user_mod.UserModel.get_hods = originals['get_hods']
+        svc.pick_faculty = originals['pick_faculty']
+        svc.validate_and_store = originals['store']
+        mail_mod.notify_faculty_of_new_request = originals['notify_new']
+        mail_mod.notify_student_of_decision = originals['notify_student']
+        mail_mod.notify_hod_of_recommendation = originals['notify_hod_rec']
+        mail_mod.notify_hod_of_decision = originals['notify_hod_dec']
+        mail_mod.notify_student_of_hod_decision = originals['notify_hod_verdict']
+        mail_mod.notify_member_added_to_request = originals['notify_member_added']
+        mail_mod.notify_member_not_covered = originals['notify_not_covered']
+        perm_mod.PermissionModel.set_approved_members = originals['set_approved']
+
+    return restore, log
+
+
+# ---- The overlap rule ----
+# A request over a known window, so each case states its own dates rather than
+# inheriting make_request's. November, because submit_request refuses a start
+# date in the past and the harness runs against the real clock.
+NOV_10, NOV_12, NOV_30 = _date(2026, 11, 10), _date(2026, 11, 12), _date(2026, 11, 30)
+
+
+def _req(rid, start, end, status=RequestStatus.PENDING):
+    record = make_request(rid, status)
+    record.start_date = start
+    record.end_date = end
+    return record
+
+
+_BASE = _req(1, NOV_10, NOV_12)
+
+
+check('a live request on the same days is found',
+      len(_overlapping([_BASE])(1, NOV_10, NOV_12)) == 1)
+check('a request that ends the day before does not overlap',
+      _overlapping([_BASE])(1, _date(2026, 11, 13), _date(2026, 11, 20)) == [])
+check('a request that starts the day after does not overlap',
+      _overlapping([_BASE])(1, _date(2026, 11, 1), _date(2026, 11, 9)) == [])
+check('a request partly covering the window is found',
+      len(_overlapping([_BASE])(1, NOV_12, _date(2026, 11, 20))) == 1)
+# A request wholly enclosing the new window is the clearest duplicate of all.
+check('a request enclosing the whole window is found',
+      len(_overlapping([_req(1, _date(2026, 11, 1), NOV_30)])(1, NOV_10, NOV_12)) == 1)
+check('touching days count as overlapping',
+      len(_overlapping([_BASE])(1, NOV_12, _date(2026, 11, 15))) == 1)
+
+for _dead in (RequestStatus.REJECTED, RequestStatus.CANCELLED,
+              RequestStatus.EXPIRED):
+    check(f'a {_dead.value.lower()} request is not treated as a duplicate',
+          _overlapping([_req(1, NOV_10, NOV_12, _dead)])(1, NOV_10, NOV_12) == [])
+
+check('a request awaiting the HOD still counts as live',
+      len(_overlapping([_req(1, NOV_10, NOV_12, RequestStatus.AWAITING_HOD)])(
+          1, NOV_10, NOV_12)) == 1)
+check('an approved request counts as live',
+      len(_overlapping([_req(1, NOV_10, NOV_12, RequestStatus.APPROVED)])(
+          1, NOV_10, NOV_12)) == 1)
+
+# ---- The gate ----
+_restore, _log = _with_service_patches(
+    {9001: make_request(9001)},
+    _overlapping([_req(1, NOV_10, NOV_12)]),
+)
+try:
+    _args = dict(
+        student=STUDENT, permission_type='CLASSROOM',
+        reason='Medical appointment with the dentist at the city hospital',
+        start_date_raw='2026-11-11', end_date_raw='2026-11-13',
+        start_time_raw='', end_time_raw='', proof_file=None,
+        base_url='http://localhost',
+    )
+
+    _raised = None
+    try:
+        svc.submit_request(**_args)
+    except svc.DuplicateRequestError as exc:
+        _raised = exc
+
+    check('an overlapping request stops the first submission', _raised is not None)
+    check('  -> and it is a ValidationError, so existing handlers still catch it',
+          isinstance(_raised, svc.ValidationError))
+    check('  -> the conflicting request is carried on the exception',
+          bool(getattr(_raised, 'conflicts', None)))
+    check('  -> nothing is written before the student confirms',
+          not _log['created'] and not _log['status'])
+
+    # Acknowledged: the same submission goes through.
+    svc.submit_request(**_args, duplicate_ack=True)
+    check('confirming the overlap lets the request through', bool(_log['created']))
+finally:
+    _restore()
+
+# No overlap at all: no acknowledgement needed.
+_restore, _log = _with_service_patches(
+    {9001: make_request(9001)}, _overlapping([]))
+try:
+    svc.submit_request(
+        student=STUDENT, permission_type='CLASSROOM',
+        reason='Medical appointment with the dentist at the city hospital',
+        start_date_raw='2026-11-01', end_date_raw='2026-11-02',
+        start_time_raw='', end_time_raw='', proof_file=None,
+        base_url='http://localhost',
+    )
+    check('a request with no overlap needs no confirmation', bool(_log['created']))
+finally:
+    _restore()
+
+# ---- The two stages ----
+_restore, _log = _with_service_patches(
+    {500: make_request(500, RequestStatus.PENDING)}, _overlapping([]))
+try:
+    svc.act_on_request(
+        request_id=500, faculty=LECTURER,
+        action=ApprovalAction.APPROVED, remarks='Verified',
+        base_url='http://localhost',
+    )
+    check('a lecturer approval does NOT grant the permission',
+          _log['status'] == [(500, RequestStatus.AWAITING_HOD)],
+          f'got {_log["status"]}')
+    check('  -> the HOD is asked for the decision',
+          'hod-recommendation' in _log['mails'])
+    check('  -> and the student is told it is only a recommendation',
+          'student-faculty' in _log['mails'])
+    check('  -> the recommendation is recorded in the history',
+          len(_log['history']) == 1)
+finally:
+    _restore()
+
+_restore, _log = _with_service_patches(
+    {501: make_request(501, RequestStatus.PENDING)}, _overlapping([]))
+try:
+    svc.act_on_request(
+        request_id=501, faculty=LECTURER,
+        action=ApprovalAction.REJECTED, remarks='Cannot spare you',
+        base_url='http://localhost',
+    )
+    check('a lecturer rejection is final, with no HOD stage',
+          _log['status'] == [(501, RequestStatus.REJECTED)],
+          f'got {_log["status"]}')
+    check('  -> the HOD is informed rather than asked to act',
+          'hod-decision' in _log['mails']
+          and 'hod-recommendation' not in _log['mails'])
+finally:
+    _restore()
+
+# The HOD cannot shortcut the lecturer.
+_restore, _log = _with_service_patches(
+    {502: make_request(502, RequestStatus.PENDING)}, _overlapping([]))
+try:
+    _refused = False
+    try:
+        svc.hod_act_on_request(
+            request_id=502, hod=HOD, action=ApprovalAction.APPROVED,
+            remarks='', base_url='http://localhost')
+    except svc.ValidationError:
+        _refused = True
+    check('the HOD cannot approve a request no lecturer has reviewed', _refused)
+    check('  -> and nothing is written when they try', not _log['status'])
+finally:
+    _restore()
+
+_restore, _log = _with_service_patches(
+    {503: make_request(503, RequestStatus.AWAITING_HOD)}, _overlapping([]))
+try:
+    svc.hod_act_on_request(
+        request_id=503, hod=HOD, action=ApprovalAction.APPROVED,
+        remarks='Sanctioned', base_url='http://localhost')
+    check('the HOD approval is what grants the permission',
+          _log['status'] == [(503, RequestStatus.APPROVED)],
+          f'got {_log["status"]}')
+    check('  -> the student is told of the final verdict',
+          'student-hod' in _log['mails'])
+finally:
+    _restore()
+
+_restore, _log = _with_service_patches(
+    {504: make_request(504, RequestStatus.AWAITING_HOD)}, _overlapping([]))
+try:
+    svc.hod_act_on_request(
+        request_id=504, hod=HOD, action=ApprovalAction.REJECTED,
+        remarks='Not sanctioned', base_url='http://localhost')
+    check('the HOD can also turn it down',
+          _log['status'] == [(504, RequestStatus.REJECTED)],
+          f'got {_log["status"]}')
+finally:
+    _restore()
+
+# ---- Withdrawal up to the decision ----
+for _open, _label in [(RequestStatus.PENDING, 'pending'),
+                      (RequestStatus.AWAITING_HOD, 'awaiting the HOD')]:
+    _restore, _log = _with_service_patches(
+        {600: make_request(600, _open)}, _overlapping([]))
+    try:
+        svc.cancel_request(600, STUDENT)
+        check(f'a request {_label} can still be withdrawn',
+              _log['status'] == [(600, RequestStatus.CANCELLED)],
+              f'got {_log["status"]}')
+    finally:
+        _restore()
+
+for _closed, _label in [(RequestStatus.APPROVED, 'approved'),
+                        (RequestStatus.REJECTED, 'rejected')]:
+    _restore, _log = _with_service_patches(
+        {601: make_request(601, _closed)}, _overlapping([]))
+    try:
+        _blocked = False
+        try:
+            svc.cancel_request(601, STUDENT)
+        except svc.ValidationError:
+            _blocked = True
+        check(f'a request already {_label} cannot be withdrawn', _blocked)
+    finally:
+        _restore()
+
+print()
+print('-' * 70)
+print('9z3. THE NEW STATE REACHES THE PAGES')
+print('-' * 70)
+
+# AWAITING_HOD is a new status, so every page that renders one has to have been
+# taught about it. A missing branch shows up as an empty badge or a raw enum name
+# rather than an exception, which is exactly the kind of thing that reaches a
+# student instead of failing a test.
+_restore = patch_models(STUDENT)
+try:
+    _awaiting = staticmethod(lambda rid: make_request(rid, RequestStatus.AWAITING_HOD))
+    perm_mod.PermissionModel.find_by_id = _awaiting
+    perm_mod.PermissionModel.find_by_student = staticmethod(
+        lambda *a, **k: [make_request(1024, RequestStatus.AWAITING_HOD)])
+    perm_mod.ApprovalModel.find_by_request = staticmethod(lambda rid: [])
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = 1
+        sess['_user_id'] = '1'
+
+    _detail = client.get('/student/requests/1024').get_data(as_text=True)
+    check('the student gets a banner for the new status',
+          'status-banner--awaiting_hod' in _detail
+          and 'Awaiting HOD approval' in _detail)
+    check('  -> and is told it is not yet a grant of permission',
+          'not yet a grant of permission' in _detail)
+    check('  -> and may still withdraw it', 'Withdraw' in _detail)
+
+    _letter = client.get('/student/requests/1024/letter').get_data(as_text=True)
+    check('the letter states the status in words',
+          'AWAITING HOD APPROVAL' in _letter)
+    check('  -> with its own status colour',
+          'letter-status--awaiting_hod' in _letter)
+    check('  -> and says plainly it is not a grant of permission',
+          'not a grant' in _letter.lower())
+    check('  -> and never leaks the raw enum name', 'Awaiting_Hod' not in _letter)
+finally:
+    _restore()
+
+# The HOD queue, and the decision only they can take.
+#
+# `/hod/requests` does not go through `PermissionModel.find_all_for_hod`; the
+# hod blueprint delegates to the shared filter in faculty/routes.py, which reads
+# the store directly. Patching only the model therefore leaves the page hitting a
+# store this harness has no credentials for, which answers 503 -- the same reason
+# `/hod/requests` had no render test before. The shared filter is stubbed here so
+# the page is exercised for what it is being checked on: the action controls.
+from app.faculty import routes as fac_routes  # noqa: E402
+
+_AWAITING = [make_request(1024, RequestStatus.AWAITING_HOD)]
+_real_filter = fac_routes._filtered_requests
+fac_routes._filtered_requests = staticmethod(
+    lambda *a, **k: list(_AWAITING))
+
+_restore = patch_models(HOD)
+try:
+    perm_mod.PermissionModel.find_by_id = staticmethod(
+        lambda rid: make_request(rid, RequestStatus.AWAITING_HOD))
+    perm_mod.ApprovalModel.find_by_request = staticmethod(lambda rid: [])
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = 3
+        sess['_user_id'] = '3'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _reg_resp = client.get('/hod/requests')
+    _reg = _reg_resp.get_data(as_text=True)
+    check('the HOD register lists the request as awaiting them',
+          'Awaiting HOD' in _reg, f'status {_reg_resp.status_code}')
+    check('  -> and offers the approve action',
+          '/hod/requests/1024/action' in _reg and 'APPROVED' in _reg,
+          f'status {_reg_resp.status_code}')
+    check('  -> and the reject action', 'REJECTED' in _reg,
+          f'status {_reg_resp.status_code}')
+    check('  -> and the dashboard counts the queue separately',
+          'Awaiting HOD' in client.get('/hod/dashboard').get_data(as_text=True))
+
+    # An unrecognised decision is a 400, never a silent approval.
+    _garbage = client.post('/hod/requests/1024/action',
+                           data={'action': 'DEFINITELY',
+                                 '_csrf_token': 'workflow-token'})
+    check('an unrecognised decision is refused rather than defaulted to approve',
+          _garbage.status_code == 400, f'got {_garbage.status_code}')
+finally:
+    _restore()
+    fac_routes._filtered_requests = _real_filter
+
+# A lecturer holds `faculty.action`, which recommends. They do not hold
+# `hod.request_action`, which grants. The same POST has to be refused.
+_restore = patch_models(LECTURER)
+try:
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess['user_id'] = 2
+        sess['_user_id'] = '2'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _forbidden = client.post('/hod/requests/1024/action',
+                             data={'action': 'APPROVED',
+                                   '_csrf_token': 'workflow-token'})
+    check('a lecturer cannot post the HOD decision',
+          _forbidden.status_code == 403, f'got {_forbidden.status_code}')
+finally:
+    _restore()
+
+_restore = patch_models(STUDENT)
+try:
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess['user_id'] = 1
+        sess['_user_id'] = '1'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _forbidden = client.post('/hod/requests/1024/action',
+                             data={'action': 'APPROVED',
+                                   '_csrf_token': 'workflow-token'})
+    check('nor can a student', _forbidden.status_code == 403,
+          f'got {_forbidden.status_code}')
+finally:
+    _restore()
+
+# The letter is rendered by both the student route and the faculty route, so
+# anything that links to it has to name the right one, and its own toolbar has to
+# follow the reader. `student.requests` is granted to students alone, which is
+# what turned "All requests" into a 403 for a lecturer who opened a letter.
+_restore = patch_models(LECTURER)
+try:
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess['user_id'] = 2
+        sess['_user_id'] = '2'
+
+    _fac = client.get('/faculty/requests/1024')
+    check('the faculty detail page renders', _fac.status_code == 200,
+          f'got {_fac.status_code}')
+    check('  -> and links the letter through the faculty route',
+          '/faculty/requests/1024/letter' in _fac.get_data(as_text=True),
+          'letter link points into the student portal')
+
+    _fac_letter = client.get('/faculty/requests/1024/letter')
+    check('a lecturer can open the letter from the faculty portal',
+          _fac_letter.status_code == 200, f'got {_fac_letter.status_code}')
+    _fac_html = _fac_letter.get_data(as_text=True)
+    _stray = re.findall(r'href="(/student/[^"#]*)"', _fac_html)
+    check('the letter toolbar keeps a lecturer out of the student portal',
+          not _stray, f'links to {_stray}')
+    # Both routes render one template, and it draws the code only when handed a
+    # `qr`. The faculty view once omitted it entirely -- and because the details
+    # table falls back to 'REQ-%04d', the reference still read correctly, so a
+    # letter printed with no scannable code looked fine on the page.
+    check('the letter printed from the faculty portal carries a QR code',
+          'data:image/png;base64,' in _fac_html
+          and 'lt-head__qr' in _fac_html,
+          'no QR on the faculty copy of the letter')
+    check('  -> pointing at the same verification reference',
+          '/verify/REQ-1024' in _fac_html)
+finally:
+    _restore()
+
+# The duplicate warning has to render, conflicts and all.
+_restore = patch_models(STUDENT)
+try:
+    perm_mod.PermissionModel.find_overlapping_for_students = staticmethod(
+        lambda *a, **k: [
+            {'student_id': 7, 'student': None, 'request': make_request(700)},
+            {'student_id': 8, 'student': None, 'request': make_request(701)},
+        ])
+    with client.session_transaction() as sess:
+        sess['user_id'] = 1
+        sess['_user_id'] = '1'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _posted = client.post(
+        '/student/requests/new',
+        data={'permission_type': 'CLASSROOM',
+              'reason': 'Medical appointment with the dentist at the city',
+              'start_date': '2026-11-11', 'end_date': '2026-11-12',
+              'duplicate_ack': '',
+              '_csrf_token': 'workflow-token'},
+    )
+    _body = _posted.get_data(as_text=True)
+    check('an overlapping submission comes back with the conflicts listed',
+          'Possible duplicate' in _body and 'REQ-0700' in _body
+          and 'REQ-0701' in _body,
+          f'status {_posted.status_code}; len {len(_body)}')
+    check('  -> and asks for confirmation before submitting',
+          'name="duplicate_ack"' in _body)
+finally:
+    _restore()
+
+print()
+print('=' * 70)
+print('9z4. GROUP PERMISSIONS')
+print('=' * 70)
+
+# One letter, one to four students. These cover the rules that make that safe:
+# the cap, the fallback for records written before groups existed, the duplicate
+# check reaching every member, and the HOD being able to strike one off.
+from app.models.permission import (  # noqa: E402
+    MAX_GROUP_MEMBERS, normalise_members,
+)
+from app.permissions import service as _svc  # noqa: E402
+
+MEMBER_A = make_user(7, UserRole.STUDENT, 'Classmate A', '26B21CS007')
+MEMBER_B = make_user(8, UserRole.STUDENT, 'Classmate B', '26B21CS008')
+MEMBER_C = make_user(9, UserRole.STUDENT, 'Classmate C', '26B21CS009')
+
+
+# ---- The cap and the requester-always-first rule ----
+check('four students is the maximum on one letter',
+      MAX_GROUP_MEMBERS == 4)
+check('the requester is always member one',
+      normalise_members(1, [2, 3])[0] == 1)
+check('a request with no extra members is a request of one',
+      normalise_members(1, []) == [1] and normalise_members(1, None) == [1])
+check('duplicates collapse, whoever submitted them',
+      normalise_members(1, [2, 1, 2, 3]) == [1, 2, 3])
+# Truncating quietly would let a tampered POST put ten students on one letter
+# and simply drop the rest, so the cap is asserted here and refused in the service.
+check('the cap holds however many ids arrive',
+      normalise_members(1, [2, 3, 4, 5, 6, 7]) == [1, 2, 3, 4])
+check('junk ids are dropped rather than crashing the normaliser',
+      normalise_members(1, [None, '', 'x', 2]) == [1, 2])
+
+# ---- Records written before groups existed ----
+_legacy = make_request(1)
+check('a record with no member_ids reads as a single student',
+      _legacy.members == [1] and _legacy.is_group is False,
+      f'got {_legacy.members}')
+check('  -> and its approval covers that student',
+      _legacy.approved_members == [1])
+
+# ---- Group arithmetic ----
+_group = _greq(1, [1, 7, 8, 9])
+check('a group of four reports its size',
+      _group.group_size == 4 and _group.is_group is True)
+check('an untouched approval covers everyone',
+      _group.approved_members == [1, 7, 8, 9])
+_trimmed = _greq(2, [1, 7, 8, 9], RequestStatus.APPROVED, approved=[1, 7, 9])
+check('the HOD can strike a member off',
+      _trimmed.approved_members == [1, 7, 9]
+      and _trimmed.dropped_members == [8])
+check('an approval covering nobody falls back to the whole group',
+      _greq(3, [1, 7], approved=[]).approved_members == [1, 7])
+
+# ---- resolve_members refuses what it should ----
+def _resolve(ids, directory):
+    _saved = user_mod.UserModel.find_by_id
+    user_mod.UserModel.find_by_id = staticmethod(
+        lambda _id: directory.get(_id))
+    try:
+        return _svc.resolve_members(STUDENT, ids)
+    finally:
+        user_mod.UserModel.find_by_id = _saved
+
+
+_full = {1: STUDENT, 7: MEMBER_A, 8: MEMBER_B, 9: MEMBER_C,
+         2: LECTURER, 3: HOD}
+check('a group of four resolves',
+      [u.id for u in _resolve([7, 8, 9], _full)] == [1, 7, 8, 9])
+
+_refused = False
+try:
+    _resolve([7, 8, 9, 10], _full)
+except _svc.ValidationError:
+    _refused = True
+check('a fifth student is refused rather than silently dropped', _refused)
+
+_refused = False
+try:
+    _resolve([2], _full)          # a lecturer, not a student
+except _svc.ValidationError:
+    _refused = True
+check('a staff account cannot be added to a student permission', _refused)
+
+_other = dict(_full)
+_other[7] = make_user(7, UserRole.STUDENT, 'Outsider', '26B21CS007')
+_other[7].department = 'ECE'
+_refused = False
+try:
+    _resolve([7], _other)
+except _svc.ValidationError:
+    _refused = True
+check('a student from another department cannot be added', _refused)
+
+_inactive = dict(_full)
+_inactive[7] = make_user(7, UserRole.STUDENT, 'Gone', '26B21CS007')
+_inactive[7].is_active = False
+_refused = False
+try:
+    _resolve([7], _inactive)
+except _svc.ValidationError:
+    _refused = True
+check('a deactivated account cannot be added', _refused)
+
+# ---- The duplicate check reaches every member ----
+_restore, _log = _with_service_patches(
+    {9001: make_request(9001)},
+    _overlapping([_req(1, NOV_10, NOV_12)]),
+)
+try:
+    _members = {1: STUDENT, 7: MEMBER_A, 8: MEMBER_B}
+    _saved = user_mod.UserModel.find_by_id
+    user_mod.UserModel.find_by_id = staticmethod(
+        lambda _id: _members.get(_id))
+    _seen = {}
+    try:
+        _real_overlap = perm_mod.PermissionModel.find_overlapping_for_students
+
+        def _spy(ids, start, end, exclude_id=None):
+            _seen['ids'] = list(ids)
+            return _real_overlap(ids, start, end, exclude_id)
+        perm_mod.PermissionModel.find_overlapping_for_students = staticmethod(_spy)
+
+        _clash = None
+        try:
+            _svc.submit_request(
+                student=STUDENT, permission_type='CLASSROOM',
+                reason='Medical appointment with the dentist at the city',
+                start_date_raw='2026-11-11', end_date_raw='2026-11-13',
+                start_time_raw='', end_time_raw='', proof_file=None,
+                base_url='http://localhost', member_ids=[7, 8])
+        except _svc.DuplicateRequestError as exc:
+            _clash = exc
+    finally:
+        user_mod.UserModel.find_by_id = _saved
+
+    check('the duplicate check is run over every member, not just the requester',
+          _seen.get('ids') == [1, 7, 8], f'checked {_seen.get("ids")}')
+    check('a clash on a co-member still holds the submission',
+          _clash is not None)
+    if _clash is not None:
+        check('  -> and the clash names the student it belongs to',
+              _clash.clashes[0].get('student') is not None
+              and _clash.clashes[0]['student_id'] in (1, 7, 8))
+        check('  -> naming them in the message, not just counting them',
+              '26B21CS0' in str(_clash) or 'Classmate' in str(_clash),
+              str(_clash))
+finally:
+    _restore()
+
+# ---- The HOD's per-member decision ----
+_restore, _log = _with_service_patches(
+    {700: _greq(700, [1, 7, 8, 9], RequestStatus.AWAITING_HOD)},
+    _overlapping([]))
+try:
+    _members = {1: STUDENT, 7: MEMBER_A, 8: MEMBER_B, 9: MEMBER_C}
+    _saved = user_mod.UserModel.find_by_id
+    user_mod.UserModel.find_by_id = staticmethod(lambda _id: _members.get(_id))
+    try:
+        _svc.hod_act_on_request(
+            request_id=700, hod=HOD, action=ApprovalAction.APPROVED,
+            remarks='Sanctioned', base_url='http://localhost',
+            member_ids=[1, 7, 9])
+    finally:
+        user_mod.UserModel.find_by_id = _saved
+
+    check('the HOD approves a subset of the group',
+          _log['status'] == [(700, RequestStatus.APPROVED)],
+          f'got {_log["status"]}')
+    check('  -> and the subset is written down, not left implicit',
+          _log['approved'] == [1, 7, 9], f'got {_log.get("approved")}')
+    check('  -> the student who was struck off is told',
+          'not-covered' in _log['mails'],
+          f'mails: {_log["mails"]}')
+finally:
+    _restore()
+
+_restore, _log = _with_service_patches(
+    {701: _greq(701, [1, 7, 8, 9], RequestStatus.AWAITING_HOD)},
+    _overlapping([]))
+try:
+    _refused = False
+    try:
+        _svc.hod_act_on_request(
+            request_id=701, hod=HOD, action=ApprovalAction.APPROVED,
+            remarks='', base_url='http://localhost', member_ids=[])
+    except _svc.ValidationError:
+        _refused = True
+    check('an approval that would cover nobody is refused', _refused)
+    check('  -> and nothing is written when it is', not _log['status'])
+finally:
+    _restore()
+
+# ---- Visibility and withdrawal on a group ----
+_group_record = _greq(800, [1, 7, 8, 9])
+check('a co-member may read the request they are on',
+      _svc.student_can_view(_group_record, MEMBER_A) is True)
+# Deliberately not one of 7/8/9: the group already contains them, so using one
+# here would assert that a member is not a member.
+OUTSIDER = make_user(11, UserRole.STUDENT, 'Not On It', '26B21CS011')
+check('a student who is not on it may not',
+      _svc.student_can_view(_group_record, OUTSIDER) is False)
+check('staff may read any request', _svc.student_can_view(_group_record, HOD) is True)
+
+_restore, _log = _with_service_patches({800: _group_record}, _overlapping([]))
+try:
+    _refused = False
+    try:
+        # A co-member withdrawing would void the letter for the other three.
+        _svc.cancel_request(800, MEMBER_A)
+    except _svc.ValidationError:
+        _refused = True
+    check('only the requester can withdraw a group permission', _refused)
+finally:
+    _restore()
+
+print()
+print('=' * 70)
+print('9z5. RETIRED LEAVE TYPE, AND FRAMING THE PROOF')
+print('=' * 70)
+
+# Leave management was withdrawn. The type has to be uncreatable and invisible,
+# while the rows already in Firestore keep rendering -- deleting the enum member
+# would make PermissionType() raise on read and 500 the whole app.
+from app.models import OFFERABLE_PERMISSION_TYPES, PermissionType  # noqa: E402
+
+from config import Config as _AppConfig  # noqa: E402
+
+
+def _read_config_app_name() -> str:
+    """The app name as configured, so the assertion cannot pass on a stale copy."""
+    return _AppConfig.APP_NAME
+
+check('leave is not offerable', PermissionType.LEAVE
+      not in OFFERABLE_PERMISSION_TYPES)
+check('the activity type is the only one offered',
+      OFFERABLE_PERMISSION_TYPES == (PermissionType.CLASSROOM,),
+      f'got {OFFERABLE_PERMISSION_TYPES}')
+check('the retired type still reads, so historical rows do not 500',
+      PermissionType('LEAVE') is PermissionType.LEAVE)
+
+# The service is the only thing that can create a request, so that is what has to
+# refuse -- a hand-rolled POST bypasses the form entirely.
+_restore, _log = _with_service_patches({9001: make_request(9001)},
+                                       _overlapping([]))
+try:
+    _refused = False
+    try:
+        _svc.submit_request(
+            student=STUDENT, permission_type='LEAVE',
+            reason='Medical appointment with the dentist at the city',
+            start_date_raw='2026-12-01', end_date_raw='2026-12-02',
+            start_time_raw='', end_time_raw='', proof_file=None,
+            base_url='http://localhost')
+    except _svc.ValidationError:
+        _refused = True
+    check('a leave request is refused by the service, not just hidden by the form',
+          _refused)
+    check('  -> and nothing is written', not _log['created'])
+
+    _svc.submit_request(
+        student=STUDENT, permission_type='CLASSROOM',
+        reason='Inter-college fest with the robotics club',
+        start_date_raw='2026-12-01', end_date_raw='2026-12-02',
+        start_time_raw='', end_time_raw='', proof_file=None,
+        base_url='http://localhost')
+    check('an activity request is still accepted', bool(_log['created']))
+finally:
+    _restore()
+
+# Nothing in the interface may still offer it.
+check('the request form offers no leave option',
+      'value="LEAVE"' not in open('templates/student/new_request.html',
+                                  encoding='utf-8').read())
+for _tpl in ('templates/hod/requests.html', 'templates/faculty/requests.html',
+             'templates/hod/dashboard.html'):
+    check(f'{_tpl.rsplit("/", 1)[1]} does not filter on leave',
+          "'LEAVE'" not in open(_tpl, encoding='utf-8').read())
+check('a retired row is labelled as retired, not as an activity',
+      'Leave (retired)' in open('templates/_macros.html', encoding='utf-8').read())
+check('the app name no longer claims leave tracking',
+      'Leave' not in _read_config_app_name())
+
+# ---- Retired type, and framing the proof ----
+# The proof preview is an iframe on the request page, so its response has to be
+# framable by us and by nobody else.
+_restore = patch_models(LECTURER)
+try:
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess['user_id'] = 2
+        sess['_user_id'] = '2'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _page = client.get('/faculty/requests/1024')
+    check('the request page previews the proof in an iframe',
+          '<iframe' in _page.get_data(as_text=True))
+
+    # The proof route reads the store twice -- the proof row and the bytes -- so
+    # both are stubbed. Without them it answers 503 and the assertion below would
+    # be reading an error page's DENY rather than the real header.
+    _saved_proof_id = perm_mod.ProofModel.find_by_id
+    _saved_fetch = faculty_routes.fetch_proof
+    perm_mod.ProofModel.find_by_id = staticmethod(
+        lambda pid: make_proof(pid, 1024))
+    faculty_routes.fetch_proof = lambda _path: b'%PDF-1.4 fake proof bytes'
+
+    _frameable = []
+    for _path in ('/faculty/requests/1024',
+                  '/faculty/proofs/7/download'):
+        _resp = client.get(_path)
+        _frameable.append((_path, _resp.status_code,
+                           _resp.headers.get('X-Frame-Options')))
+
+    _status = dict((p, (s, h)) for p, s, h in _frameable)
+    _code, _proof = _status['/faculty/proofs/7/download']
+    check('the proof route serves the file in this harness', _code == 200,
+          f'got {_code}')
+    check('the proof response allows same-origin framing',
+          _proof == 'SAMEORIGIN', f'got {_proof}')
+    check('every other page still refuses framing outright',
+          all(h == 'DENY' for p, _s, h in _frameable
+              if not p.endswith('/download')),
+          f'got {_frameable}')
+finally:
+    perm_mod.ProofModel.find_by_id = _saved_proof_id
+    faculty_routes.fetch_proof = _saved_fetch
+    _restore()
 
 print()
 print('=' * 70)

@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from flask import (
     Blueprint,
     abort,
+    current_app,
     flash,
     redirect,
     render_template,
@@ -19,12 +20,16 @@ from app.models import (
     ApprovalAction, PermissionType, RequestStatus, UserRole,
 )
 from app.models.classes import AttendanceModel, ClassModel, MemberModel
-from app.models.permission import ApprovalModel, PermissionModel, ProofModel
+from app.models.permission import (
+    ApprovalModel, PermissionModel, ProofModel, attach_members,
+)
 from app.models.user import UserModel
-from app.permissions.service import ValidationError, act_on_request
+from app.permissions.pages import permission_required
+from app.permissions.service import ValidationError, act_on_request, student_can_view
 from app.utils.files import UploadError, fetch_proof
+from app.utils.qr import letter_qr
 from app.utils.roster import RosterError, parse_roster
-from app.utils.security import current_user, csrf_token, roles_required
+from app.utils.security import current_user, csrf_token
 
 
 def _parse_date(value, default):
@@ -39,7 +44,7 @@ APP_ROOT = 'https://cse-permission.adityauniversity.in'
 
 
 @faculty_bp.route('/dashboard')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.dashboard')
 def dashboard():
     user = current_user()
     pending = PermissionModel.find_pending_for_faculty(user.id)
@@ -55,7 +60,7 @@ def dashboard():
 
 
 @faculty_bp.route('/requests/<int:request_id>')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.request_detail')
 def request_detail(request_id: int):
     user = current_user()
     record = PermissionModel.find_by_id(request_id)
@@ -80,7 +85,7 @@ def request_detail(request_id: int):
 
 
 @faculty_bp.route('/requests/<int:request_id>/action', methods=['POST'])
-@roles_required(UserRole.LECTURER)
+@permission_required('faculty.action')
 def action(request_id: int):
     user = current_user()
     decision = request.form.get('decision', '').lower()
@@ -116,7 +121,7 @@ def action(request_id: int):
 
 
 @faculty_bp.route('/requests/<int:request_id>/reassign', methods=['POST'])
-@roles_required(UserRole.HOD)
+@permission_required('faculty.reassign')
 def reassign(request_id: int):
     lecturer_id = request.form.get('lecturer_id', type=int)
     record = PermissionModel.find_by_id(request_id)
@@ -131,7 +136,7 @@ def reassign(request_id: int):
 
 
 @faculty_bp.route('/search')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.search')
 def search():
     """Find a student by roll number or name and list their permissions."""
     user = current_user()
@@ -220,7 +225,7 @@ def _class_rolls_for(viewer, roll_number: str) -> list:
 
 
 @faculty_bp.route('/classes')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.classes')
 def classes():
     """List the viewing lecturer's classes."""
     user = current_user()
@@ -238,7 +243,7 @@ def classes():
 
 
 @faculty_bp.route('/classes/new', methods=['POST'])
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.create_class')
 def create_class():
     user = current_user()
     name = (request.form.get('name') or '').strip()
@@ -264,7 +269,7 @@ def create_class():
 
 
 @faculty_bp.route('/classes/<int:class_id>')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.class_detail')
 def class_detail(class_id: int):
     """Roster, and the permissions in force on a chosen date."""
     user = current_user()
@@ -313,7 +318,7 @@ def class_detail(class_id: int):
 
 
 @faculty_bp.route('/classes/<int:class_id>/roster', methods=['POST'])
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.upload_roster')
 def upload_roster(class_id: int):
     """Bulk-add roll numbers from an Excel or CSV roster."""
     user = current_user()
@@ -351,7 +356,7 @@ def upload_roster(class_id: int):
 
 @faculty_bp.route('/classes/<int:class_id>/members/<int:member_id>/delete',
                   methods=['POST'])
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.delete_member')
 def delete_member(class_id: int, member_id: int):
     user = current_user()
     _owned_class(user, class_id)
@@ -362,7 +367,7 @@ def delete_member(class_id: int, member_id: int):
 
 
 @faculty_bp.route('/classes/<int:class_id>/delete', methods=['POST'])
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.delete_class')
 def delete_class(class_id: int):
     user = current_user()
     group = _owned_class(user, class_id)
@@ -373,7 +378,7 @@ def delete_class(class_id: int):
 
 
 @faculty_bp.route('/classes/<int:class_id>/attendance', methods=['GET', 'POST'])
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.attendance')
 def attendance(class_id: int):
     """Mark attendance for the class on a given date."""
     user = current_user()
@@ -483,7 +488,7 @@ def _permissions_for_date(members, on_date: date):
 
 
 @faculty_bp.route('/requests')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.requests_browser')
 def requests_browser():
     """Browse every request in the department with filters."""
     user = current_user()
@@ -510,7 +515,7 @@ def requests_browser():
 
 
 @faculty_bp.route('/attendance')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.attendance_overview')
 def attendance_overview():
     """Pick a class and a date to mark attendance for it."""
     user = current_user()
@@ -537,7 +542,7 @@ def attendance_overview():
 
 
 @faculty_bp.route('/reports')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.reports')
 def reports():
     """Workload and trend figures for the signed-in lecturer."""
     user = current_user()
@@ -574,7 +579,9 @@ def _faculty_stats(faculty_id: int) -> dict:
         reasons[reason] = reasons.get(reason, 0) + 1
 
     stats['total'] = stats['approved'] + stats['rejected'] + stats['pending']
-    stats['leave'] = types.get(PermissionType.LEAVE.value, 0)
+    # Only the issued type is counted. `leave` is deliberately not reported: the
+    # retired type still exists in storage, and surfacing a count for it on a
+    # page nobody can act on invites the question of what it means.
     stats['classroom'] = types.get(PermissionType.CLASSROOM.value, 0)
     stats['reasons'] = [
         {'reason': reason, 'n': count}
@@ -697,7 +704,7 @@ def _filtered_requests(status_filter, type_filter, date_from, date_to,
 
 
 @faculty_bp.route('/requests/<int:request_id>/letter')
-@roles_required(UserRole.LECTURER, UserRole.HOD)
+@permission_required('faculty.request_letter')
 def request_letter(request_id: int):
     """Formal letter for a request, addressed from the faculty portal."""
     user = current_user()
@@ -711,6 +718,7 @@ def request_letter(request_id: int):
     from flask import render_template
 
     student = UserModel.find_by_id(record.student_id)
+    attach_members([record])
     history = ApprovalModel.find_by_request(request_id)
     faculty_name = '—'
     decision = None
@@ -718,6 +726,21 @@ def request_letter(request_id: int):
         latest = history[-1]
         faculty_name = getattr(latest, 'faculty_name', None) or '—'
         decision = latest
+
+    # The QR points at the same public verification page the student's copy does.
+    # This view renders the same template as the student route, and the template
+    # draws the code only when it is handed one -- so a letter printed from here
+    # used to arrive with no code at all, and the reference number in the table
+    # still read correctly from its fallback, which is what made it easy to miss.
+    # A failing encoder degrades to a letter without a code rather than to a
+    # letter that will not print.
+    try:
+        qr = letter_qr(record.id)
+    except Exception:
+        current_app.logger.exception(
+            'Could not build the verification QR code'
+        )
+        qr = {'url': '', 'image': '', 'reference': f'REQ-{record.id:04d}'}
 
     return render_template(
         'student/letter.html',
@@ -728,11 +751,12 @@ def request_letter(request_id: int):
         history=history,
         faculty_name=faculty_name,
         decision=decision,
+        qr=qr,
     )
 
 
 @faculty_bp.route('/proofs/<int:proof_id>/download')
-@roles_required(UserRole.LECTURER, UserRole.HOD, UserRole.STUDENT)
+@permission_required('faculty.download_proof')
 def download_proof(proof_id: int):
     proof = ProofModel.find_by_id(proof_id)
     if proof is None:
@@ -743,7 +767,7 @@ def download_proof(proof_id: int):
         abort(404)
 
     user = current_user()
-    if user.is_student and record.student_id != user.id:
+    if user.is_student and not student_can_view(record, user):
         abort(403)
     if user.is_lecturer and record.assigned_faculty_id != user.id:
         abort(403)
@@ -754,9 +778,18 @@ def download_proof(proof_id: int):
         abort(404)
 
     mimetype, _ = mimetypes.guess_type(proof.original_filename)
-    return send_file(
+    response = send_file(
         io.BytesIO(payload),
         mimetype=mimetype or f'application/{proof.file_type}',
         as_attachment=False,
         download_name=proof.original_filename,
     )
+    # The proof is previewed in an iframe on the request page, and the blanket
+    # X-Frame-Options: DENY every response carries made the browser refuse to
+    # render it. SAMEORIGIN is the narrowest relaxation that fixes that: the
+    # document can be framed by our own pages and still cannot be framed by
+    # anyone else, which is what DENY was there to prevent. The header is
+    # overwritten here rather than cleared, because setdefault in the
+    # after_request hook has already put DENY on this response.
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    return response

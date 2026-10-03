@@ -356,12 +356,20 @@ class Store:
         return self.client.collection(name)
 
     @with_retry
-    def documents(self, name, **filters):
+    def documents(self, name, array_contains=None, **filters):
         """Every document in a collection whose fields match, as dicts.
 
         `filters` are equality comparisons and nothing else. Each one is a single
         field lookup, which Firestore serves from an automatic index, so this
         never needs a composite index to be configured first.
+
+        `array_contains` maps a field name to a value and keeps the documents
+        whose array field holds it. That is how a co-member on a group permission
+        finds the request they were added to: their own id sits inside
+        `member_ids` rather than in a field of its own. Firestore serves it from
+        an automatic index too, so it costs the same as an equality filter. It is
+        a named argument rather than a `where` key so it can never be mistaken
+        for a document field called `array_contains`.
         """
         query = self.collection(name)
         field_filter = FieldFilter
@@ -373,6 +381,10 @@ class Store:
                 continue
             query = query.where(
                 filter=field_filter(field, '==', value))
+        for field, value in (array_contains or {}).items():
+            if value is None:
+                continue
+            query = query.where(filter=field_filter(field, 'array_contains', value))
         return [self.to_python(snapshot.to_dict() or {})
                 for snapshot in query.stream(timeout=self.timeout)]
 
