@@ -1966,16 +1966,27 @@ try:
           'border: 1px solid #cbd5e1; padding: 3px' not in page
           and re.search(r'\.lt-head__qr img\s*\{[^}]*border:\s*0', page) is not None)
 
-    # The design's approval timeline, which is what tells a reader where a
-    # request actually stopped.
-    check('letter carries an approval timeline', 'letter-track' in page
-          and 'Approval Status' in page)
-    check('  -> with the four stages from the design',
-          all(word in page for word in ['Request Submitted',
-                                        'Department Verification',
-                                        'Approval', 'Final Status']))
-    check('  -> and the request details table', 'Request Details' in page)
+    # The approval timeline was removed from the letter at the client's request.
+    # Asserted as absent rather than simply dropped: the status panel and the
+    # closing notice already carry the outcome, and a check that only stopped
+    # mentioning the timeline would let it reappear unnoticed.
+    check('letter no longer carries an approval timeline',
+          'letter-track' not in page
+          and 'Approval Status' not in page
+          and 'Final Status' not in page,
+          'the four-stage timeline is back on the letter')
+    check('  -> and leaves no dead timeline styles behind',
+          'track__step' not in page and '.track {' not in page,
+          'orphaned .track CSS is still in the letter')
+    check('  -> the request details table remains', 'Request Details' in page)
     check('  -> and a closing notice', 'letter-notice' in page)
+    # The letter used to hardcode the app name in its colophon, so renaming the
+    # application left "Permission & Leave Tracking" printed on every letter after
+    # leave management was retired. It reads the context global like every other
+    # template now.
+    check('  -> and names the application from the config, not a literal',
+          'CSE Permission Tracking System' in page
+          and 'Leave Tracking System' not in page)
 
     # Every panel in the design is a background fill, and a print pipeline drops
     # those unless the document insists. Without this the printed sheet keeps the
