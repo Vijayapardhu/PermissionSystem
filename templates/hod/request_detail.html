@@ -104,16 +104,17 @@
     <div class="card-au mb-3">
       <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-paperclip"></i> Proof</h2></div>
       <div class="card-au__body">
-        <ul class="list-unstyled mb-0">
-          {% for proof in proofs %}
-          <li class="mb-2">
-            <a href="{{ url_for('faculty.download_proof', proof_id=proof.id) }}">
-              <i class="bi bi-download"></i> {{ proof.original_filename }}
-            </a>
-            <span class="form-text">{{ (proof.file_size / 1024)|round(1) }} KB</span>
-          </li>
-          {% endfor %}
-        </ul>
+        {% for proof in proofs %}
+        <div class="mb-3">
+          <a href="{{ url_for('faculty.download_proof', proof_id=proof.id) }}" target="_blank" rel="noopener">
+            <i class="bi bi-download"></i> {{ proof.original_filename }}
+          </a>
+          <span class="form-text">{{ (proof.file_size / 1024)|round(1) }} KB</span>
+          <iframe src="{{ url_for('faculty.download_proof', proof_id=proof.id) }}"
+                  class="proview mt-2"
+                  title="Preview of {{ proof.original_filename }}"></iframe>
+        </div>
+        {% endfor %}
       </div>
     </div>
     {% endif %}

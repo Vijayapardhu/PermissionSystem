@@ -155,6 +155,9 @@
               {{ (proof.file_size / 1024) | round(1) }} KB &middot; {{ proof.file_type|upper }}
               &middot; uploaded {{ proof.uploaded_at.strftime('%d %b %Y') }}
             </div>
+            <iframe src="{{ url_for('faculty.download_proof', proof_id=proof.id) }}"
+                    class="proview mt-2"
+                    title="Preview of {{ proof.original_filename }}"></iframe>
           </div>
           {% endfor %}
         {% else %}
