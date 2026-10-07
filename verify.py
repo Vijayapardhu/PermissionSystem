@@ -2345,6 +2345,22 @@ with app.test_request_context():
           to_python_value('1234-56-78', store_mod.ZoneInfo('UTC'))
           is store_mod._UNCHANGED)
 
+    # String-keyed documents (settings, attendance marks) are first-class:
+    # insert() accepts a string doc id, so get() must return it rather than
+    # crashing in int() -- a crash the retry wrapper used to report as a 503,
+    # which is what took the routing page down instead of flagging the mapping.
+    _fake_store.insert('settings', {'event_faculty_id': 2}, doc_id='routing')
+    _routed = _fake_store.get('settings', 'routing')
+    check('a string-keyed document reads back under its own id',
+          _routed is not None and _routed['id'] == 'routing'
+          and _routed['event_faculty_id'] == 2, str(_routed))
+    check('a missing string-keyed document reads as None',
+          _fake_store.get('settings', 'nope') is None)
+    _int_read = _fake_store.get('widgets', _spanner_id)
+    check('an integer id still comes back as an integer',
+          _int_read['id'] == 3 and isinstance(_int_read['id'], int),
+          str(_int_read.get('id')))
+
     # -- writes ------------------------------------------------------------
     check('update merges and returns True',
           _fake_store.update('widgets', _spanner_id, {'name': 'renamed'}) is True)
@@ -3299,9 +3315,83 @@ try:
                                  '_csrf_token': 'workflow-token'})
     check('an unrecognised decision is refused rather than defaulted to approve',
           _garbage.status_code == 400, f'got {_garbage.status_code}')
+
+    # The routing page reads the lecturer directory and the settings doc, so
+    # both are stubbed: the page is exercised for rendering, not for storage.
+    # (A string doc id once crashed Store.get inside int() and the wrapper
+    # reported it as a 503 -- covered in section 12, not here.)
+    from app.models import settings as settings_mod  # noqa: E402
+    _orig_routing = settings_mod.SettingsModel.get_routing
+    user_mod.UserModel.get_lecturers = staticmethod(lambda: [LECTURER])
+    settings_mod.SettingsModel.get_routing = staticmethod(
+        lambda: {'event_faculty_id': None, 'curricular_faculty_id': None,
+                 'general_faculty_id': None})
+    _routing_page = client.get('/hod/faculty/routing')
+    _routing_html = _routing_page.get_data(as_text=True)
+    check('the routing page renders', _routing_page.status_code == 200,
+          f'got {_routing_page.status_code}')
+    check('  -> and names the three queues',
+          all(word in _routing_html
+              for word in ('Hackathons', 'Curriculars', 'General proctor')),
+          'a queue is missing from the page')
 finally:
     _restore()
+    settings_mod.SettingsModel.get_routing = _orig_routing
     fac_routes._filtered_requests = _real_filter
+
+# Adding one lecturer without a spreadsheet.
+_restore = patch_models(HOD)
+_orig_find_email = user_mod.UserModel.find_by_email
+_orig_create = user_mod.UserModel.create
+try:
+    _created = {}
+
+    def _create_spy(*args, **kwargs):
+        _created['args'] = (args, kwargs)
+        return LECTURER
+
+    user_mod.UserModel.find_by_email = staticmethod(lambda e: None)
+    user_mod.UserModel.create = staticmethod(_create_spy)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = 3
+        sess['_user_id'] = '3'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _add = client.post('/hod/faculty/add',
+                       data={'name': 'New Lecturer',
+                             'email': 'new.cse@adityauniversity.in',
+                             '_csrf_token': 'workflow-token'})
+    check('a single lecturer is created as LECTURER in CSE',
+          _add.status_code == 302
+          and _created.get('args', ((), {}))[1].get('role') is UserRole.LECTURER
+          and _created.get('args', ((), {}))[1].get('department') == 'CSE',
+          f'got {_add.status_code}')
+    check('  -> and lands back on the import page',
+          _add.headers.get('Location', '').endswith('/hod/faculty/import'))
+
+    _bad = client.post('/hod/faculty/add',
+                       data={'name': 'New Lecturer', 'email': 'not-an-email',
+                             '_csrf_token': 'workflow-token'},
+                       follow_redirects=True)
+    _bad_html = _bad.get_data(as_text=True)
+    check('a malformed email creates nothing',
+          'not a valid email' in _bad_html
+          and _created['args'][0][1] == 'new.cse@adityauniversity.in',
+          'a bad row reached create')
+
+    user_mod.UserModel.find_by_email = staticmethod(lambda e: LECTURER)
+    _dup = client.post('/hod/faculty/add',
+                       data={'name': 'New Lecturer',
+                             'email': 'new.cse@adityauniversity.in',
+                             '_csrf_token': 'workflow-token'},
+                       follow_redirects=True)
+    check('an existing email is reported, not duplicated',
+          'already has an account' in _dup.get_data(as_text=True))
+finally:
+    user_mod.UserModel.find_by_email = _orig_find_email
+    user_mod.UserModel.create = _orig_create
+    _restore()
 
 # A lecturer holds `faculty.action`, which decides: approve outright, verify and
 # forward, or reject. They do not hold `hod.request_action`, which is the

@@ -117,6 +117,7 @@ PAGE_PERMISSIONS = {
     'hod.request_detail': (HOD,),
     'hod.faculty_workload': (HOD,),
     'hod.import_faculty': (HOD,),
+    'hod.add_faculty': (HOD,),
     'hod.routing': (HOD,),
     'hod.classes': (HOD,),
     'hod.print_report': (HOD,),

@@ -429,6 +429,40 @@ def import_faculty():
     return redirect(url_for('hod.import_faculty'))
 
 
+@hod_bp.route('/faculty/add', methods=['POST'])
+@permission_required('hod.add_faculty')
+def add_faculty():
+    """Create one lecturer account from a name and email.
+
+    The same account the spreadsheet import would create, for the common case
+    of a single joining faculty. An existing email is reported rather than
+    duplicated.
+    """
+    from app.utils.security import is_valid_email
+
+    name = (request.form.get('name') or '').strip()
+    email = (request.form.get('email') or '').strip().lower()
+
+    if len(name) < 2:
+        flash('Enter the faculty name.', 'danger')
+        return redirect(url_for('hod.import_faculty'))
+    if not is_valid_email(email):
+        flash(f'"{request.form.get("email") or "—"}" is not a valid email.',
+              'danger')
+        return redirect(url_for('hod.import_faculty'))
+    if UserModel.find_by_email(email) is not None:
+        flash(f'{email} already has an account. Nothing was added.',
+              'warning')
+        return redirect(url_for('hod.import_faculty'))
+
+    UserModel.create(
+        None, email, name, role=UserRole.LECTURER, department='CSE',
+    )
+    flash(f'Lecturer account created for {name} ({email}). '
+          f'They can sign in with Microsoft now.', 'success')
+    return redirect(url_for('hod.import_faculty'))
+
+
 @hod_bp.route('/faculty/routing', methods=['GET', 'POST'])
 @permission_required('hod.routing')
 def routing():

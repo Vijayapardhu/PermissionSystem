@@ -29,6 +29,32 @@
 
 <div class="card-au mb-3">
   <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-plus"></i> Add One Faculty</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.add_faculty') }}">
+      {{ csrf_field() }}
+      <div class="row g-2 mb-3">
+        <div class="col-md-6">
+          <label for="faculty_name" class="form-label">Full name <span class="text-danger">*</span></label>
+          <input class="form-control" id="faculty_name" name="name" required
+                 minlength="2" maxlength="120" placeholder="e.g. Dr. Anil Kumar">
+        </div>
+        <div class="col-md-6">
+          <label for="faculty_email" class="form-label">University email <span class="text-danger">*</span></label>
+          <input class="form-control" id="faculty_email" name="email" type="email" required
+                 maxlength="120" placeholder="e.g. anil.cse@adityauniversity.in">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-pill">
+        <i class="bi bi-plus-lg"></i> Create lecturer account
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
     <h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload Spreadsheet</h2>
   </div>
   <div class="card-au__body">

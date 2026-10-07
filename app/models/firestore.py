@@ -397,7 +397,16 @@ class Store:
         if not snapshot.exists:
             return None
         data = self.to_python(dict(snapshot.to_dict() or {}))
-        data['id'] = int(data.get('id') or doc_id)
+        # Keep the stored id, coercing only int-like values. A blind int()
+        # crashes on string-keyed documents (settings, attendance marks),
+        # which insert() explicitly supports -- and the crash used to surface
+        # as a 503, sending the reader to check the database instead of the
+        # mapping.
+        stored_id = data.get('id')
+        if stored_id is None:
+            data['id'] = int(doc_id) if _is_int_id(doc_id) else doc_id
+        elif _is_int_id(stored_id):
+            data['id'] = int(stored_id)
         return data
 
     # -- writes ------------------------------------------------------------
