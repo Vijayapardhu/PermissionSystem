@@ -740,11 +740,43 @@ a:hover { text-decoration: underline; }
   letter-spacing: .02em;
   border-bottom: 1.5px solid var(--au-border-strong);
 }
+.table-au__section--action td {
+  background: var(--au-primary-soft);
+  color: var(--au-primary-dark);
+  border-bottom: 1.5px solid var(--au-primary);
+}
 
 /* The stage in words: "Waiting on you" is the HOD's own to-do and reads as
-   one, "With faculty" is still travelling. */
-.stage-now { font-weight: 700; color: var(--au-primary); }
+   one, "With faculty" is still travelling. The dot carries the meaning at a
+   glance down a long list. */
+.stage-now, .stage-wait { font-weight: 700; }
+.stage-now { color: var(--au-primary); }
 .stage-wait { font-weight: 600; color: var(--au-warning-text); }
+.stage-now::before, .stage-wait::before {
+  content: '';
+  display: inline-block;
+  width: .5em;
+  height: .5em;
+  border-radius: 50%;
+  margin-right: .45em;
+  vertical-align: baseline;
+}
+.stage-now::before { background: var(--au-primary); }
+.stage-wait::before { background: var(--au-warning); }
+
+/* A request reference is its own link: the fastest way to open a row. */
+.req-link { text-decoration: none; }
+.req-link:hover { text-decoration: underline; }
+
+/* Two-line clamp for triage text: the screen shows a neat teaser with the
+   full text on hover, while print shows everything (see the print rules). */
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
 
 /* The register filter bar pins under the header while a long table scrolls.
    Top offset clears the fixed top bar; the card's own background keeps rows
@@ -1356,49 +1388,55 @@ a:hover { text-decoration: underline; }
   /* ---- App chrome goes; only the document stays ----
      Sidebar, top bar, footer, headings' action buttons, every form (filters,
      decisions, uploads -- all controls, no records), every button, flash
-     messages, breadcrumbs, proof preview frames and the register's action
-     column have no meaning on paper. */
+     messages, breadcrumbs, proof preview frames, the register's action
+     column and in-table links (dead navigation on paper) have no meaning
+     on paper. The sticky filter card would otherwise print as an empty box,
+     since its only child is a hidden form. */
   .au-sidebar-wrap, .app-topbar, .au-foot,
   .page-head__actions, .toolbar, .toolbar-sticky, form,
   .btn, .btn-close, .breadcrumb, .alert, .au-flashes,
   .table-au__actions, iframe.proview,
   .member-picker__search, .stat__icon { display: none !important; }
-  .toolbar-sticky { position: static; }
 
   .au-app, .au-app__main { display: block; }
   .au-content, .page-wrap, .page-wrap-narrow {
     max-width: none; margin: 0; padding: 0 !important;
   }
 
-  /* ---- The document header ---- */
+  /* ---- The document header: centred like the formal letterhead ---- */
   .print-doc-head {
-    display: flex; align-items: center; gap: 6mm;
+    display: block; text-align: center;
     padding-bottom: 4mm; margin-bottom: 5mm;
     border-bottom: 2.5px solid #b5730f;
   }
-  .print-doc-head__logo { width: 20mm; max-width: 45%; object-fit: contain; }
+  .print-doc-head__logo { width: 20mm; margin: 0 auto 2mm; display: block; object-fit: contain; }
   .print-doc-head__univ { font-weight: 700; font-size: 1rem; color: #101c33; }
   .print-doc-head__dept { font-size: .8rem; color: #475569; }
   .print-doc-head__title { font-size: 1.25rem; font-weight: 700; color: #101c33; margin: .35rem 0 .1rem; }
   .print-doc-head__meta { font-size: .75rem; color: #6b7688; }
 
-  /* The on-screen page heading would repeat the header title verbatim. */
+  /* The on-screen page heading would repeat the header title verbatim, and
+     its subtitle is working copy, not record -- neither prints. */
   .page-head { margin-bottom: .4rem; }
   .page-head__title, .page-head__sub { display: none; }
 
-  /* ---- Document tables ----
-     Full grid lines, a shaded header that repeats on every sheet, rows that
-     never split across pages, and no sideways scrolling: a wide register
-     wraps instead of running off the paper. */
+  /* ---- Document tables: compact grid, full data ----
+     Denser than the screen (more rows per sheet), with full grid lines, a
+     shaded header that repeats on every sheet, and rows that never split.
+     Triage clamps open up: paper gets the whole reason, not the teaser. */
   .au-table-wrap { overflow: visible !important; }
-  .table-au { min-width: 0 !important; font-size: .78rem; }
+  .table-au { min-width: 0 !important; font-size: .75rem; }
   .table-au thead th {
     position: static; background: #eef2f7 !important; color: #0f172a !important;
     border: 1px solid #94a3b8; white-space: normal;
+    padding: .45rem .6rem;
   }
-  .table-au tbody td { border: 1px solid #cbd5e1; vertical-align: top; }
+  .table-au tbody td { border: 1px solid #cbd5e1; vertical-align: top; padding: .45rem .6rem; }
   .table-au tbody tr:nth-child(even) { background: #f8fafc !important; }
   .table-au tbody tr:hover { background: transparent !important; }
+  .table-au__section td { background: #eef2f7 !important; color: #0f172a !important; }
+  .table-au__section--action td { background: #e8f0fe !important; }
+  .clamp-2 { display: block; }
   .table-foot { border-top: 2px solid #0f172a; font-size: .78rem; }
 
   /* ---- Document sections ---- */

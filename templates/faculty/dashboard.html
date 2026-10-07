@@ -61,7 +61,7 @@
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
           <td class="text-nowrap">{{ date(record.end_date) }}</td>
           <td class="small">{{ time_range(record.start_time, record.end_time) }}</td>
-          <td class="text-muted">{{ record.reason|truncate(40) }}</td>
+          <td class="small text-muted clamp-2" title="{{ record.reason }}">{{ record.reason }}</td>
           <td class="text-nowrap text-muted">{{ record.created_at.strftime('%d %b') }}</td>
           <td class="table-au__actions">
             <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"

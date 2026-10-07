@@ -118,9 +118,9 @@
                 <span class="text-muted small">
                   {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
                 </span>
-                <div class="small text-muted">{{ record.reason|truncate(52) }}</div>
+                <div class="small text-muted clamp-2" title="{{ record.reason }}">{{ record.reason }}</div>
                 <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
-                   class="small">View request</a>
+                   class="small no-print">View request</a>
               </div>
               {% endfor %}
             {% else %}

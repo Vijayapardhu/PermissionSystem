@@ -12,7 +12,9 @@
      reason in full enough to triage without opening the row. #}
   <td>
     <div class="d-flex align-items-center gap-2 flex-wrap">
-      <span class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</span>
+      <a class="table-au__strong text-nowrap req-link"
+         href="{{ url_for('hod.request_detail', request_id=record.id) }}"
+         title="Open REQ-{{ '%04d' % record.id }}">REQ-{{ '%04d' % record.id }}</a>
       {% if record.is_group %}
       <span class="badge text-bg-light" title="Group permission">
         <i class="bi bi-people"></i> {{ record.group_size }} students
@@ -30,7 +32,7 @@
       {% endfor %}
     </div>
     {% endif %}
-    <div class="small text-muted mt-1">{{ record.reason|truncate(90) }}</div>
+    <div class="small text-muted mt-1 clamp-2" title="{{ record.reason }}">{{ record.reason }}</div>
   </td>
 
   {# When: the span and its length at a glance. #}
@@ -50,7 +52,12 @@
   <td>
     {% if record.status.value == 'AWAITING_HOD' %}
       <div class="stage-now">Waiting on you</div>
-      <div class="small text-muted">Verified by {{ record.faculty_name or '—' }}</div>
+      <div class="small text-muted">
+        Verified by {{ record.faculty_name or '—' }}
+        {% if record.waiting_days is not none %}
+        &middot; {{ 'received today' if record.waiting_days <= 0 else ('waiting 1 day' if record.waiting_days == 1 else 'waiting %d days' % record.waiting_days) }}
+        {% endif %}
+      </div>
     {% elif record.status.value == 'PENDING' %}
       <div class="stage-wait">With faculty</div>
       <div class="small text-muted">{{ record.faculty_name or '—' }}</div>
@@ -94,7 +101,7 @@
         <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
       </form>
     </div>
-    <div class="mt-1">
+    <div class="mt-1 no-print">
       <a href="{{ url_for('hod.request_detail', request_id=record.id) }}" class="small">Details &rarr;</a>
     </div>
     {% else %}
@@ -224,8 +231,11 @@
       </thead>
       {% if awaiting and others %}
       <tbody>
-        <tr class="table-au__section">
-          <td colspan="5">Needs your decision ({{ awaiting | length }})</td>
+        <tr class="table-au__section table-au__section--action">
+          <td colspan="5">
+            <i class="bi bi-person-check"></i>
+            Needs your decision ({{ awaiting | length }})
+          </td>
         </tr>
         {% for record in awaiting %}
         {{ request_row(record, loop.index) }}

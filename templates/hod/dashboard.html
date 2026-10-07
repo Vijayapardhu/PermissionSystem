@@ -137,7 +137,7 @@
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
           <td class="text-nowrap">{{ date(record.end_date) }}</td>
           <td class="small">{{ time_range(record.start_time, record.end_time) }}</td>
-          <td class="text-muted">{{ record.reason|truncate(38) }}</td>
+          <td class="text-muted small clamp-2" title="{{ record.reason }}">{{ record.reason }}</td>
           <td>{{ status_badge(record.status) }}</td>
         </tr>
         {% endfor %}

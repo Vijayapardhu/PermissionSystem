@@ -1967,6 +1967,7 @@ if os.path.isfile(logo_path) and os.path.isfile(crest_path) and Image:
           and 'beforeprint' in open('static/js/print.js',
                                     encoding='utf-8').read())
     for token in ('.au-sidebar-wrap', '.page-head__actions', '.table-au__actions',
+                  '.toolbar-sticky', '.page-head__sub', '.clamp-2',
                   'iframe.proview', '.print-doc-head__title',
                   'print-color-adjust: exact', '@page'):
         check(f'print CSS covers {token}', token in css,
@@ -3298,6 +3299,10 @@ try:
     _reg = _reg_resp.get_data(as_text=True)
     check('the HOD register lists the request as awaiting them',
           'Awaiting HOD' in _reg, f'status {_reg_resp.status_code}')
+    check('  -> and states the stage in words, with its wait',
+          'Waiting on you' in _reg
+          and ('waiting' in _reg or 'received today' in _reg),
+          'no plain-English stage on the row')
     check('  -> and offers the approve action',
           '/hod/requests/1024/action' in _reg and 'APPROVED' in _reg,
           f'status {_reg_resp.status_code}')

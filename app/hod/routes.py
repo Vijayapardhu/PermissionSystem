@@ -151,9 +151,14 @@ def requests():
     # The HOD's to-do first, longest-waiting on top; everything else keeps the
     # register order below it. A register that buries the actionable rows
     # under decided ones is what makes the list feel unreadable.
+    today = date.today()
     for record in records:
         start, end = record.start_date, record.end_date
         record.day_count = (end - start).days + 1 if start and end else None
+        created = record.created_at
+        if isinstance(created, datetime):
+            created = created.date()
+        record.waiting_days = (today - created).days if created else None
     awaiting = [r for r in records
                 if r.status == RequestStatus.AWAITING_HOD]
     others = [r for r in records
