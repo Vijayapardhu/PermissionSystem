@@ -249,6 +249,19 @@
           <input type="date" class="form-control" id="end_date" name="end_date"
                  min="{{ now_date }}" required value="{{ form.get('end_date', '') }}">
         </div>
+        <div class="col-12">
+          <label for="period" class="form-label">Period <span class="text-muted fw-normal">(optional)</span></label>
+          <select class="form-select" id="period" name="period">
+            <option value="">No specific period</option>
+            <option value="full_day" {{ 'selected' if form.get('period') == 'full_day' }}>Full day (09:30 - 16:10)</option>
+            <option value="morning" {{ 'selected' if form.get('period') == 'morning' }}>Morning (09:30 - 12:00)</option>
+            <option value="afternoon" {{ 'selected' if form.get('period') == 'afternoon' }}>Afternoon (13:00 - 16:10)</option>
+          </select>
+          <div class="form-text">
+            If you do not enter explicit times below, choose a period. If you
+            provide times, leave this on "No specific period".
+          </div>
+        </div>
         <div class="col-md-6">
           <label for="start_time" class="form-label">From time <span class="text-muted fw-normal">(optional)</span></label>
           <input type="time" class="form-control" id="start_time" name="start_time"
@@ -406,6 +419,29 @@
     });
 
     refreshCounter();
+  })();
+
+  /* Period selector convenience: when the student picks a period, fill the
+     explicit time fields so the backend receives times either way. */
+  (function () {
+    const period = document.getElementById('period');
+    const start = document.getElementById('start_time');
+    const end = document.getElementById('end_time');
+    if (!period || !start || !end) return;
+
+    const slots = {
+      full_day: ['09:30', '16:10'],
+      morning: ['09:30', '12:00'],
+      afternoon: ['13:00', '16:10'],
+    };
+
+    period.addEventListener('change', function () {
+      const slot = slots[period.value];
+      if (slot) {
+        start.value = slot[0];
+        end.value = slot[1];
+      }
+    });
   })();
 </script>
 {% endblock %}

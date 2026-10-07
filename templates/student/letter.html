@@ -610,16 +610,27 @@
           <td>{{ 'Proctor' if route == 'GENERAL' else route|title }}</td>
         </tr>
         <tr>
-          <th>Period</th>
+          <th>Dates</th>
           <td>
             {{ request.start_date.strftime('%d %B %Y') }}
             {% if request.end_date != request.start_date %}
               to {{ request.end_date.strftime('%d %B %Y') }}
             {% endif %}
+          </td>
+        </tr>
+        {% if request.period %}
+        <tr>
+          <th>Session</th>
+          <td>{{ request.period|title }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <th>Time</th>
+          <td>
             {% if request.start_time and request.end_time %}
-              <span class="letter-time">({{ request.start_time.strftime('%I:%M %p') }} &ndash; {{ request.end_time.strftime('%I:%M %p') }})</span>
+              {{ request.start_time.strftime('%I:%M %p') }} &ndash; {{ request.end_time.strftime('%I:%M %p') }}
             {% else %}
-              <span class="letter-time">(All day)</span>
+              All day
             {% endif %}
           </td>
         </tr>

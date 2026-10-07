@@ -79,6 +79,12 @@
           {% endif %}
           <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
           <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
+          {% if request.period %}
+          <dt>Period</dt>
+          <dd>
+            <span class="badge-au badge-au--pending">{{ request.period|title }}</span>
+          </dd>
+          {% endif %}
           <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
           <dt>Reason</dt><dd>{{ request.reason }}</dd>
         </dl>

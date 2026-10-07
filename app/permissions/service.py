@@ -20,6 +20,26 @@ ACTIVITY_REASONS = ('CLUB', 'EVENT', 'WORKSHOP', 'SPORTS', 'INTERVIEW', 'OTHER')
 # generous. Named for what it limits rather than for the type it retired with.
 MAX_PERMISSION_DAYS = 14
 
+PERIOD_FULL_DAY = 'full_day'
+PERIOD_MORNING = 'morning'
+PERIOD_AFTERNOON = 'afternoon'
+PERIOD_CHOICES = (
+    (PERIOD_FULL_DAY, 'Full day'),
+    (PERIOD_MORNING, 'Morning'),
+    (PERIOD_AFTERNOON, 'Afternoon'),
+)
+
+PERIOD_TIMES = {
+    PERIOD_FULL_DAY: (time(9, 30), time(16, 10)),
+    PERIOD_MORNING: (time(9, 30), time(12, 0)),
+    PERIOD_AFTERNOON: (time(13, 0), time(16, 10)),
+}
+
+
+def period_to_times(period: str):
+    """Convert a period label to a (start_time, end_time) pair."""
+    return PERIOD_TIMES.get(period)
+
 
 class ValidationError(Exception):
     """Raised when submitted request data is unusable."""
@@ -281,7 +301,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
                    start_date_raw: str, end_date_raw: str, start_time_raw: str,
                    end_time_raw: str, proof_file, base_url: str,
                    duplicate_ack: bool = False,
-                   member_ids=None, event_id=None) -> int:
+                   member_ids=None, event_id=None, period: str = None) -> int:
     """Validate, persist the request and its proof, then notify the reviewer."""
     # Checked against the offerable list, not the enum: leave management is
     # retired but `PermissionType.LEAVE` still exists so historical rows can be
@@ -310,6 +330,26 @@ def submit_request(*, student: User, permission_type: str, reason: str,
             f'An activity permission cannot span more than {MAX_PERMISSION_DAYS} days.'
         )
 
+    start_time = parse_time(start_time_raw, 'start time')
+    end_time = parse_time(end_time_raw, 'end time')
+
+    if start_time and end_time and end_time <= start_time:
+        raise ValidationError('The end time must be after the start time.')
+
+    # If no explicit times are given and the request is a single day (or the
+    # student chose a period), use the timetable slot that period maps to.
+    # Explicit times always win: the period selector is only a convenience.
+    if not start_time or not end_time:
+        period = (period or '').strip().lower()
+        if period not in PERIOD_TIMES:
+            raise ValidationError(
+                'Choose a period (Full day / Morning / Afternoon) when no '
+                'explicit times are given.'
+            )
+        slot_start, slot_end = PERIOD_TIMES[period]
+        start_time = start_time or slot_start
+        end_time = end_time or slot_end
+
     # Resolved before the duplicate check because the check has to run over every
     # member, and an id that is not a real student in this department must not be
     # queried for either.
@@ -330,11 +370,6 @@ def submit_request(*, student: User, permission_type: str, reason: str,
             if clash.get('student') is None:
                 clash['student'] = UserModel.find_by_id(clash['student_id'])
         raise DuplicateRequestError(clashes)
-
-    start_time = parse_time(start_time_raw, 'start time')
-    end_time = parse_time(end_time_raw, 'end time')
-    if start_time and end_time and end_time <= start_time:
-        raise ValidationError('The end time must be after the start time.')
 
     try:
         stored = validate_and_store(proof_file)
@@ -361,6 +396,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
         member_ids=member_id_list,
         route_category=classify_route(reason),
         event_id=event.id if event else None,
+        period=period,
     )
 
     ProofModel.create(

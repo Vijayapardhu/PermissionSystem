@@ -139,7 +139,8 @@ class PermissionModel:
                assigned_faculty_id: int = None,
                member_ids: List[int] = None,
                route_category: str = None,
-               event_id: int = None) -> PermissionRequest:
+               event_id: int = None,
+               period: str = None) -> PermissionRequest:
         """Create one request covering one to four students.
 
         `student_id` stays the requester and the only field the older code reads.
@@ -148,6 +149,9 @@ class PermissionModel:
         `route_category` records which review queue the request was sent to
         (EVENT, CURRICULAR or GENERAL); rows written before routing existed
         carry None and are classified from the reason when displayed.
+        `period` records the session the student chose when no explicit times
+        were given (full_day, morning, afternoon); rows written before periods
+        existed carry None and are shown as plain times when displayed.
         """
         row = store.insert(REQUESTS, {
             'student_id': student_id,
@@ -162,6 +166,7 @@ class PermissionModel:
             'assigned_faculty_id': assigned_faculty_id,
             'route_category': route_category,
             'event_id': event_id,
+            'period': period,
         })
         return PermissionModel._to_request(row)
 
@@ -384,6 +389,7 @@ class PermissionModel:
                 if isinstance(row.get('approved_member_ids'), list) else None),
             route_category=row.get('route_category'),
             event_id=row.get('event_id'),
+            period=row.get('period'),
         )
 
 

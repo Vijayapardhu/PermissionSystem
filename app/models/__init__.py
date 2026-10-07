@@ -155,6 +155,12 @@ class PermissionRequest:
     # department organises). Decided once at submission; the coordinator at
     # the time becomes the reviewer, and this id is what the register shows.
     event_id: Optional[int] = None
+    # The session the student selected when the request is for a single day and
+    # no explicit times were given. One of: full_day, morning, afternoon.
+    # Stored so the letter and the register can show it even if the slot
+    # definitions change later. Rows written before periods existed carry None
+    # and are shown as plain times when displayed.
+    period: Optional[str] = None
 
     @property
     def members(self) -> List[int]:

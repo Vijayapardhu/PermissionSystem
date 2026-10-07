@@ -87,6 +87,7 @@ def new_request():
     if request.method == 'POST':
         event_id_raw = (request.form.get('event_id') or '').strip()
         event_id = int(event_id_raw) if event_id_raw.isdigit() else None
+        period = (request.form.get('period') or '').strip().lower()
         try:
             request_id = submit_request(
                 student=user,
@@ -101,6 +102,7 @@ def new_request():
                 duplicate_ack=bool(request.form.get('duplicate_ack')),
                 member_ids=request.form.getlist('member_ids'),
                 event_id=event_id,
+                period=period or None,
             )
         except DuplicateRequestError as exc:
             flash(str(exc), 'warning')
