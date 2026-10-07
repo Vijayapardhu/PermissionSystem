@@ -1,14 +1,116 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, type_badge, date, roll, csrf_field, empty_state with context %}
+{% from '_macros.html' import status_badge, date, roll, csrf_field, empty_state with context %}
 {% block title %}All Requests &middot; {{ APP_NAME }}{% endblock %}
+
+{# One row of the register. A macro so the "needs your decision" section and
+   the rest cannot drift into two different layouts. #}
+{% macro request_row(record, num) %}
+<tr class="{{ 'table-au__row--actionable' if record.status.value == 'AWAITING_HOD' }}">
+  <td class="table-au__idx">{{ num }}</td>
+
+  {# Who and what: reference, requester, every co-member as chips, and the
+     reason in full enough to triage without opening the row. #}
+  <td>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</span>
+      {% if record.is_group %}
+      <span class="badge text-bg-light" title="Group permission">
+        <i class="bi bi-people"></i> {{ record.group_size }} students
+      </span>
+      {% endif %}
+    </div>
+    <div class="mt-1 text-nowrap">
+      {{ roll(record.student_roll_number) }}
+      <span class="fw-semibold">{{ record.student_name }}</span>
+    </div>
+    {% if record.is_group %}
+    <div class="mt-1 d-flex flex-wrap gap-1">
+      {% for member in record.member_details or [] %}
+      <span class="badge text-bg-light roll">{{ member.roll_number or member.name }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="small text-muted mt-1">{{ record.reason|truncate(90) }}</div>
+  </td>
+
+  {# When: the span and its length at a glance. #}
+  <td>
+    <div class="text-nowrap">{{ date(record.start_date) }}</div>
+    {% if record.end_date and record.end_date != record.start_date %}
+    <div class="text-nowrap text-muted">&rarr; {{ date(record.end_date) }}</div>
+    {% endif %}
+    {% if record.day_count %}
+    <div class="small text-muted">{{ record.day_count }} day{{ 's' if record.day_count != 1 }}</div>
+    {% endif %}
+  </td>
+
+  {# Where it stands, in words: whose desk it is on, who verified it, and
+     which queue it came through. One column instead of three that each
+     half-answer the same question. #}
+  <td>
+    {% if record.status.value == 'AWAITING_HOD' %}
+      <div class="stage-now">Waiting on you</div>
+      <div class="small text-muted">Verified by {{ record.faculty_name or '—' }}</div>
+    {% elif record.status.value == 'PENDING' %}
+      <div class="stage-wait">With faculty</div>
+      <div class="small text-muted">{{ record.faculty_name or '—' }}</div>
+    {% else %}
+      <div>{{ status_badge(record.status) }}</div>
+      {% if record.faculty_name %}
+      <div class="small text-muted">{{ record.faculty_name }}</div>
+      {% endif %}
+    {% endif %}
+    {% set route = record.route_display or 'GENERAL' %}
+    <div class="mt-1">
+      <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}"
+            title="{{ 'Sent to the student\u2019s proctor' if route == 'GENERAL' else ('Sent to the ' + route|lower + ' desk') }}">
+        <i class="bi bi-{{ 'person-check' if route == 'GENERAL' else ('trophy' if route == 'EVENT' else 'mortarboard') }}"></i>
+        {{ 'Proctor' if route == 'GENERAL' else route|title }}
+      </span>
+    </div>
+  </td>
+
+  {# Your move, only where there is one. The route refuses anything else too,
+     so these buttons are a convenience rather than the enforcement. A group
+     approved here covers everyone on it; striking students off happens on the
+     detail page, where the whole membership is on screen. #}
+  <td class="table-au__actions">
+    {% if record.status.value == 'AWAITING_HOD' %}
+    <div class="d-flex gap-1 justify-content-end flex-wrap">
+      <form method="post" class="d-inline"
+            action="{{ url_for('hod.request_action', request_id=record.id) }}"
+            onsubmit="return confirm('Approve REQ-{{ '%04d' % record.id }}{% if record.is_group %} for all {{ record.group_size }} students{% endif %}?');">
+        {{ csrf_field() }}
+        <input type="hidden" name="action" value="APPROVED">
+        <button type="submit" class="btn btn-sm btn-success">
+          <i class="bi bi-check-lg"></i> Approve
+        </button>
+      </form>
+      <form method="post" class="d-inline"
+            action="{{ url_for('hod.request_action', request_id=record.id) }}"
+            onsubmit="return confirm('Reject REQ-{{ '%04d' % record.id }}?');">
+        {{ csrf_field() }}
+        <input type="hidden" name="action" value="REJECTED">
+        <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+      </form>
+    </div>
+    <div class="mt-1">
+      <a href="{{ url_for('hod.request_detail', request_id=record.id) }}" class="small">Details &rarr;</a>
+    </div>
+    {% else %}
+    <a href="{{ url_for('hod.request_detail', request_id=record.id) }}"
+       class="btn btn-sm btn-outline-secondary">Open</a>
+    {% endif %}
+  </td>
+</tr>
+{% endmacro %}
 
 {% block content %}
 <div class="page-head">
   <div>
     <h1 class="page-head__title">All Requests</h1>
     <p class="page-head__sub">
-      Department-wide register. Requests your faculty verified sit at the top
-      with one-click actions; everything else follows below.
+      What needs your decision is on top; everything else follows below.
     </p>
   </div>
   <div class="page-head__actions">
@@ -21,12 +123,11 @@
   </div>
 </div>
 
-{# Queue summary for the current filter view: the HOD's own to-do called out
-   first, because that is the number they are accountable for. #}
+{# The HOD's own to-do called out first: these are the ones only they can move. #}
 <div class="stat-grid">
   <div class="stat stat--primary">
     <div>
-      <div class="stat__label">Awaiting your decision</div>
+      <div class="stat__label">Awaiting HOD</div>
       <div class="stat__value">{{ counts.awaiting }}</div>
     </div>
     <i class="bi bi-person-check stat__icon"></i>
@@ -40,23 +141,22 @@
   </div>
   <div class="stat stat--success">
     <div>
-      <div class="stat__label">Approved in view</div>
+      <div class="stat__label">Approved</div>
       <div class="stat__value">{{ counts.approved }}</div>
     </div>
     <i class="bi bi-check-circle stat__icon"></i>
   </div>
   <div class="stat stat--danger">
     <div>
-      <div class="stat__label">Rejected in view</div>
+      <div class="stat__label">Rejected</div>
       <div class="stat__value">{{ counts.rejected }}</div>
     </div>
     <i class="bi bi-x-circle stat__icon"></i>
   </div>
 </div>
 
-{# Sticky so the filters stay under the hand on a 400-row register instead of
-   scrolling away with it. `top` clears the fixed header; the z-index keeps the
-   bar above the table but below dropdowns. #}
+{# Sticky so the filters stay under the hand on a long register instead of
+   scrolling away with it. #}
 <div class="card-au mb-3 toolbar-sticky">
   <form class="toolbar" method="get">
     <div class="input-group input-group-sm" style="max-width:230px">
@@ -116,78 +216,36 @@
       <thead>
         <tr>
           <th class="table-au__idx">#</th>
-          <th>Reference</th>
-          <th>Students</th>
-          <th>Queue</th>
+          <th>Request</th>
           <th>Period</th>
-          <th>Reviewer</th>
-          <th>Status</th>
+          <th>Stage</th>
           <th class="table-au__actions">Decision</th>
         </tr>
       </thead>
+      {% if awaiting and others %}
       <tbody>
-        {% for record in requests %}
-        <tr class="{{ 'table-au__row--actionable' if record.status.value == 'AWAITING_HOD' }}">
-          <td class="table-au__idx">{{ loop.index }}</td>
-          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
-          <td>
-            {# The requester first, then every co-member: a group is decided as
-               a whole, so the whole membership belongs on the row rather than
-               being discovered on the detail page. #}
-            <div>{{ roll(record.student_roll_number) }}</div>
-            <div class="small text-nowrap">{{ record.student_name }}</div>
-            {% if record.is_group %}
-            <div class="small text-muted mt-1">
-              <i class="bi bi-people"></i> {{ record.group_size }} students:
-              {% for member in record.member_details or [] %}
-                {{ member.roll_number or member.name }}{% if not loop.last %}, {% endif %}
-              {% endfor %}
-            </div>
-            {% endif %}
-            <div class="small text-muted">{{ type_badge(record.permission_type) }}</div>
-          </td>
-          <td>
-            {% set route = record.route_display or 'GENERAL' %}
-            <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}"
-                  title="{{ 'Sent to the student\u2019s proctor' if route == 'GENERAL' else ('Sent to the ' + route|lower + ' desk') }}">
-              <i class="bi bi-{{ 'person-check' if route == 'GENERAL' else ('trophy' if route == 'EVENT' else 'mortarboard') }}"></i>
-              {{ 'Proctor' if route == 'GENERAL' else route|title }}
-            </span>
-          </td>
-          <td class="text-nowrap small">
-            {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
-            <div class="text-muted">{{ record.reason|truncate(42) }}</div>
-          </td>
-          <td class="small text-nowrap">{{ record.faculty_name or '—' }}</td>
-          <td>{{ status_badge(record.status) }}</td>
-          <td class="table-au__actions">
-            {# The HOD's decision, offered only on the rows that are actually
-               waiting on them. The route refuses anything else as well, so this
-               is a convenience rather than the enforcement. A group approved
-               here covers everyone on it; striking students off happens on the
-               detail page, where the whole membership is on screen. #}
-            {% if record.status.value == 'AWAITING_HOD' %}
-            <form method="post" class="d-flex gap-1 mb-1"
-                  action="{{ url_for('hod.request_action', request_id=record.id) }}"
-                  onsubmit="return confirm('Approve REQ-{{ '%04d' % record.id }}{% if record.is_group %} for all {{ record.group_size }} students{% endif %}?');">
-              {{ csrf_field() }}
-              <input type="hidden" name="action" value="APPROVED">
-              <button type="submit" class="btn btn-sm btn-success">Approve</button>
-            </form>
-            <form method="post" class="d-flex gap-1 mb-1"
-                  action="{{ url_for('hod.request_action', request_id=record.id) }}"
-                  onsubmit="return confirm('Reject REQ-{{ '%04d' % record.id }}?');">
-              {{ csrf_field() }}
-              <input type="hidden" name="action" value="REJECTED">
-              <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
-            </form>
-            {% endif %}
-            <a href="{{ url_for('hod.request_detail', request_id=record.id) }}"
-               class="btn btn-sm btn-outline-secondary">Open</a>
-          </td>
+        <tr class="table-au__section">
+          <td colspan="5">Needs your decision ({{ awaiting | length }})</td>
         </tr>
+        {% for record in awaiting %}
+        {{ request_row(record, loop.index) }}
         {% endfor %}
       </tbody>
+      <tbody>
+        <tr class="table-au__section">
+          <td colspan="5">Everything else ({{ others | length }})</td>
+        </tr>
+        {% for record in others %}
+        {{ request_row(record, (awaiting | length) + loop.index) }}
+        {% endfor %}
+      </tbody>
+      {% else %}
+      <tbody>
+        {% for record in requests %}
+        {{ request_row(record, loop.index) }}
+        {% endfor %}
+      </tbody>
+      {% endif %}
     </table>
   </div>
   <div class="table-foot">

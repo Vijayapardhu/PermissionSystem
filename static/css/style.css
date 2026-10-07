@@ -730,6 +730,22 @@ a:hover { text-decoration: underline; }
   box-shadow: inset 3px 0 0 var(--au-primary);
 }
 
+/* Section dividers inside a register: one line that says what the rows below
+   it have in common, so the queue and the archive read as two lists. */
+.table-au__section td {
+  background: var(--au-surface-panel);
+  font-weight: 700;
+  font-size: .78rem;
+  color: var(--au-text-muted);
+  letter-spacing: .02em;
+  border-bottom: 1.5px solid var(--au-border-strong);
+}
+
+/* The stage in words: "Waiting on you" is the HOD's own to-do and reads as
+   one, "With faculty" is still travelling. */
+.stage-now { font-weight: 700; color: var(--au-primary); }
+.stage-wait { font-weight: 600; color: var(--au-warning-text); }
+
 /* The register filter bar pins under the header while a long table scrolls.
    Top offset clears the fixed top bar; the card's own background keeps rows
    from showing through. */

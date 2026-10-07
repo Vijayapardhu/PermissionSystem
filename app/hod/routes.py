@@ -148,6 +148,17 @@ def requests():
                                  date_from, date_to, search, limit=400,
                                  faculty_id=reviewer_id)
 
+    # The HOD's to-do first, longest-waiting on top; everything else keeps the
+    # register order below it. A register that buries the actionable rows
+    # under decided ones is what makes the list feel unreadable.
+    for record in records:
+        start, end = record.start_date, record.end_date
+        record.day_count = (end - start).days + 1 if start and end else None
+    awaiting = [r for r in records
+                if r.status == RequestStatus.AWAITING_HOD]
+    others = [r for r in records
+              if r.status != RequestStatus.AWAITING_HOD]
+
     reviewers = [
         {'id': lecturer.id, 'name': lecturer.name}
         for lecturer in UserModel.get_lecturers()
@@ -167,6 +178,8 @@ def requests():
         'hod/requests.html',
         user=user,
         requests=records,
+        awaiting=awaiting,
+        others=others,
         status_filter=status_filter,
         type_filter=type_filter,
         date_from=date_from,
