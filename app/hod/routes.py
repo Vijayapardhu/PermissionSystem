@@ -371,34 +371,33 @@ def faculty_workload():
     ]
     lecturers.sort(key=lambda l: (-l['pending'], l['name'] or ''))
 
-    routing = SettingsModel.get_routing()
-
     return render_template(
-        'hod/faculty.html', user=user, lecturers=lecturers, routing=routing
+        'hod/faculty.html', user=user, lecturers=lecturers
     )
 
 
-@hod_bp.route('/faculty/import', methods=['POST'])
+@hod_bp.route('/faculty/import', methods=['GET', 'POST'])
 @permission_required('hod.import_faculty')
 def import_faculty():
-    """Create lecturer accounts from the HOD's Excel sheet.
+    """Add lecturers from the HOD's Excel sheet.
 
-    The sheet carries Name and Email columns; every valid row becomes a
-    LECTURER account (or is reported as already existing), and malformed rows
-    are reported rather than aborting the import. Accounts are provisioned
-    inactive-sign-in-safe: they sign in through Entra ID like everyone else,
-    matching on email at first sign-in.
+    GET shows the import page; POST reads the uploaded sheet and creates a
+    LECTURER account per valid row. Accounts sign in through Entra ID like
+    everyone else, matching on email at first sign-in.
     """
+    if request.method == 'GET':
+        return render_template('hod/faculty_import.html', user=current_user())
+
     upload = request.files.get('faculty_sheet')
     if upload is None or not (upload.filename or '').strip():
         flash('Choose an Excel workbook or CSV file to import.', 'danger')
-        return redirect(url_for('hod.faculty_workload'))
+        return redirect(url_for('hod.import_faculty'))
 
     try:
         parsed = parse_faculty_roster(upload)
     except RosterError as exc:
         flash(str(exc), 'danger')
-        return redirect(url_for('hod.faculty_workload'))
+        return redirect(url_for('hod.import_faculty'))
 
     created, existing = 0, 0
     for entry in parsed['entries'][:500]:
@@ -427,19 +426,32 @@ def import_faculty():
     if len(parsed['errors']) > 8:
         flash(f'... and {len(parsed["errors"]) - 8} more skipped rows.',
               'warning')
-    return redirect(url_for('hod.faculty_workload'))
+    return redirect(url_for('hod.import_faculty'))
 
 
-@hod_bp.route('/faculty/routing', methods=['POST'])
+@hod_bp.route('/faculty/routing', methods=['GET', 'POST'])
 @permission_required('hod.routing')
 def routing():
     """Name the dedicated reviewers for the event, curricular and general queues.
 
-    Each select holds a lecturer id, or nothing to clear that queue back to the
-    default (the student's own proctor, then the least-loaded lecturer). Only
-    active lecturers are accepted, so a stale or tampered id cannot park a
-    queue on an account that cannot review.
+    GET shows the routing page; POST saves it. Each select holds a lecturer
+    id, or nothing to clear that queue back to the default (the student's own
+    proctor, then the least-loaded lecturer). Only active lecturers are
+    accepted, so a stale or tampered id cannot park a queue on an account that
+    cannot review.
     """
+    if request.method == 'GET':
+        lecturers = [
+            {'id': row.id, 'name': row.name}
+            for row in UserModel.get_lecturers()
+        ]
+        return render_template(
+            'hod/routing.html',
+            user=current_user(),
+            lecturers=lecturers,
+            routing=SettingsModel.get_routing(),
+        )
+
     chosen = {}
     for field in ('event_faculty_id', 'curricular_faculty_id',
                   'general_faculty_id'):
@@ -449,12 +461,12 @@ def routing():
                     or not lecturer.is_lecturer):
             flash('One of the selected reviewers is not an active lecturer. '
                   'Nothing was changed.', 'danger')
-            return redirect(url_for('hod.faculty_workload'))
+            return redirect(url_for('hod.routing'))
         chosen[field] = lecturer.id if lecturer else None
 
     SettingsModel.set_routing(**chosen)
     flash('Request routing updated.', 'success')
-    return redirect(url_for('hod.faculty_workload'))
+    return redirect(url_for('hod.routing'))
 
 
 @hod_bp.route('/classes')

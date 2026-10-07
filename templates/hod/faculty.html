@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import stat, csrf_field, empty_state with context %}
+{% from '_macros.html' import stat, empty_state with context %}
 {% block title %}Faculty Workload &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -11,6 +11,12 @@
     </p>
   </div>
   <div class="page-head__actions">
+    <a href="{{ url_for('hod.import_faculty') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-person-plus"></i> Add Faculty
+    </a>
+    <a href="{{ url_for('hod.routing') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-signpost-2"></i> Routing
+    </a>
     <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
       <i class="bi bi-printer"></i> Print
     </button>
@@ -23,77 +29,6 @@
   {{ stat('Open Queue', total_pending, 'hourglass-split', 'warning') }}
   {{ stat('Decisions Made', lecturers | sum(attribute='decisions'), 'check2-all', 'success') }}
   {{ stat('Classes Taught', lecturers | sum(attribute='classes'), 'people', 'info') }}
-</div>
-
-<div class="row g-3 mb-3">
-  {# ---- Lecturer accounts from a spreadsheet ---- #}
-  <div class="col-12 col-lg-6">
-    <div class="card-au h-100">
-      <div class="card-au__head">
-        <h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Add Faculty from Excel</h2>
-      </div>
-      <div class="card-au__body">
-        <form method="post" enctype="multipart/form-data"
-              action="{{ url_for('hod.import_faculty') }}">
-          {{ csrf_field() }}
-          <label for="faculty_sheet" class="form-label">Spreadsheet with Name and Email columns</label>
-          <input type="file" class="form-control mb-3" id="faculty_sheet" name="faculty_sheet"
-                 accept=".xlsx,.xlsm,.csv" required>
-          <div class="form-text mb-3">
-            Excel (.xlsx, .xlsm) or CSV with a header row naming the
-            <strong>Name</strong> and <strong>Email</strong> columns. Each valid
-            row becomes a lecturer account; rows that already exist or are
-            malformed are reported, not imported.
-          </div>
-          <button type="submit" class="btn btn-primary btn-pill">
-            <i class="bi bi-upload"></i> Import faculty
-          </button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  {# ---- Who reviews what ---- #}
-  <div class="col-12 col-lg-6">
-    <div class="card-au h-100">
-      <div class="card-au__head">
-        <h2 class="card-au__title"><i class="bi bi-signpost-2"></i> Request Routing</h2>
-      </div>
-      <div class="card-au__body">
-        <form method="post" action="{{ url_for('hod.routing') }}">
-          {{ csrf_field() }}
-          <p class="form-text mt-0">
-            General requests go to each student's own proctor by default. Name
-            one reviewer below for the special queues; clearing a queue sends it
-            back to the default.
-          </p>
-          {% set queues = [
-            ('event_faculty_id', 'Hackathons & events', 'One person handles hackathon, contest and event requests.'),
-            ('curricular_faculty_id', 'Curriculars', 'One person handles curricular requests.'),
-            ('general_faculty_id', 'General proctor', 'Fallback when a student sits on nobody\u2019s proctor list.'),
-          ] %}
-          {% for field, label, hint in queues %}
-          <div class="mb-3">
-            <label for="{{ field }}" class="form-label">{{ label }}</label>
-            <select class="form-select" id="{{ field }}" name="{{ field }}">
-              <option value="">Default (student's proctor)</option>
-              {% for lecturer in lecturers %}
-              <option value="{{ lecturer.id }}"
-                      {{ 'selected' if routing and routing[field] == lecturer.id }}>
-                {{ lecturer.name }}
-              </option>
-              {% endfor %}
-            </select>
-            <div class="form-text">{{ hint }}</div>
-          </div>
-          {% endfor %}
-          <button type="submit" class="btn btn-primary btn-pill">
-            <i class="bi bi-check-lg"></i> Save routing
-          </button>
-        </form>
-      </div>
-    </div>
-  </div>
 </div>
 
 <div class="card-au">

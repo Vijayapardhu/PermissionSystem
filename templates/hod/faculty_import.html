@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Add Faculty &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('hod.faculty_workload') }}">Faculty</a></li>
+    <li class="breadcrumb-item active">Add Faculty</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Add Faculty</h1>
+    <p class="page-head__sub">
+      Create lecturer accounts from a spreadsheet. They sign in with Microsoft
+      like everyone else &mdash; the email row is what links them.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.faculty_workload') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Workload
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload Spreadsheet</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" enctype="multipart/form-data"
+          action="{{ url_for('hod.import_faculty') }}">
+      {{ csrf_field() }}
+      <label for="faculty_sheet" class="form-label">Spreadsheet with Name and Email columns</label>
+      <input type="file" class="form-control mb-3" id="faculty_sheet" name="faculty_sheet"
+             accept=".xlsx,.xlsm,.csv" required>
+      <button type="submit" class="btn btn-primary btn-pill">
+        <i class="bi bi-upload"></i> Import faculty
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-info-circle"></i> How It Works</h2>
+  </div>
+  <div class="card-au__body">
+    <ul class="mb-0">
+      <li class="mb-2">
+        Excel (.xlsx, .xlsm) or CSV with a header row naming the
+        <strong>Name</strong> and <strong>Email</strong> columns
+        (&ldquo;Faculty Name&rdquo; and &ldquo;Email ID&rdquo; work too).
+      </li>
+      <li class="mb-2">
+        Each valid row becomes a <strong>lecturer</strong> account in CSE.
+        Rows that already exist are skipped; malformed rows are reported,
+        never silently imported.
+      </li>
+      <li class="mb-0">
+        New lecturers sign in with their university Microsoft account &mdash;
+        the email is matched on first sign-in, so there is nothing to activate.
+      </li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

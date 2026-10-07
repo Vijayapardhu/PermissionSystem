@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Request Routing &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('hod.faculty_workload') }}">Faculty</a></li>
+    <li class="breadcrumb-item active">Routing</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Request Routing</h1>
+    <p class="page-head__sub">
+      Who reviews what. General requests always go to each student's own
+      proctor &mdash; below you name one reviewer for each special queue.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.faculty_workload') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Workload
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-signpost-2"></i> Dedicated Reviewers</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.routing') }}">
+      {{ csrf_field() }}
+      {% set queues = [
+        ('event_faculty_id', 'Hackathons & events', 'Hackathon, contest and event requests go to this one person.'),
+        ('curricular_faculty_id', 'Curriculars', 'Curricular requests go to this one person.'),
+        ('general_faculty_id', 'General proctor', 'Fallback when a student sits on nobody\u2019s proctor list.'),
+      ] %}
+      {% for field, label, hint in queues %}
+      <div class="mb-3">
+        <label for="{{ field }}" class="form-label">{{ label }}</label>
+        <select class="form-select" id="{{ field }}" name="{{ field }}">
+          <option value="">Default (student's proctor)</option>
+          {% for lecturer in lecturers %}
+          <option value="{{ lecturer.id }}"
+                  {{ 'selected' if routing and routing[field] == lecturer.id }}>
+            {{ lecturer.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <div class="form-text">{{ hint }}</div>
+      </div>
+      {% endfor %}
+      <button type="submit" class="btn btn-primary btn-pill">
+        <i class="bi bi-check-lg"></i> Save routing
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-info-circle"></i> How It Works</h2>
+  </div>
+  <div class="card-au__body">
+    <ul class="mb-0">
+      <li class="mb-2">
+        A request is classified from its reason: hackathons and events,
+        curricular work, or everything else.
+      </li>
+      <li class="mb-2">
+        Clearing a queue sends it back to the default &mdash; the student's
+        own proctor, then the general proctor, then the least-loaded lecturer.
+        A queue can never be left with nowhere to go.
+      </li>
+      <li class="mb-0">
+        Only active lecturers can be named. If a named reviewer leaves, their
+        queue falls through to the next default automatically.
+      </li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -608,7 +608,7 @@ Design rules:
 | Role | Sections and pages |
 |---|---|
 | Lecturer | Review: Overview, All Requests, Find Student &middot; Teaching: My Classes, Attendance &middot; Insights: My Reports |
-| HOD | Overview: Overview, All Requests, Students, Faculty Workload &middot; Academic: Classes, Daily Report &middot; Insights: Analytics |
+| HOD | Overview: Overview, All Requests, Students &middot; Faculty: Workload, Add Faculty, Routing &middot; Academic: Classes, Daily Report &middot; Insights: Analytics |
 | Student | Top nav: Dashboard, New Request, My Requests, My Classes, Account |
 
 ## Classes, proctor lists and attendance

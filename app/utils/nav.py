@@ -27,7 +27,10 @@ HOD_NAV = [
     _item('hod.dashboard', 'bi-speedometer2', 'Overview', 'Overview'),
     _item('hod.requests', 'bi-list-check', 'All Requests', 'Overview'),
     _item('hod.students', 'bi-mortarboard', 'Students', 'Overview'),
-    _item('hod.faculty_workload', 'bi-person-workspace', 'Faculty Workload', 'Overview'),
+
+    _item('hod.faculty_workload', 'bi-person-workspace', 'Workload', 'Faculty'),
+    _item('hod.import_faculty', 'bi-file-earmark-arrow-up', 'Add Faculty', 'Faculty'),
+    _item('hod.routing', 'bi-signpost-2', 'Routing', 'Faculty'),
 
     _item('hod.classes', 'bi-people', 'Classes', 'Academic'),
     _item('hod.print_report', 'bi-printer', 'Daily Report', 'Academic'),
