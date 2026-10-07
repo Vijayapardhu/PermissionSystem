@@ -1399,6 +1399,10 @@ a:hover { text-decoration: underline; }
 
   body, .report-shell { background: #fff !important; padding: 0 !important; }
 
+  /* Force readable text on paper. Screen themes may use light or white text
+     that disappears on a white print sheet. */
+  body * { color: #000 !important; }
+
   /* ---- App chrome goes; only the document stays ----
      Sidebar, top bar, footer, headings' action buttons, every form (filters,
      decisions, uploads -- all controls, no records), every button, flash
