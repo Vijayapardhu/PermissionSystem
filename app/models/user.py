@@ -24,6 +24,22 @@ def derive_roll_number(email: str, name: str = None) -> Optional[str]:
     return None
 
 
+def display_name_for_sign_in(stored_name: str, microsoft_name: str) -> str:
+    """Which name survives a sign-in.
+
+    The Outlook display name is very often the roll number itself, so writing
+    it over the stored name on every sign-in would wipe a real name the
+    department backfilled from the college register. A real stored name wins
+    over a roll-shaped display name; anything else -- including a genuine
+    rename in Outlook -- is taken as-is.
+    """
+    incoming = (microsoft_name or '').strip()
+    stored = (stored_name or '').strip()
+    if incoming and is_roll_id(incoming) and stored and not is_roll_id(stored):
+        return stored
+    return incoming or stored
+
+
 class UserModel:
     @staticmethod
     def _find_one(**filters) -> Optional[User]:
@@ -76,7 +92,7 @@ class UserModel:
         existing = UserModel.find_by_microsoft_id(microsoft_id)
         if existing:
             existing.email = email.lower()
-            existing.name = name
+            existing.name = display_name_for_sign_in(existing.name, name)
             if roll_number:
                 existing.roll_number = roll_number
             return UserModel.update(existing)
@@ -84,7 +100,7 @@ class UserModel:
         existing = UserModel.find_by_email(email)
         if existing:
             existing.microsoft_id = microsoft_id
-            existing.name = name
+            existing.name = display_name_for_sign_in(existing.name, name)
             if roll_number:
                 existing.roll_number = roll_number
             return UserModel.update(existing)

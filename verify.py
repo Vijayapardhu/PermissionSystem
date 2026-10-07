@@ -180,6 +180,28 @@ finally:
 
 print()
 print('=' * 70)
+print('3b. SIGN-IN PRESERVES BACKFILLED NAMES')
+print('-' * 70)
+
+# The Outlook display name is usually the roll number, so writing it over the
+# stored name on every sign-in would wipe a real name backfilled from the
+# college register. A real stored name wins over a roll-shaped display name;
+# a genuine rename in Outlook is still honoured.
+from app.models.user import display_name_for_sign_in  # noqa: E402
+
+check('a real name survives a roll-shaped display name',
+      display_name_for_sign_in('Ravi Kumar', '26B21CS058') == 'Ravi Kumar')
+check('a roll-shaped name is still replaced by the display name',
+      display_name_for_sign_in('26B21CS058', '26B21CS058') == '26B21CS058')
+check('a genuine Outlook rename is honoured',
+      display_name_for_sign_in('Ravi Kumar', 'Ravi K') == 'Ravi K')
+check('an empty display name keeps the stored name',
+      display_name_for_sign_in('Ravi Kumar', '') == 'Ravi Kumar')
+check('a first sign-in takes the display name as-is',
+      display_name_for_sign_in('', '26B21CS058') == '26B21CS058')
+
+print()
+print('=' * 70)
 print('4. ROLE ENFORCEMENT')
 print('=' * 70)
 
