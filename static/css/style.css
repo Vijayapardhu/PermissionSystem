@@ -781,19 +781,6 @@ a:hover { text-decoration: underline; }
 .event-addsub { display: flex; gap: .4rem; margin-top: .8rem; flex-wrap: wrap; }
 .event-addsub .form-control { flex: 2 1 200px; }
 .event-addsub .form-select { flex: 1 1 180px; }
-@media print {
-  /* Event rows keep their names on paper: the name lives in the input, so
-     the row form stays while its buttons go. Creation forms stay hidden. */
-  form.event-row__form { display: flex !important; }
-  .event-row__form .btn,
-  .event-row > form:not(.event-row__form),
-  .event-addsub { display: none !important; }
-  .event-row__name, .event-row__coord {
-    border: 0 !important; background: none !important; padding: 0 !important;
-    pointer-events: none; font-size: .85rem; color: #16202f !important;
-  }
-  .event-row__coord { appearance: none; }
-}
 
 /* Two-line clamp for triage text: the screen shows a neat teaser with the
    full text on hover, while print shows everything (see the print rules). */
@@ -1423,7 +1410,25 @@ a:hover { text-decoration: underline; }
   .page-head__actions, .toolbar, .toolbar-sticky, form,
   .btn, .btn-close, .breadcrumb, .alert, .au-flashes,
   .table-au__actions, iframe.proview,
-  .member-picker__search, .stat__icon { display: none !important; }
+  .member-picker__search, .stat__icon,
+  input, select, textarea, button, .form-select, .form-control {
+    display: none !important;
+  }
+
+  /* Event rows keep their names on paper: the name lives in the input, so
+     the row form and its fields stay while every other control goes. */
+  form.event-row__form,
+  form.event-row__form input,
+  form.event-row__form select,
+  form.event-row__form textarea {
+    display: revert !important;
+  }
+  .event-row__form .btn { display: none !important; }
+  .event-row__name, .event-row__coord {
+    border: 0 !important; background: none !important; padding: 0 !important;
+    pointer-events: none; font-size: .85rem; color: #16202f !important;
+  }
+  .event-row__coord { appearance: none; }
 
   .au-app, .au-app__main { display: block; }
   .au-content, .page-wrap, .page-wrap-narrow {
