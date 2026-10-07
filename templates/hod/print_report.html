@@ -27,7 +27,6 @@
       <img class="au-wordmark au-wordmark--letter"
            src="{{ asset('images/aditya-logo.png') }}"
            alt="{{ UNIVERSITY_NAME }}" style="margin-inline:auto">
-      <h1>{{ UNIVERSITY_NAME }}</h1>
       <p>{{ DEPARTMENT_NAME }}</p>
       <h2>Daily Permission Report</h2>
       <p>
@@ -41,12 +40,11 @@
         <tr>
           <th style="width:5%">#</th>
           <th style="width:16%">Roll No</th>
-          <th style="width:22%">Student</th>
-          <th style="width:13%">Type</th>
-          <th style="width:13%">From</th>
-          <th style="width:13%">To</th>
-          <th style="width:11%">Status</th>
-          <th style="width:10%">Letter</th>
+          <th style="width:24%">Student</th>
+          <th style="width:14%">Type</th>
+          <th style="width:14%">From</th>
+          <th style="width:14%">To</th>
+          <th style="width:13%">Status</th>
         </tr>
       </thead>
       <tbody>
@@ -59,17 +57,10 @@
           <td>{{ date_short(record.start_date) }}</td>
           <td>{{ date_short(record.end_date) }}</td>
           <td>{{ record.status.value|title }}</td>
-          <td class="text-center">
-            {# The HOD opens letters through the faculty route, which is the one
-               granted to staff. The student route happens to render the same
-               template, but its URL is wrong from the HOD's side of the app. #}
-            <a href="{{ url_for('faculty.request_letter', request_id=record.id) }}"
-               class="btn btn-sm btn-outline-secondary">Letter</a>
-          </td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="8" style="text-align:center;padding:1.5rem">
+          <td colspan="7" style="text-align:center;padding:1.5rem">
             No permissions recorded for this date.
           </td>
         </tr>
