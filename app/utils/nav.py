@@ -33,6 +33,7 @@ HOD_NAV = [
     _item('hod.routing', 'bi-signpost-2', 'Routing', 'Faculty'),
 
     _item('hod.classes', 'bi-people', 'Classes', 'Academic'),
+    _item('hod.events', 'bi-trophy', 'Events', 'Academic'),
     _item('hod.print_report', 'bi-printer', 'Daily Report', 'Academic'),
 
     _item('hod.reports', 'bi-bar-chart-line', 'Analytics', 'Insights'),

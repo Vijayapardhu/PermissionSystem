@@ -1,0 +1,145 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Events &middot; {{ APP_NAME }}{% endblock %}
+
+{# One event row: rename plus coordinator in a single save. Used for mains
+   and subs alike, so the two levels can never drift into different forms. #}
+{% macro event_row(event, lecturers, save_url, delete_url) %}
+<div class="event-row">
+  <form method="post" action="{{ save_url }}" class="event-row__form">
+    {{ csrf_field() }}
+    <input type="hidden" name="event_id" value="{{ event.id }}">
+    <input class="form-control form-control-sm event-row__name" name="name"
+           value="{{ event.name }}" required minlength="3" maxlength="120"
+           aria-label="Event name">
+    <select class="form-select form-select-sm event-row__coord"
+            name="coordinator_id" aria-label="Coordinator">
+      <option value="">No coordinator</option>
+      {% for lecturer in lecturers %}
+      <option value="{{ lecturer.id }}"
+              {{ 'selected' if event.coordinator_id == lecturer.id }}>
+        {{ lecturer.name }}
+      </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+  </form>
+  <form method="post" action="{{ delete_url }}" class="d-inline"
+        onsubmit="return confirm('Delete {{ event.name }}?{% if event.sub_count %} Its {{ event.sub_count }} sub-event{{ 's' if event.sub_count != 1 }} go too.{% endif %} Past requests keep their record.');">
+    {{ csrf_field() }}
+    <input type="hidden" name="event_id" value="{{ event.id }}">
+    <button type="submit" class="btn btn-sm btn-outline-secondary"
+            title="Delete {{ event.name }}">
+      <i class="bi bi-trash"></i>
+    </button>
+  </form>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Events</h1>
+    <p class="page-head__sub">
+      What the department organises and who coordinates each part. A request
+      naming a sub-event routes to its coordinator.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-plus-circle"></i> New Main Event</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.save_event') }}">
+      {{ csrf_field() }}
+      <div class="row g-2 align-items-end">
+        <div class="col-md-6">
+          <label for="new_name" class="form-label">Event name <span class="text-danger">*</span></label>
+          <input class="form-control" id="new_name" name="name" required
+                 minlength="3" maxlength="120" placeholder="e.g. Hackathon">
+        </div>
+        <div class="col-md-4">
+          <label for="new_coord" class="form-label">Coordinator</label>
+          <select class="form-select" id="new_coord" name="coordinator_id">
+            <option value="">No coordinator yet</option>
+            {% for lecturer in lecturers %}
+            <option value="{{ lecturer.id }}">{{ lecturer.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary btn-pill w-100">
+            <i class="bi bi-plus-lg"></i> Create
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if mains %}
+{% for main in mains %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-trophy"></i> {{ main.name }}
+    </h2>
+    <span class="form-text">
+      {% if main.coordinator_name %}Coordinated by {{ main.coordinator_name }}{% else %}No coordinator{% endif %}
+      &middot; {{ main.subs|length }} sub-event{{ '' if main.subs|length == 1 else 's' }}
+    </span>
+  </div>
+  <div class="card-au__body">
+    {{ event_row(main, lecturers, url_for('hod.save_event'), url_for('hod.delete_event')) }}
+
+    {% if main.subs %}
+    <div class="event-subs">
+      {% for sub in main.subs %}
+      <div class="event-sub">
+        <span class="badge text-bg-light" title="Sub-event of {{ main.name }}">Sub</span>
+        <div class="flex-grow-1">
+          {{ event_row(sub, lecturers, url_for('hod.save_event'), url_for('hod.delete_event')) }}
+          {% if not sub.coordinator_id %}
+          <div class="form-text mt-1">Inherits {{ main.coordinator_name or 'nobody' }} from {{ main.name }}.</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('hod.save_event') }}"
+          class="event-addsub">
+      {{ csrf_field() }}
+      <input type="hidden" name="parent_id" value="{{ main.id }}">
+      <input class="form-control form-control-sm" name="name" required
+             minlength="3" maxlength="120"
+             placeholder="New sub-event under {{ main.name }}" aria-label="Sub-event name">
+      <select class="form-select form-select-sm" name="coordinator_id"
+              aria-label="Sub-event coordinator">
+        <option value="">Inherit ({{ main.coordinator_name or 'nobody' }})</option>
+        {% for lecturer in lecturers %}
+        <option value="{{ lecturer.id }}">{{ lecturer.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
+        <i class="bi bi-plus-lg"></i> Add sub
+      </button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card-au">
+  {{ empty_state('trophy', 'No events yet',
+                 'Create the first main event above, then hang sub-events under it with a coordinator each.') }}
+</div>
+{% endif %}
+{% endblock %}

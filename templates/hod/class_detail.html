@@ -1,0 +1,139 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, stat, empty_state with context %}
+{% block title %}{{ class_group.name }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('hod.classes') }}">Classes</a></li>
+    <li class="breadcrumb-item active">{{ class_group.name }}</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">{{ class_group.name }}</h1>
+    <p class="page-head__sub">
+      {% if class_group.kind == 'PROCTOR' %}
+        Proctor list of {{ owner_name }}
+      {% else %}
+        Taught by {{ owner_name }}
+      {% endif %}
+      {% if class_group.section_code %} &middot; Section {{ class_group.section_code }}{% endif %}
+      {% if class_group.academic_year %} &middot; {{ class_group.academic_year }}{% endif %}
+      &middot; {{ summary.roster }} student{{ '' if summary.roster == 1 else 's' }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {% if class_group.kind == 'PROCTOR' %}
+      <span class="badge-au badge-au--pending"><i class="bi bi-person-check"></i> Proctor list</span>
+    {% else %}
+      <span class="badge-au badge-au--approved"><i class="bi bi-people"></i> Taught class</span>
+    {% endif %}
+    <a href="{{ url_for('hod.classes') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All Classes
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('On Roster', summary.roster, 'people', 'primary') }}
+  {{ stat('Linked Accounts', summary.linked, 'link-45deg', 'success') }}
+  {{ stat('On Permission', summary.on_permission, 'file-earmark-check', 'info') }}
+  {{ stat('Not Yet Linked', summary.unlinked, 'question-circle', 'warning') }}
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-calendar3"></i> Permissions On</h2>
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+      <label for="date" class="form-label mb-0">Date</label>
+      <input type="date" class="form-control form-control-sm"
+             id="date" name="date" value="{{ view_date }}" style="width:auto">
+      <button type="submit" class="btn btn-sm btn-primary btn-pill">Show</button>
+      {% if view_date != now_date %}
+      <a href="{{ url_for('hod.class_detail', class_id=class_group.id) }}"
+         class="btn btn-sm btn-outline-secondary btn-pill">Today</a>
+      {% endif %}
+    </form>
+  </div>
+  <div class="card-au__body py-2">
+    <p class="small text-muted mb-0">
+      Approved permissions in force on
+      <strong>{{ view_date.strftime('%d %B %Y') }}</strong>.
+      This view is read-only: attendance is marked by {{ owner_name }}.
+    </p>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-list-check"></i> Roster &amp; Permissions</h2>
+    <span class="form-text">{{ rows | length }} row{{ '' if rows|length == 1 else 's' }}</span>
+  </div>
+
+  {% if rows %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>On Date</th>
+          <th>Permission</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set member = row.member %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td>{{ roll(member.roll_number) }}</td>
+          <td class="text-nowrap">
+            {% if member.is_linked %}
+              {{ member.student_name }}
+            {% else %}
+              <span class="text-muted">Not provisioned</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.has_permission %}
+              <span class="badge-au badge-au--approved"><i class="bi bi-check-circle"></i> Yes</span>
+            {% elif member.is_linked %}
+              <span class="badge-au badge-au--cancelled"><i class="bi bi-dash-circle"></i> No</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="small">
+            {% if row.has_permission %}
+              {% for record in row.permissions %}
+              <div class="mb-1">
+                {{ type_badge(record.permission_type) }}
+                <span class="text-muted small">
+                  {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
+                </span>
+                <div class="small text-muted">{{ record.reason|truncate(52) }}</div>
+                <a href="{{ url_for('hod.request_detail', request_id=record.id) }}"
+                   class="small">View request</a>
+              </div>
+              {% endfor %}
+            {% else %}
+              <span class="text-muted small">No permission on this date</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{{ summary.on_permission }} on permission on {{ view_date.strftime('%d %B %Y') }}.</span>
+  </div>
+  {% else %}
+    {{ empty_state('people', 'Roster is empty',
+                   'The lecturer has not uploaded any roll numbers to this group yet.') }}
+  {% endif %}
+</div>
+{% endblock %}

@@ -151,6 +151,8 @@ def requests():
     # The HOD's to-do first, longest-waiting on top; everything else keeps the
     # register order below it. A register that buries the actionable rows
     # under decided ones is what makes the list feel unreadable.
+    from app.faculty.routes import annotate_events as _annotate_events
+    _annotate_events(records)
     today = date.today()
     for record in records:
         start, end = record.start_date, record.end_date
@@ -211,6 +213,8 @@ def request_detail(request_id: int):
     attach_members([record])
     from app.faculty.routes import annotate_routes as _annotate
     _annotate([record])
+    from app.faculty.routes import annotate_events as _annotate_events
+    _annotate_events([record])
     if record.assigned_faculty_id:
         reviewer = UserModel.find_by_id(record.assigned_faculty_id)
         record.faculty_name = reviewer.name if reviewer else None
@@ -508,6 +512,106 @@ def routing():
     return redirect(url_for('hod.routing'))
 
 
+@hod_bp.route('/events')
+@permission_required('hod.events')
+def events():
+    """Main events and their sub-events, each with a coordinator.
+
+    One management page for one job: what the department organises and which
+    lecturer coordinates each part, so requests naming an event route to the
+    right desk.
+    """
+    from app.models.events import EventModel
+
+    user = current_user()
+    tree = EventModel.list_tree()
+    lecturers = [
+        {'id': row.id, 'name': row.name}
+        for row in UserModel.get_lecturers()
+    ]
+    return render_template(
+        'hod/events.html', user=user, mains=tree, lecturers=lecturers
+    )
+
+
+@hod_bp.route('/events/save', methods=['POST'])
+@permission_required('hod.save_event')
+def save_event():
+    """Create a main or sub-event, or rename/reassign an existing one.
+
+    One endpoint for every write: `event_id` empty means create (with an
+    optional `parent_id` for a sub-event), otherwise update. Parents never
+    change after creation -- moving a sub-event between mains would rewrite
+    what past requests meant.
+    """
+    from app.models.events import EventModel
+
+    raw_id = (request.form.get('event_id') or '').strip()
+    name = (request.form.get('name') or '').strip()
+    raw_parent = (request.form.get('parent_id') or '').strip()
+    raw_coordinator = (request.form.get('coordinator_id') or '').strip()
+
+    if len(name) < 3:
+        flash('Give the event a name of at least 3 characters.', 'danger')
+        return redirect(url_for('hod.events'))
+
+    coordinator = (UserModel.find_by_id(int(raw_coordinator))
+                   if raw_coordinator.isdigit() else None)
+    if raw_coordinator and (coordinator is None or not coordinator.is_active
+                            or not coordinator.is_lecturer):
+        flash('The chosen coordinator is not an active lecturer. '
+              'Nothing was saved.', 'danger')
+        return redirect(url_for('hod.events'))
+
+    if raw_id:
+        event = (EventModel.find_by_id(int(raw_id))
+                 if raw_id.isdigit() else None)
+        if event is None:
+            flash('That event no longer exists.', 'danger')
+            return redirect(url_for('hod.events'))
+        EventModel.update(event.id, name,
+                          coordinator.id if coordinator else None)
+        flash(f'Event "{name}" updated.', 'success')
+        return redirect(url_for('hod.events'))
+
+    parent = (EventModel.find_by_id(int(raw_parent))
+              if raw_parent.isdigit() else None)
+    if raw_parent and parent is None:
+        flash('The chosen main event no longer exists.', 'danger')
+        return redirect(url_for('hod.events'))
+    if parent is not None and not parent.is_main:
+        flash('A sub-event cannot have children of its own. Pick a main '
+              'event as the parent.', 'danger')
+        return redirect(url_for('hod.events'))
+
+    EventModel.create(name, coordinator.id if coordinator else None,
+                      parent.id if parent else None)
+    flash(f'Event "{name}" created'
+          f'{" under " + parent.name if parent else ""}.', 'success')
+    return redirect(url_for('hod.events'))
+
+
+@hod_bp.route('/events/delete', methods=['POST'])
+@permission_required('hod.delete_event')
+def delete_event():
+    """Delete an event and its sub-events. Past requests keep their snapshot."""
+    from app.models.events import EventModel
+
+    raw_id = (request.form.get('event_id') or '').strip()
+    event = (EventModel.find_by_id(int(raw_id))
+             if raw_id.isdigit() else None)
+    if event is None:
+        flash('That event no longer exists.', 'danger')
+        return redirect(url_for('hod.events'))
+
+    removed = EventModel.delete(event.id)
+    subs = removed - 1
+    flash(f'Event "{event.name}" deleted'
+          f'{f" with {subs} sub-event{'s' if subs != 1 else ''}" if subs else ""}.',
+          'success')
+    return redirect(url_for('hod.events'))
+
+
 @hod_bp.route('/classes')
 @permission_required('hod.classes')
 def classes():
@@ -550,6 +654,55 @@ def classes():
     groups.sort(key=lambda g: g['faculty_name'] or '')
 
     return render_template('hod/classes.html', user=user, classes=groups)
+
+
+@hod_bp.route('/classes/<int:class_id>')
+@permission_required('hod.class_detail')
+def class_detail(class_id: int):
+    """One class group in full: roster and the permissions in force on a date.
+
+    Read-only, unlike the faculty's own class page: attendance is marked by
+    the lecturer who teaches the class, and rosters are theirs to keep. The
+    HOD opens this to see who is on permission, not to edit.
+    """
+    from app.faculty.routes import _permissions_for_date as _for_date
+
+    group = ClassModel.find_by_id(class_id)
+    if group is None:
+        abort(404)
+
+    view_date = _parse_date(request.args.get('date'), date.today())
+    members = MemberModel.find_by_class(class_id)
+
+    permissions_by_student, _ = _for_date(members, view_date)
+
+    rows = []
+    for member in members:
+        records = permissions_by_student.get(member.student_id, [])
+        rows.append({
+            'member': member,
+            'permissions': records,
+            'has_permission': bool(records),
+        })
+
+    owner = UserModel.find_by_id(group.faculty_id)
+    summary = {
+        'roster': len(members),
+        'linked': sum(1 for m in members if m.is_linked),
+        'unlinked': sum(1 for m in members if not m.is_linked),
+        'on_permission': sum(1 for r in rows if r['has_permission']),
+    }
+
+    return render_template(
+        'hod/class_detail.html',
+        user=current_user(),
+        class_group=group,
+        owner_name=owner.name if owner else '—',
+        members=members,
+        rows=rows,
+        view_date=view_date,
+        summary=summary,
+    )
 
 
 def _sort_key(value) -> str:

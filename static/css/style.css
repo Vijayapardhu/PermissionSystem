@@ -768,6 +768,31 @@ a:hover { text-decoration: underline; }
 .req-link { text-decoration: none; }
 .req-link:hover { text-decoration: underline; }
 
+/* A row that opens its detail page on click shows the affordance. */
+.table-au tr[data-href] { cursor: pointer; }
+
+/* Event rows: rename, coordinator and save sit on one line; subs indent. */
+.event-row { display: flex; gap: .4rem; align-items: center; }
+.event-row__form { display: flex; gap: .4rem; align-items: center; flex: 1 1 auto; flex-wrap: wrap; }
+.event-row__name { flex: 2 1 180px; font-weight: 600; }
+.event-row__coord { flex: 1 1 160px; }
+.event-subs { margin-top: .8rem; border-top: 1px dashed var(--au-border-strong); padding-top: .8rem; display: grid; gap: .6rem; }
+.event-sub { display: flex; gap: .6rem; align-items: flex-start; }
+.event-addsub { display: flex; gap: .4rem; margin-top: .8rem; flex-wrap: wrap; }
+.event-addsub .form-control { flex: 2 1 200px; }
+.event-addsub .form-select { flex: 1 1 180px; }
+@media print {
+  /* Event rows keep their names on paper: the name lives in the input, so
+     the row form stays while its buttons go. Creation forms stay hidden. */
+  form.event-row__form { display: flex !important; }
+  .event-row__form .btn, .event-addsub { display: none !important; }
+  .event-row__name, .event-row__coord {
+    border: 0 !important; background: none !important; padding: 0 !important;
+    pointer-events: none; font-size: .85rem; color: #16202f !important;
+  }
+  .event-row__coord { appearance: none; }
+}
+
 /* Two-line clamp for triage text: the screen shows a neat teaser with the
    full text on hover, while print shows everything (see the print rules). */
 .clamp-2 {

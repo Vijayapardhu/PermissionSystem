@@ -138,7 +138,8 @@ class PermissionModel:
                end_time: time = None,
                assigned_faculty_id: int = None,
                member_ids: List[int] = None,
-               route_category: str = None) -> PermissionRequest:
+               route_category: str = None,
+               event_id: int = None) -> PermissionRequest:
         """Create one request covering one to four students.
 
         `student_id` stays the requester and the only field the older code reads.
@@ -160,6 +161,7 @@ class PermissionModel:
             'status': RequestStatus.PENDING.value,
             'assigned_faculty_id': assigned_faculty_id,
             'route_category': route_category,
+            'event_id': event_id,
         })
         return PermissionModel._to_request(row)
 
@@ -381,6 +383,7 @@ class PermissionModel:
                  if isinstance(m, (int, float)) or str(m).isdigit()]
                 if isinstance(row.get('approved_member_ids'), list) else None),
             route_category=row.get('route_category'),
+            event_id=row.get('event_id'),
         )
 
 

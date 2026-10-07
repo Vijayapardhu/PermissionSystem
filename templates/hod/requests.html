@@ -5,7 +5,10 @@
 {# One row of the register. A macro so the "needs your decision" section and
    the rest cannot drift into two different layouts. #}
 {% macro request_row(record, num) %}
-<tr class="{{ 'table-au__row--actionable' if record.status.value == 'AWAITING_HOD' }}">
+{# data-href makes the whole row open the detail page (see scripts below);
+   clicks on buttons, links and form controls still work normally. #}
+<tr class="{{ 'table-au__row--actionable' if record.status.value == 'AWAITING_HOD' }}"
+    data-href="{{ url_for('hod.request_detail', request_id=record.id) }}">
   <td class="table-au__idx">{{ num }}</td>
 
   {# Who and what: reference, requester, every co-member as chips, and the
@@ -68,6 +71,16 @@
       {% endif %}
     {% endif %}
     {% set route = record.route_display or 'GENERAL' %}
+    {# A request naming an HOD-managed event shows the event itself: that is
+       the desk it went to, and the reviewer below is its coordinator. #}
+    {% if record.event_name %}
+    <div class="mt-1">
+      <span class="badge-au badge-au--pending"
+            title="Coordinated by {{ record.faculty_name or 'the event team' }}">
+        <i class="bi bi-trophy"></i> {{ record.event_name }}
+      </span>
+    </div>
+    {% else %}
     <div class="mt-1">
       <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}"
             title="{{ 'Sent to the student\u2019s proctor' if route == 'GENERAL' else ('Sent to the ' + route|lower + ' desk') }}">
@@ -75,6 +88,7 @@
         {{ 'Proctor' if route == 'GENERAL' else route|title }}
       </span>
     </div>
+    {% endif %}
   </td>
 
   {# Your move, only where there is one. The route refuses anything else too,
@@ -276,4 +290,18 @@
                    'Adjust the filters to see more records.') }}
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // A click anywhere on a row opens its detail page. Clicks on the decision
+  // controls themselves -- buttons, links, inputs, selects -- are left alone,
+  // so Approve and Reject keep working from the list.
+  document.querySelectorAll('tr[data-href]').forEach(function (row) {
+    row.addEventListener('click', function (event) {
+      if (event.target.closest('a, button, input, select, textarea, form')) return;
+      window.location.href = row.getAttribute('data-href');
+    });
+  });
+</script>
 {% endblock %}

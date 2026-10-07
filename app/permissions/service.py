@@ -208,26 +208,36 @@ def find_proctor_for_student(student: User) -> Optional[User]:
                key=lambda u: (open_counts.get(u.id, 0), u.name or ''))
 
 
-def resolve_faculty(student: User, reason: str) -> User:
-    """Who reviews this request: event desk, curricular desk, or the proctor.
+def resolve_faculty(student: User, reason: str, event=None) -> User:
+    """Who reviews this request: event coordinator, event desk, or proctor.
 
-    The HOD names one reviewer for hackathon/event requests and one for
-    curricular requests; everything else goes to the student's own proctor by
-    default, falling back to the general proctor and then to the least-loaded
-    lecturer. Each step degrades to the next, so an unconfigured queue or a
-    lecturer who left can never leave a request with nowhere to go.
+    A reason naming an HOD-managed event goes straight to that event's
+    coordinator (a sub-event inherits its parent's when it names none of its
+    own). Failing that, the HOD's named event desk takes it; everything else
+    goes to the student's own proctor by default, falling back to the general
+    proctor and then to the least-loaded lecturer. Each step degrades to the
+    next, so an unconfigured queue or a lecturer who left can never leave a
+    request with nowhere to go.
 
     The store reads are guarded rather than trusted: this runs inside
     submission, and a routing lookup must never fail a student's request when
     the fallback -- the old least-loaded behaviour -- is right there.
     """
+    from app.models.events import EventModel
     from app.models.settings import SettingsModel
     import logging
 
     category = classify_route(reason)
     try:
+        if event is None:
+            event = EventModel.find_match(reason)
         routing = SettingsModel.get_routing()
         if category == 'EVENT':
+            if event is not None:
+                coordinator = EventModel.effective_coordinator(event)
+                reviewer = _configured_reviewer(coordinator)
+                if reviewer is not None:
+                    return reviewer
             reviewer = _configured_reviewer(routing.get('event_faculty_id'))
             if reviewer is not None:
                 return reviewer
@@ -248,6 +258,23 @@ def resolve_faculty(student: User, reason: str) -> User:
             'Routing lookup failed; falling back to least-loaded lecturer')
 
     return pick_faculty(student)
+
+
+def resolve_event(reason: str):
+    """The HOD-managed event a reason names, or None.
+
+    Guarded like the rest of routing: matching runs inside submission and must
+    never fail a request.
+    """
+    from app.models.events import EventModel
+    import logging
+
+    try:
+        return EventModel.find_match(reason)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Event matching failed; continuing without an event')
+        return None
 
 
 def submit_request(*, student: User, permission_type: str, reason: str,
@@ -314,7 +341,8 @@ def submit_request(*, student: User, permission_type: str, reason: str,
     except UploadError as exc:
         raise ValidationError(str(exc))
 
-    faculty = resolve_faculty(student, reason)
+    event = resolve_event(reason)
+    faculty = resolve_faculty(student, reason, event)
 
     request_record = PermissionModel.create(
         student_id=student.id,
@@ -327,6 +355,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
         assigned_faculty_id=faculty.id,
         member_ids=member_id_list,
         route_category=classify_route(reason),
+        event_id=event.id if event else None,
     )
 
     ProofModel.create(

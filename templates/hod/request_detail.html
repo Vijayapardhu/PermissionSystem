@@ -64,6 +64,15 @@
       <div class="card-au__body">
         <dl class="definition">
           <dt>Permission type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          {% if request.event_name %}
+          <dt>Event</dt>
+          <dd>
+            <span class="badge-au badge-au--pending">
+              <i class="bi bi-trophy"></i> {{ request.event_name }}
+            </span>
+            <span class="form-text">Routed to its coordinator.</span>
+          </dd>
+          {% endif %}
           <dt>Review queue</dt>
           <dd>
             {# Who was supposed to review this: the event desk, the curricular

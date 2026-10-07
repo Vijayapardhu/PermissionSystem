@@ -66,9 +66,8 @@
             </div>
           </td>
           <td class="table-au__actions">
-            <span class="small text-muted">
-              {{ (group.member_count - group.linked_count) }} awaiting accounts
-            </span>
+            <a href="{{ url_for('hod.class_detail', class_id=group.id) }}"
+               class="btn btn-sm btn-primary btn-pill">Open</a>
           </td>
         </tr>
         {% endfor %}

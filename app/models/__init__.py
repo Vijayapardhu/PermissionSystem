@@ -151,6 +151,10 @@ class PermissionRequest:
     # can show it even if the routing keywords change later. Rows written before
     # routing existed carry None and are classified on the fly when displayed.
     route_category: Optional[str] = None
+    # The HOD-managed event this request names, if any (e.g. a hackathon the
+    # department organises). Decided once at submission; the coordinator at
+    # the time becomes the reviewer, and this id is what the register shows.
+    event_id: Optional[int] = None
 
     @property
     def members(self) -> List[int]:

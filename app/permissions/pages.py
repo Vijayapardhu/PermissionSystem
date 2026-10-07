@@ -120,6 +120,11 @@ PAGE_PERMISSIONS = {
     'hod.add_faculty': (HOD,),
     'hod.routing': (HOD,),
     'hod.classes': (HOD,),
+    'hod.class_detail': (HOD,),
+    # Department events and their coordinators, managed by the HOD.
+    'hod.events': (HOD,),
+    'hod.save_event': (HOD,),
+    'hod.delete_event': (HOD,),
     'hod.print_report': (HOD,),
     'hod.reports': (HOD,),
     'faculty.reassign': (HOD,),

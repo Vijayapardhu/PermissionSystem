@@ -3398,6 +3398,95 @@ finally:
     user_mod.UserModel.create = _orig_create
     _restore()
 
+# Department events: mains, subs, coordinators, and the routing they drive.
+from app.models.events import Event as _Event, EventModel as _Events  # noqa: E402
+import datetime as _datetime  # noqa: E402
+
+_EV_MAIN = _Event(id=1, name='Hackathon', parent_id=None, coordinator_id=2,
+                  created_at=_datetime.datetime(2026, 10, 1))
+_EV_SUB = _Event(id=2, name='Smart India Hackathon', parent_id=1,
+                 coordinator_id=None,
+                 created_at=_datetime.datetime(2026, 10, 1))
+_EV_LONELY = _Event(id=3, name='Robotics Expo', parent_id=None,
+                    coordinator_id=None,
+                    created_at=_datetime.datetime(2026, 10, 1))
+
+check('the longest name wins when the reason holds both',
+      _Events.match_reason('Smart India Hackathon finals',
+                           [_EV_MAIN, _EV_SUB]) is _EV_SUB)
+check('a bare main-event mention matches the main event',
+      _Events.match_reason('college hackathon trials',
+                           [_EV_MAIN, _EV_SUB]) is _EV_MAIN)
+check('an event nobody coordinates matches nothing',
+      _Events.match_reason('Robotics Expo visit',
+                           [_EV_MAIN, _EV_SUB, _EV_LONELY]) is None)
+check('an unrelated reason matches nothing',
+      _Events.match_reason('Medical appointment with the dentist',
+                           [_EV_MAIN, _EV_SUB]) is None)
+check('a sub-event inherits its parent coordinator',
+      _Events.effective_coordinator(_EV_SUB, {1: _EV_MAIN}) == 2)
+check('a main event without a coordinator has none',
+      _Events.effective_coordinator(_EV_LONELY, {}) is None)
+
+# The management page and its writes, with the model stubbed.
+_restore = patch_models(HOD)
+_orig_tree = _Events.list_tree
+try:
+    _Events.list_tree = staticmethod(
+        lambda: [_EV_MAIN])
+    _EV_MAIN.subs = [_EV_SUB]
+    _EV_MAIN.coordinator_name = LECTURER.name
+    _EV_SUB.coordinator_name = None
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = 3
+        sess['_user_id'] = '3'
+        sess['_csrf_token'] = 'workflow-token'
+
+    _events_page = client.get('/hod/events')
+    _events_html = _events_page.get_data(as_text=True)
+    check('the events page renders the tree',
+          _events_page.status_code == 200
+          and 'Smart India Hackathon' in _events_html
+          and 'Inherits' in _events_html,
+          f'got {_events_page.status_code}')
+
+    _saved = {}
+    _orig_event_create = _Events.create
+    _orig_event_find = _Events.find_by_id
+    _Events.find_by_id = staticmethod(
+        lambda eid: {1: _EV_MAIN, 2: _EV_SUB}.get(eid))
+    _Events.create = staticmethod(
+        lambda name, coord=None, parent=None: _saved.setdefault(
+            'call', (name, coord, parent)) or _EV_MAIN)
+    _sub = client.post('/hod/events/save',
+                       data={'name': 'Code Sprint', 'parent_id': '1',
+                             'coordinator_id': '', '_csrf_token': 'workflow-token'})
+    check('a sub-event is created under its main',
+          _sub.status_code == 302 and _saved.get('call') == ('Code Sprint', None, 1),
+          f'got {_sub.status_code}')
+
+    _bad_parent = client.post(
+        '/hod/events/save',
+        data={'name': 'Deep Nest', 'parent_id': '2',
+              'coordinator_id': '', '_csrf_token': 'workflow-token'},
+        follow_redirects=True)
+    check('a sub-event cannot have children of its own',
+          'cannot have children' in _bad_parent.get_data(as_text=True))
+
+    _bad_coord = client.post(
+        '/hod/events/save',
+        data={'name': 'Hackathon', 'event_id': '1', 'coordinator_id': '999',
+              '_csrf_token': 'workflow-token'},
+        follow_redirects=True)
+    check('an unknown coordinator saves nothing',
+          'not an active lecturer' in _bad_coord.get_data(as_text=True))
+finally:
+    _Events.list_tree = _orig_tree
+    _Events.create = _orig_event_create
+    _Events.find_by_id = _orig_event_find
+    _restore()
+
 # A lecturer holds `faculty.action`, which decides: approve outright, verify and
 # forward, or reject. They do not hold `hod.request_action`, which is the
 # HOD's own verdict on a forwarded request. The same POST has to be refused.

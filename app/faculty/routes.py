@@ -56,6 +56,30 @@ def annotate_routes(requests):
     return requests
 
 
+def annotate_events(requests):
+    """Stamp the HOD-managed event each request names, if any.
+
+    One read of the small events collection for the whole list, never one per
+    row. A failure leaves every name unset rather than breaking the register:
+    the event is context on the row, not the row itself.
+    """
+    from app.models.events import EventModel
+
+    wanted = {getattr(record, 'event_id', None) for record in requests}
+    wanted.discard(None)
+    names = {}
+    if wanted:
+        try:
+            for event in EventModel.list_all():
+                if event.id in wanted:
+                    names[event.id] = event.name
+        except Exception:
+            names = {}
+    for record in requests:
+        record.event_name = names.get(getattr(record, 'event_id', None))
+    return requests
+
+
 faculty_bp = Blueprint('faculty', __name__, url_prefix='/faculty')
 
 APP_ROOT = 'https://cse-permission.adityauniversity.in'
@@ -95,6 +119,7 @@ def request_detail(request_id: int):
     # renders as a solo request and the reviewer decides half-blind.
     attach_members([record])
     annotate_routes([record])
+    annotate_events([record])
     student = UserModel.find_by_id(record.student_id)
     proofs = ProofModel.find_by_request(request_id)
     history = ApprovalModel.find_by_request(request_id)
