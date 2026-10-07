@@ -10,6 +10,7 @@ from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
 )
 from app.models.user import UserModel
+from app.faculty.routes import annotate_routes, annotate_events
 from app.permissions.pages import permission_required
 from app.permissions.service import (
     DuplicateRequestError, ValidationError, cancel_request, resolve_members,
@@ -149,6 +150,8 @@ def requests():
             selected = None
 
     records = PermissionModel.find_by_student(user.id, status=selected, limit=200)
+    annotate_routes(records)
+    annotate_events(records)
     return render_template(
         'student/requests.html',
         user=user,
@@ -170,6 +173,8 @@ def request_detail(request_id: int):
 
     student = UserModel.find_by_id(record.student_id)
     attach_members([record])
+    annotate_routes([record])
+    annotate_events([record])
     proofs = ProofModel.find_by_request(request_id)
     history = ApprovalModel.find_by_request(request_id)
 
@@ -236,6 +241,8 @@ def request_letter(request_id: int):
 
     student = UserModel.find_by_id(record.student_id)
     attach_members([record])
+    annotate_routes([record])
+    annotate_events([record])
     proofs = ProofModel.find_by_request(request_id)
     history = ApprovalModel.find_by_request(request_id)
 

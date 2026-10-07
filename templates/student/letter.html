@@ -598,6 +598,17 @@
           <th>Permission type</th>
           <td>{% if request.permission_type.value == 'LEAVE' %}Leave (retired){% else %}Activity{% endif %} Permission</td>
         </tr>
+        {% if request.event_name %}
+        <tr>
+          <th>Event</th>
+          <td>{{ request.event_name }}</td>
+        </tr>
+        {% endif %}
+        {% set route = request.route_category or request.route_display or 'GENERAL' %}
+        <tr>
+          <th>Review queue</th>
+          <td>{{ 'Proctor' if route == 'GENERAL' else route|title }}</td>
+        </tr>
         <tr>
           <th>Period</th>
           <td>

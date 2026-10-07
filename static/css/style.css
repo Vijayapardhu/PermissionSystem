@@ -785,7 +785,9 @@ a:hover { text-decoration: underline; }
   /* Event rows keep their names on paper: the name lives in the input, so
      the row form stays while its buttons go. Creation forms stay hidden. */
   form.event-row__form { display: flex !important; }
-  .event-row__form .btn, .event-addsub { display: none !important; }
+  .event-row__form .btn,
+  .event-row > form:not(.event-row__form),
+  .event-addsub { display: none !important; }
   .event-row__name, .event-row__coord {
     border: 0 !important; background: none !important; padding: 0 !important;
     pointer-events: none; font-size: .85rem; color: #16202f !important;

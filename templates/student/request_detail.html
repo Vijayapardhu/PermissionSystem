@@ -109,6 +109,23 @@
       <div class="card-au__body">
         <dl class="definition">
           <dt>Permission type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          {% if request.event_name %}
+          <dt>Event</dt>
+          <dd>
+            <span class="badge-au badge-au--pending">
+              <i class="bi bi-trophy"></i> {{ request.event_name }}
+            </span>
+            <span class="form-text">Routed to its coordinator.</span>
+          </dd>
+          {% endif %}
+          {% set route = request.route_category or request.route_display or 'GENERAL' %}
+          <dt>Review queue</dt>
+          <dd>
+            <span class="badge-au badge-au--approved">
+              <i class="bi bi-{{ 'person-check' if route == 'GENERAL' else ('trophy' if route == 'EVENT' else 'mortarboard') }}"></i>
+              {{ 'Proctor' if route == 'GENERAL' else route|title }}
+            </span>
+          </dd>
           <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
           <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
           <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
