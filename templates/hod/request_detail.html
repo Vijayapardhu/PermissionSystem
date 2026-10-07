@@ -64,6 +64,18 @@
       <div class="card-au__body">
         <dl class="definition">
           <dt>Permission type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          <dt>Review queue</dt>
+          <dd>
+            {# Who was supposed to review this: the event desk, the curricular
+               desk, or the student's own proctor. Stored at submission so the
+               register reads the same value even if routing changes later. #}
+            {% set route = request.route_category or request.route_display or 'GENERAL' %}
+            <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}">
+              <i class="bi bi-{{ 'person-check' if route == 'GENERAL' else ('trophy' if route == 'EVENT' else 'mortarboard') }}"></i>
+              {{ 'Proctor' if route == 'GENERAL' else route|title }}
+            </span>
+            <span class="form-text">Reviewer: {{ request.faculty_name or '—' }}</span>
+          </dd>
           <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
           <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
           <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
@@ -99,7 +111,7 @@
           {% for entry in history %}
           <li class="mb-2">
             <strong>{{ entry.faculty_name or '—' }}</strong>
-            {{ 'approved' if entry.action.value == 'APPROVED' else 'rejected' }} it
+            {{ entry.action_label|lower }} it
             <span class="form-text">on {{ entry.actioned_at.strftime('%d %B %Y at %I:%M %p') }}</span>
             {% if entry.remarks %}<div class="small text-muted">{{ entry.remarks }}</div>{% endif %}
           </li>

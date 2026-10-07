@@ -90,11 +90,9 @@
       <div><strong>Generated:</strong> {{ report_date.strftime('%d-%m-%Y') }}</div>
     </div>
 
+    {# The report is the HOD's record, so it carries only the HOD's signature:
+       no faculty signs this document. #}
     <div class="signatures">
-      <div>
-        <div class="line"></div>
-        <small>Faculty Signature</small>
-      </div>
       <div>
         <div class="line"></div>
         <small>HOD Signature</small>

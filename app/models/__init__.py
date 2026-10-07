@@ -72,6 +72,12 @@ DEAD_STATUSES = frozenset({
 class ApprovalAction(Enum):
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
+    # A lecturer who checked the request but will not grant it themselves: they
+    # verify it and hand it to the HOD for the final decision. It is its own
+    # action rather than a re-labelled APPROVED because the student and the HOD
+    # have to be able to tell "a lecturer granted this" from "a lecturer passed
+    # it up" months later -- those are two different facts about one request.
+    FORWARDED = 'FORWARDED'
 
 
 @dataclass
@@ -140,6 +146,11 @@ class PermissionRequest:
     # The subset the HOD actually approved. None means "all of them", which is
     # both the single-student case and the group nobody edited before approving.
     approved_member_ids: Optional[List[int]] = None
+    # How the request was routed to its reviewer: EVENT, CURRICULAR or GENERAL.
+    # Decided once at submission from the reason text and stored so the register
+    # can show it even if the routing keywords change later. Rows written before
+    # routing existed carry None and are classified on the fly when displayed.
+    route_category: Optional[str] = None
 
     @property
     def members(self) -> List[int]:
@@ -218,3 +229,18 @@ class ApprovalHistory:
     action: ApprovalAction
     remarks: Optional[str]
     actioned_at: datetime
+    # The role of the person who decided, filled in by find_by_request. The
+    # letter needs it to say who actually granted a permission: a lecturer's
+    # final approval and the HOD's are different signatures on the document.
+    faculty_role: Optional[str] = None
+
+    @property
+    def action_label(self) -> str:
+        """The action in words a student can read.
+
+        Kept in one place so the student page, the faculty page, the HOD page
+        and the letter cannot disagree about what FORWARDED is called.
+        """
+        if self.action == ApprovalAction.FORWARDED:
+            return 'Verified & forwarded'
+        return self.action.value.title()

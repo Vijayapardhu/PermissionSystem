@@ -6,7 +6,7 @@
 <div class="page-head">
   <div>
     <h1 class="page-head__title">Classes</h1>
-    <p class="page-head__sub">Every class group created by lecturers in the department.</p>
+    <p class="page-head__sub">Every class group created by lecturers in the department &mdash; taught classes and proctor lists.</p>
   </div>
 </div>
 
@@ -23,6 +23,7 @@
         <tr>
           <th class="table-au__idx">#</th>
           <th>Class</th>
+          <th>Kind</th>
           <th>Section</th>
           <th>Year</th>
           <th>Lecturer</th>
@@ -37,6 +38,13 @@
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong">{{ group.name }}</td>
+          <td>
+            {% if group.kind == 'PROCTOR' %}
+              <span class="badge-au badge-au--pending"><i class="bi bi-person-check"></i> Proctor</span>
+            {% else %}
+              <span class="badge-au badge-au--approved"><i class="bi bi-people"></i> Class</span>
+            {% endif %}
+          </td>
           <td>{{ group.section_code or '—' }}</td>
           <td>{{ group.academic_year or '—' }}</td>
           <td class="text-nowrap">{{ group.faculty_name }}</td>

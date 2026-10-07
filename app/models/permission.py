@@ -29,6 +29,47 @@ REASON_KEYWORDS = {
     'interview': ('interview', 'placement', 'internship'),
 }
 
+# Keyword buckets behind request routing: who should review this request.
+#
+# EVENT names the requests the HOD wants one dedicated person to handle --
+# hackathons, contests and the like. CURRICULAR names the requests a second
+# dedicated person handles. Everything else is GENERAL and goes to the
+# student's own proctor. Substring matching, like the reason chart above, so
+# "Smart India Hackathon" and "hackathon finals" both land in EVENT.
+#
+# Checked in this order on purpose. A "curricular workshop" genuinely belongs
+# to either queue, and the event desk is the one the HOD named first, so EVENT
+# wins the tie rather than the outcome depending on dict order.
+ROUTE_EVENT_KEYWORDS = (
+    'hackathon', 'hackfest', 'contest', 'competition', 'event', 'workshop',
+    'seminar', 'conference', 'fest', 'club', 'sports', 'match', 'tournament',
+    'cultural', 'culturals',
+)
+ROUTE_CURRICULAR_KEYWORDS = (
+    'curricular', 'curriculum', 'laboratory', 'practical', 'academic',
+    'industrial visit', 'field visit', 'internship',
+)
+
+#: Every route a request can take to its reviewer.
+ROUTE_GENERAL = 'GENERAL'
+ROUTE_EVENT = 'EVENT'
+ROUTE_CURRICULAR = 'CURRICULAR'
+
+
+def classify_route(reason: str) -> str:
+    """Which review queue a reason belongs to: EVENT, CURRICULAR or GENERAL.
+
+    Pure function of the text, so the register can re-derive it for rows
+    written before routing existed and both callers -- submission and display
+    -- always agree.
+    """
+    text = (reason or '').lower()
+    if any(keyword in text for keyword in ROUTE_EVENT_KEYWORDS):
+        return ROUTE_EVENT
+    if any(keyword in text for keyword in ROUTE_CURRICULAR_KEYWORDS):
+        return ROUTE_CURRICULAR
+    return ROUTE_GENERAL
+
 
 def _matches(reason: str, keyword: str) -> bool:
     return keyword in (reason or '').lower()
@@ -96,12 +137,16 @@ class PermissionModel:
                start_date: date, end_date: date, start_time: time = None,
                end_time: time = None,
                assigned_faculty_id: int = None,
-               member_ids: List[int] = None) -> PermissionRequest:
+               member_ids: List[int] = None,
+               route_category: str = None) -> PermissionRequest:
         """Create one request covering one to four students.
 
         `student_id` stays the requester and the only field the older code reads.
         The full membership goes in `member_ids`, so a record written before
         group permissions existed still reads correctly through `members`.
+        `route_category` records which review queue the request was sent to
+        (EVENT, CURRICULAR or GENERAL); rows written before routing existed
+        carry None and are classified from the reason when displayed.
         """
         row = store.insert(REQUESTS, {
             'student_id': student_id,
@@ -114,6 +159,7 @@ class PermissionModel:
             'end_time': end_time,
             'status': RequestStatus.PENDING.value,
             'assigned_faculty_id': assigned_faculty_id,
+            'route_category': route_category,
         })
         return PermissionModel._to_request(row)
 
@@ -334,6 +380,7 @@ class PermissionModel:
                 [int(m) for m in row['approved_member_ids']
                  if isinstance(m, (int, float)) or str(m).isdigit()]
                 if isinstance(row.get('approved_member_ids'), list) else None),
+            route_category=row.get('route_category'),
         )
 
 
@@ -470,13 +517,15 @@ class ApprovalModel:
         history.sort(key=lambda h: _sort_key(h.actioned_at))
 
         faculty_ids = {h.faculty_id for h in history if h.faculty_id}
-        names = {}
+        names, roles = {}, {}
         for faculty_id in faculty_ids:
             row = store.get('users', faculty_id)
             if row:
                 names[faculty_id] = row.get('name')
+                roles[faculty_id] = row.get('role')
         for entry in history:
             entry.faculty_name = names.get(entry.faculty_id)
+            entry.faculty_role = roles.get(entry.faculty_id)
         return history
 
     @staticmethod

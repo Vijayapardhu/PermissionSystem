@@ -79,23 +79,26 @@
     {% if request.status.value == 'PENDING' and user.is_lecturer %}
     <div class="card-au" style="border-left:3px solid var(--au-primary)">
       <div class="card-au__head">
-        <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your Recommendation</h2>
+        <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your Decision</h2>
       </div>
       <div class="card-au__body">
-        {# Approving here recommends the request to the HOD; it does not grant the
-           permission. The form says so, because a button labelled "Approve" that
-           only moves a request along is exactly the kind of thing a lecturer
-           clicks without reading. #}
+        {# Approving grants the permission outright -- the HOD never sees it.
+           Forwarding verifies the request and sends it to the HOD for the final
+           call, for the cases a lecturer cannot permit themselves. The two
+           buttons look alike, which is exactly why the form states the
+           difference: a click on the wrong one either grants what should have
+           been escalated or escalates what could have been settled here. #}
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle"></i>
-          Approving recommends this request to the Head of Department, who gives
-          the final approval. Rejecting ends it here.
+          <strong>Approve</strong> grants this permission immediately.
+          <strong>Verify &amp; forward</strong> sends it to the Head of
+          Department for the final decision. Rejecting ends it here.
         </p>
         <form method="post" action="{{ url_for('faculty.action', request_id=request.id) }}">
           {{ csrf_field() }}
           <label for="remarks" class="form-label">
             Remarks
-            <span class="text-muted fw-normal fw-normal">(required when rejecting)</span>
+            <span class="text-muted fw-normal fw-normal">(required when forwarding or rejecting)</span>
           </label>
           <textarea class="form-control mb-3" id="remarks" name="remarks" rows="3"
                     placeholder="Add a note for the student and the HOD."></textarea>
@@ -103,8 +106,13 @@
           <div class="d-flex gap-2 flex-wrap">
             <button type="submit" name="decision" value="approve"
                     class="btn btn-success btn-pill px-4"
-                    onclick="return confirm('Recommend REQ-{{ '%04d' % request.id }} for {{ student.roll_number_display }} to the HOD for approval?');">
-              <i class="bi bi-check-circle"></i> Recommend
+                    onclick="return confirm('Approve REQ-{{ '%04d' % request.id }} for {{ student.roll_number_display }}? This grants the permission immediately.');">
+              <i class="bi bi-check-circle"></i> Approve
+            </button>
+            <button type="submit" name="decision" value="forward"
+                    class="btn btn-primary btn-pill px-4"
+                    onclick="return confirm('Verify REQ-{{ '%04d' % request.id }} for {{ student.roll_number_display }} and forward it to the HOD for the final decision?');">
+              <i class="bi bi-send"></i> Verify &amp; Forward to HOD
             </button>
             <button type="submit" name="decision" value="reject"
                     class="btn btn-danger btn-pill px-4"
@@ -150,7 +158,7 @@
         <ul class="list-unstyled mb-0">
           {% for entry in history %}
           <li class="border-bottom pb-2 mb-2">
-            <div class="fw-semibold small">{{ entry.action.value|title }} by {{ entry.faculty_name }}</div>
+            <div class="fw-semibold small">{{ entry.action_label }} by {{ entry.faculty_name }}</div>
             <div class="form-text mt-1">{{ entry.actioned_at.strftime('%d %b %Y, %I:%M %p') }}</div>
             {% if entry.remarks %}<div class="small mt-1">{{ entry.remarks }}</div>{% endif %}
           </li>

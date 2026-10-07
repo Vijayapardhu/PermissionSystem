@@ -97,6 +97,15 @@ PAGE_PERMISSIONS = {
     'faculty.request_letter': STAFF,
     'faculty.download_proof': ALL_ROLES,
 
+    # Proctor lists: the rolls a lecturer mentors, kept apart from the classes
+    # they teach. Same ownership rule as classes -- the view checks the owner.
+    'faculty.proctor_students': STAFF,
+    'faculty.create_proctor_group': STAFF,
+    'faculty.proctor_group_detail': STAFF,
+    'faculty.upload_proctor_roster': STAFF,
+    'faculty.delete_proctor_member': STAFF,
+    'faculty.delete_proctor_group': STAFF,
+
     # ---- HOD ----
     'hod.dashboard': (HOD,),
     'hod.requests': (HOD,),
@@ -107,6 +116,8 @@ PAGE_PERMISSIONS = {
     # Where the per-member decision is actually made.
     'hod.request_detail': (HOD,),
     'hod.faculty_workload': (HOD,),
+    'hod.import_faculty': (HOD,),
+    'hod.routing': (HOD,),
     'hod.classes': (HOD,),
     'hod.print_report': (HOD,),
     'hod.reports': (HOD,),

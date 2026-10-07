@@ -12,11 +12,13 @@ from app.models.classes import ClassModel, MemberModel
 from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
 )
+from app.models.settings import SettingsModel
 from app.models.user import UserModel
 from app.permissions.pages import permission_required
 from app.permissions.service import (
     ValidationError, categorize_reason, hod_act_on_request,
 )
+from app.utils.roster import RosterError, parse_faculty_roster
 from app.utils.security import current_user
 
 hod_bp = Blueprint('hod', __name__, url_prefix='/hod')
@@ -127,7 +129,12 @@ def _weekly_trend():
 @hod_bp.route('/requests')
 @permission_required('hod.requests')
 def requests():
-    """Every request in the department, with filters."""
+    """Every request in the department, with filters.
+
+    The HOD's working register: the queue awaiting their decision leads with
+    one-click actions, and the filters (status, reviewer, dates, search) stay
+    visible while scrolling so a long register stays usable.
+    """
     user = current_user()
 
     status_filter = _status_filter(request.args.get('status'))
@@ -135,9 +142,26 @@ def requests():
     date_from = _parse_date(request.args.get('from'), None)
     date_to = _parse_date(request.args.get('to'), None)
     search = (request.args.get('q') or '').strip()
+    reviewer_id = request.args.get('reviewer', type=int)
 
     records = _filtered_requests(status_filter, type_filter,
-                                 date_from, date_to, search, limit=400)
+                                 date_from, date_to, search, limit=400,
+                                 faculty_id=reviewer_id)
+
+    reviewers = [
+        {'id': lecturer.id, 'name': lecturer.name}
+        for lecturer in UserModel.get_lecturers()
+    ]
+    counts = {
+        'awaiting': sum(1 for r in records
+                        if r.status == RequestStatus.AWAITING_HOD),
+        'pending': sum(1 for r in records
+                       if r.status == RequestStatus.PENDING),
+        'approved': sum(1 for r in records
+                        if r.status == RequestStatus.APPROVED),
+        'rejected': sum(1 for r in records
+                        if r.status == RequestStatus.REJECTED),
+    }
 
     return render_template(
         'hod/requests.html',
@@ -148,6 +172,9 @@ def requests():
         date_from=date_from,
         date_to=date_to,
         search=search,
+        reviewers=reviewers,
+        reviewer_id=reviewer_id,
+        counts=counts,
     )
 
 
@@ -164,6 +191,13 @@ def request_detail(request_id: int):
     if record is None:
         abort(404)
     attach_members([record])
+    from app.faculty.routes import annotate_routes as _annotate
+    _annotate([record])
+    if record.assigned_faculty_id:
+        reviewer = UserModel.find_by_id(record.assigned_faculty_id)
+        record.faculty_name = reviewer.name if reviewer else None
+    else:
+        record.faculty_name = None
     return render_template(
         'hod/request_detail.html',
         user=current_user(),
@@ -324,9 +358,90 @@ def faculty_workload():
     ]
     lecturers.sort(key=lambda l: (-l['pending'], l['name'] or ''))
 
+    routing = SettingsModel.get_routing()
+
     return render_template(
-        'hod/faculty.html', user=user, lecturers=lecturers
+        'hod/faculty.html', user=user, lecturers=lecturers, routing=routing
     )
+
+
+@hod_bp.route('/faculty/import', methods=['POST'])
+@permission_required('hod.import_faculty')
+def import_faculty():
+    """Create lecturer accounts from the HOD's Excel sheet.
+
+    The sheet carries Name and Email columns; every valid row becomes a
+    LECTURER account (or is reported as already existing), and malformed rows
+    are reported rather than aborting the import. Accounts are provisioned
+    inactive-sign-in-safe: they sign in through Entra ID like everyone else,
+    matching on email at first sign-in.
+    """
+    upload = request.files.get('faculty_sheet')
+    if upload is None or not (upload.filename or '').strip():
+        flash('Choose an Excel workbook or CSV file to import.', 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    try:
+        parsed = parse_faculty_roster(upload)
+    except RosterError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    created, existing = 0, 0
+    for entry in parsed['entries'][:500]:
+        account = UserModel.find_by_email(entry['email'])
+        if account is not None:
+            existing += 1
+            continue
+        UserModel.create(
+            None, entry['email'], entry['name'],
+            role=UserRole.LECTURER, department='CSE',
+        )
+        created += 1
+
+    parts = []
+    if created:
+        parts.append(f'{created} lecturer account{"s" if created != 1 else ""} created')
+    if existing:
+        parts.append(f'{existing} already existed')
+    flash(
+        ('Faculty import: ' + ', '.join(parts) + '.')
+        if parts else 'Faculty import: no new rows to add.',
+        'success' if created else 'warning',
+    )
+    for error in parsed['errors'][:8]:
+        flash(error, 'warning')
+    if len(parsed['errors']) > 8:
+        flash(f'... and {len(parsed["errors"]) - 8} more skipped rows.',
+              'warning')
+    return redirect(url_for('hod.faculty_workload'))
+
+
+@hod_bp.route('/faculty/routing', methods=['POST'])
+@permission_required('hod.routing')
+def routing():
+    """Name the dedicated reviewers for the event, curricular and general queues.
+
+    Each select holds a lecturer id, or nothing to clear that queue back to the
+    default (the student's own proctor, then the least-loaded lecturer). Only
+    active lecturers are accepted, so a stale or tampered id cannot park a
+    queue on an account that cannot review.
+    """
+    chosen = {}
+    for field in ('event_faculty_id', 'curricular_faculty_id',
+                  'general_faculty_id'):
+        raw = (request.form.get(field) or '').strip()
+        lecturer = UserModel.find_by_id(int(raw)) if raw.isdigit() else None
+        if raw and (lecturer is None or not lecturer.is_active
+                    or not lecturer.is_lecturer):
+            flash('One of the selected reviewers is not an active lecturer. '
+                  'Nothing was changed.', 'danger')
+            return redirect(url_for('hod.faculty_workload'))
+        chosen[field] = lecturer.id if lecturer else None
+
+    SettingsModel.set_routing(**chosen)
+    flash('Request routing updated.', 'success')
+    return redirect(url_for('hod.faculty_workload'))
 
 
 @hod_bp.route('/classes')
@@ -353,6 +468,7 @@ def classes():
         {
             'id': row['id'],
             'name': row.get('name'),
+            'kind': row.get('kind') or 'CLASS',
             'section_code': row.get('section_code'),
             'academic_year': row.get('academic_year'),
             'faculty_id': row.get('faculty_id'),
@@ -479,9 +595,10 @@ def _type_filter(value):
 
 
 def _filtered_requests(status_filter, type_filter, date_from, date_to,
-                      search, limit=300):
+                      search, limit=300, faculty_id=None):
     from app.faculty.routes import _filtered_requests as shared
-    return shared(status_filter, type_filter, date_from, date_to, search, limit)
+    return shared(status_filter, type_filter, date_from, date_to, search,
+                  limit, faculty_id=faculty_id)
 
 
 @hod_bp.route('/report/print')

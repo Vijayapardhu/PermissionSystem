@@ -1,12 +1,15 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, csrf_field, empty_state with context %}
 {% block title %}All Requests &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div>
     <h1 class="page-head__title">All Requests</h1>
-    <p class="page-head__sub">Department-wide request register with filters.</p>
+    <p class="page-head__sub">
+      Department-wide register. Requests your faculty verified sit at the top
+      with one-click actions; everything else follows below.
+    </p>
   </div>
   <div class="page-head__actions">
     <button class="btn btn-outline-secondary btn-pill" onclick="window.print()">
@@ -18,7 +21,43 @@
   </div>
 </div>
 
-<div class="card-au mb-3">
+{# Queue summary for the current filter view: the HOD's own to-do called out
+   first, because that is the number they are accountable for. #}
+<div class="stat-grid">
+  <div class="stat stat--primary">
+    <div>
+      <div class="stat__label">Awaiting your decision</div>
+      <div class="stat__value">{{ counts.awaiting }}</div>
+    </div>
+    <i class="bi bi-person-check stat__icon"></i>
+  </div>
+  <div class="stat stat--warning">
+    <div>
+      <div class="stat__label">With faculty</div>
+      <div class="stat__value">{{ counts.pending }}</div>
+    </div>
+    <i class="bi bi-hourglass-split stat__icon"></i>
+  </div>
+  <div class="stat stat--success">
+    <div>
+      <div class="stat__label">Approved in view</div>
+      <div class="stat__value">{{ counts.approved }}</div>
+    </div>
+    <i class="bi bi-check-circle stat__icon"></i>
+  </div>
+  <div class="stat stat--danger">
+    <div>
+      <div class="stat__label">Rejected in view</div>
+      <div class="stat__value">{{ counts.rejected }}</div>
+    </div>
+    <i class="bi bi-x-circle stat__icon"></i>
+  </div>
+</div>
+
+{# Sticky so the filters stay under the hand on a 400-row register instead of
+   scrolling away with it. `top` clears the fixed header; the z-index keeps the
+   bar above the table but below dropdowns. #}
+<div class="card-au mb-3 toolbar-sticky">
   <form class="toolbar" method="get">
     <div class="input-group input-group-sm" style="max-width:230px">
       <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -31,6 +70,14 @@
       <option value="">All statuses</option>
       {% for status in ['AWAITING_HOD', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
       <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title|replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+
+    <select class="form-select form-select-sm" name="reviewer" style="width:auto;max-width:220px"
+            onchange="this.form.submit()" aria-label="Filter by reviewer">
+      <option value="">All reviewers</option>
+      {% for reviewer in reviewers %}
+      <option value="{{ reviewer.id }}" {{ 'selected' if reviewer_id == reviewer.id }}>{{ reviewer.name }}</option>
       {% endfor %}
     </select>
 
@@ -51,7 +98,7 @@
            title="To date" aria-label="To date">
 
     <button type="submit" class="btn btn-sm btn-primary btn-pill">Apply</button>
-    {% if search or status_filter or type_filter or date_from or date_to %}
+    {% if search or status_filter or type_filter or date_from or date_to or reviewer_id %}
     <a href="{{ url_for('hod.requests') }}" class="btn btn-sm btn-outline-secondary btn-pill">Clear</a>
     {% endif %}
   </form>
@@ -70,56 +117,67 @@
         <tr>
           <th class="table-au__idx">#</th>
           <th>Reference</th>
-          <th>Roll No</th>
-          <th>Student</th>
-          <th>Type</th>
-          <th>From</th>
-          <th>To</th>
-          <th>Reason</th>
+          <th>Students</th>
+          <th>Queue</th>
+          <th>Period</th>
           <th>Reviewer</th>
           <th>Status</th>
-          <th class="table-au__actions"></th>
+          <th class="table-au__actions">Decision</th>
         </tr>
       </thead>
       <tbody>
         {% for record in requests %}
-        <tr>
+        <tr class="{{ 'table-au__row--actionable' if record.status.value == 'AWAITING_HOD' }}">
           <td class="table-au__idx">{{ loop.index }}</td>
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
           <td>
-            {{ roll(record.student_roll_number) }}
-            {# A group is filed by one student but covers several, so the count
-               belongs next to the name rather than being discovered on the
-               detail page. #}
+            {# The requester first, then every co-member: a group is decided as
+               a whole, so the whole membership belongs on the row rather than
+               being discovered on the detail page. #}
+            <div>{{ roll(record.student_roll_number) }}</div>
+            <div class="small text-nowrap">{{ record.student_name }}</div>
             {% if record.is_group %}
-            <span class="badge text-bg-light ms-1" title="Group permission">
-              <i class="bi bi-people"></i> {{ record.group_size }}
-            </span>
+            <div class="small text-muted mt-1">
+              <i class="bi bi-people"></i> {{ record.group_size }} students:
+              {% for member in record.member_details or [] %}
+                {{ member.roll_number or member.name }}{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </div>
             {% endif %}
+            <div class="small text-muted">{{ type_badge(record.permission_type) }}</div>
           </td>
-          <td class="text-nowrap">{{ record.student_name }}</td>
-          <td>{{ type_badge(record.permission_type) }}</td>
-          <td class="text-nowrap">{{ date(record.start_date) }}</td>
-          <td class="text-nowrap">{{ date(record.end_date) }}</td>
-          <td class="small text-muted">{{ record.reason|truncate(42) }}</td>
+          <td>
+            {% set route = record.route_display or 'GENERAL' %}
+            <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}"
+                  title="{{ 'Sent to the student\u2019s proctor' if route == 'GENERAL' else ('Sent to the ' + route|lower + ' desk') }}">
+              <i class="bi bi-{{ 'person-check' if route == 'GENERAL' else ('trophy' if route == 'EVENT' else 'mortarboard') }}"></i>
+              {{ 'Proctor' if route == 'GENERAL' else route|title }}
+            </span>
+          </td>
+          <td class="text-nowrap small">
+            {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
+            <div class="text-muted">{{ record.reason|truncate(42) }}</div>
+          </td>
           <td class="small text-nowrap">{{ record.faculty_name or '—' }}</td>
           <td>{{ status_badge(record.status) }}</td>
           <td class="table-au__actions">
             {# The HOD's decision, offered only on the rows that are actually
                waiting on them. The route refuses anything else as well, so this
-               is a convenience rather than the enforcement. #}
+               is a convenience rather than the enforcement. A group approved
+               here covers everyone on it; striking students off happens on the
+               detail page, where the whole membership is on screen. #}
             {% if record.status.value == 'AWAITING_HOD' %}
-            <form method="post" class="d-flex gap-1"
+            <form method="post" class="d-flex gap-1 mb-1"
                   action="{{ url_for('hod.request_action', request_id=record.id) }}"
-                  onsubmit="return confirm('Approve this permission request?');">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  onsubmit="return confirm('Approve REQ-{{ '%04d' % record.id }}{% if record.is_group %} for all {{ record.group_size }} students{% endif %}?');">
+              {{ csrf_field() }}
               <input type="hidden" name="action" value="APPROVED">
-              <button type="submit" class="btn btn-sm btn-primary">Approve</button>
+              <button type="submit" class="btn btn-sm btn-success">Approve</button>
             </form>
-            <form method="post" class="d-flex gap-1"
+            <form method="post" class="d-flex gap-1 mb-1"
                   action="{{ url_for('hod.request_action', request_id=record.id) }}"
-                  onsubmit="return confirm('Reject this permission request?');">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  onsubmit="return confirm('Reject REQ-{{ '%04d' % record.id }}?');">
+              {{ csrf_field() }}
               <input type="hidden" name="action" value="REJECTED">
               <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
             </form>
@@ -135,14 +193,14 @@
   <div class="table-foot">
     <span>Up to {{ requests | length }} most recent matches.</span>
     <span class="table-foot__stats">
-      <span class="table-foot__stat">Approved
-        <strong>{{ requests | selectattr('status.value', 'equalto', 'APPROVED') | list | length }}</strong></span>
       <span class="table-foot__stat">Awaiting HOD
-        <strong>{{ requests | selectattr('status.value', 'equalto', 'AWAITING_HOD') | list | length }}</strong></span>
+        <strong>{{ counts.awaiting }}</strong></span>
       <span class="table-foot__stat">Pending
-        <strong>{{ requests | selectattr('status.value', 'equalto', 'PENDING') | list | length }}</strong></span>
+        <strong>{{ counts.pending }}</strong></span>
+      <span class="table-foot__stat">Approved
+        <strong>{{ counts.approved }}</strong></span>
       <span class="table-foot__stat">Rejected
-        <strong>{{ requests | selectattr('status.value', 'equalto', 'REJECTED') | list | length }}</strong></span>
+        <strong>{{ counts.rejected }}</strong></span>
     </span>
   </div>
   {% else %}

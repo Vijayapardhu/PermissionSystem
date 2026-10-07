@@ -461,12 +461,21 @@
   } %}
   {% set blurbs = {
     'PENDING': 'This request is under review by the department and has not yet been approved or rejected.',
-    'AWAITING_HOD': 'The faculty has recommended this request. It now awaits the final approval of the Head of Department.',
+    'AWAITING_HOD': 'The faculty has verified this request. It now awaits the final approval of the Head of Department.',
     'APPROVED': 'The Head of Department has approved this permission for the period stated below.',
     'REJECTED': 'This request was rejected. It does not grant any permission.',
     'CANCELLED': 'This request was withdrawn by the student and is no longer under consideration.',
     'EXPIRED': 'This permission was approved, but the period it covered has now passed.',
   } %}
+
+  {# Who granted this permission: the HOD, or a lecturer approving outright.
+     A lecturer-approved permission is final too, but the document must say who
+     signed it -- a letter claiming the HOD approved what a lecturer granted
+     would be a false departmental record. #}
+  {% set decided_by_hod = decision and (decision.faculty_role or '') == 'HOD' %}
+  {% if is_approved and not decided_by_hod %}
+  {% set _ = blurbs.update({'APPROVED': 'The reviewing faculty has approved this permission for the period stated below.'}) %}
+  {% endif %}
 
   <article class="letter-sheet">
 
@@ -655,11 +664,14 @@
           This request is <strong>AWAITING VERIFICATION</strong> and has not yet been approved
           or rejected. This document is <strong>not a grant of permission</strong>.
         {% elif is_awaiting %}
-          This request has been <strong>recommended by the faculty</strong> and awaits the final
+          This request has been <strong>verified by the faculty</strong> and awaits the final
           approval of the Head of Department. This document is
           <strong>not a grant of permission</strong>.
-        {% elif is_approved %}
+        {% elif is_approved and decided_by_hod %}
           This request was <strong>APPROVED</strong> by the Head of Department, {{ DEPARTMENT_NAME }},
+          and is valid for the period stated above.
+        {% elif is_approved %}
+          This request was <strong>APPROVED</strong> by the reviewing faculty, {{ DEPARTMENT_NAME }},
           and is valid for the period stated above.
         {% elif is_rejected %}
           This request was <strong>REJECTED</strong>. It does not grant any permission.

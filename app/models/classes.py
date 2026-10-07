@@ -14,6 +14,14 @@ GROUPS = 'class_groups'
 MEMBERS = 'class_members'
 ATTENDANCE = 'attendance_records'
 
+# The two things a lecturer keeps lists of. A CLASS is taught: it has a roster
+# and attendance. A PROCTOR group is mentored: its rolls are the students whose
+# permission requests land in that lecturer's queue. Same storage, because a
+# proctor list is uploaded and linked exactly like a roster -- only the meaning
+# and the pages differ.
+KIND_CLASS = 'CLASS'
+KIND_PROCTOR = 'PROCTOR'
+
 
 @dataclass
 class ClassGroup:
@@ -25,6 +33,12 @@ class ClassGroup:
     created_at: datetime
     member_count: int = 0
     linked_count: int = 0
+    kind: str = KIND_CLASS
+
+    @property
+    def is_proctor_group(self) -> bool:
+        """True when this group is a proctor list rather than a taught class."""
+        return (self.kind or KIND_CLASS) == KIND_PROCTOR
 
 
 @dataclass
@@ -93,12 +107,16 @@ def _student_directory(student_ids) -> dict:
 class ClassModel:
     @staticmethod
     def create(name: str, faculty_id: int, section_code: str = None,
-               academic_year: str = None) -> ClassGroup:
+               academic_year: str = None,
+               kind: str = KIND_CLASS) -> ClassGroup:
         row = store.insert(GROUPS, {
             'name': (name or '').strip(),
             'section_code': section_code or None,
             'academic_year': academic_year or None,
             'faculty_id': faculty_id,
+            # Rows written before proctor groups existed carry no kind and read
+            # back as CLASS, so every existing class keeps meaning what it did.
+            'kind': kind or KIND_CLASS,
         })
         # A class that was just created has no members, so member_count and
         # linked_count are zero by definition.
@@ -112,10 +130,17 @@ class ClassModel:
         return _to_class(row, _member_counts().get(row['id'], (0, 0)))
 
     @staticmethod
-    def find_for_faculty(faculty_id: int) -> List[ClassGroup]:
+    def find_for_faculty(faculty_id: int, kind: str = None) -> List[ClassGroup]:
+        """The lecturer's groups, optionally only one kind.
+
+        `kind=None` keeps the old behaviour of returning everything, so callers
+        that do not care (the HOD overview) need no change.
+        """
         counts = _member_counts()
         rows = store.documents(GROUPS, faculty_id=faculty_id)
         groups = [_to_class(row, counts.get(row['id'], (0, 0))) for row in rows]
+        if kind:
+            groups = [g for g in groups if (g.kind or KIND_CLASS) == kind]
         groups.sort(key=lambda g: (_sort_key(g.created_at), g.id), reverse=True)
         return groups
 
@@ -305,6 +330,7 @@ def _to_class(row, counts=(0, 0)) -> ClassGroup:
         created_at=row.get('created_at'),
         member_count=counts[0],
         linked_count=counts[1],
+        kind=row.get('kind') or KIND_CLASS,
     )
 
 

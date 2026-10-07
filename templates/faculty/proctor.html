@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Proctor Students &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Proctor Students</h1>
+    <p class="page-head__sub">
+      The rolls you mentor. Permission requests from these students land in
+      your queue &mdash; separately from the classes you teach.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-people"></i> My Classes
+    </a>
+  </div>
+</div>
+
+{% if linked_now %}
+  <div class="alert alert-success">
+    <i class="bi bi-link-45deg"></i>
+    {{ linked_now }} roster {{ 'entry was' if linked_now == 1 else 'entries were' }}
+    linked to student accounts after their first sign-in.
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-12 col-lg-8">
+    {% if groups %}
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-person-check"></i> Proctor Lists</h2>
+        <span class="form-text">{{ groups | length }} list{{ '' if groups|length == 1 else 's' }}</span>
+      </div>
+      <div class="au-table-wrap">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>List</th>
+              <th>Section</th>
+              <th>Year</th>
+              <th class="table-au__num">Students</th>
+              <th class="table-au__num">Linked</th>
+              <th class="table-au__actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for group in groups %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td class="table-au__strong">{{ group.name }}</td>
+              <td>{{ group.section_code or '—' }}</td>
+              <td>{{ group.academic_year or '—' }}</td>
+              <td class="table-au__num">{{ group.member_count }}</td>
+              <td class="table-au__num">
+                {% if group.linked_count == group.member_count %}
+                  <span class="badge-au badge-au--approved">{{ group.linked_count }}</span>
+                {% else %}
+                  <span class="badge-au badge-au--pending">{{ group.linked_count }}</span>
+                {% endif %}
+              </td>
+              <td class="table-au__actions">
+                <a href="{{ url_for('faculty.proctor_group_detail', group_id=group.id) }}"
+                   class="btn btn-sm btn-primary btn-pill">Open</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-foot">
+        <span>Open a list to upload its rolls. Requests from these students come to you for review.</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="card-au">
+      {{ empty_state('person-check', 'No proctor lists yet',
+                     'Create your first proctor list on the right, then upload a spreadsheet of the roll numbers you mentor.') }}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card-au">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-plus-circle"></i> Create Proctor List</h2></div>
+      <div class="card-au__body">
+        <form method="post" action="{{ url_for('faculty.create_proctor_group') }}">
+          {{ csrf_field() }}
+          <div class="mb-3">
+            <label for="name" class="form-label">List name <span class="text-danger">*</span></label>
+            <input class="form-control" id="name" name="name" required minlength="3"
+                   maxlength="120" placeholder="e.g. Proctor batch 2026 &ndash; A">
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label for="section_code" class="form-label">Section</label>
+              <input class="form-control" id="section_code" name="section_code"
+                     maxlength="40" placeholder="A">
+            </div>
+            <div class="col-6">
+              <label for="academic_year" class="form-label">Academic year</label>
+              <input class="form-control" id="academic_year" name="academic_year"
+                     maxlength="20" placeholder="2026-27">
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-pill w-100">
+            <i class="bi bi-plus-lg"></i> Create list
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card-au mt-3">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-info-circle"></i> Proctoring vs Teaching</h2></div>
+      <div class="card-au__body">
+        <p class="small mb-0">
+          <strong>My Classes</strong> is what you teach &mdash; rosters and
+          attendance. <strong>Proctor Students</strong> is who you mentor &mdash;
+          their permission requests are routed to you. A roll can sit on both,
+          or on either one.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

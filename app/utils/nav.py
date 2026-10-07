@@ -18,6 +18,8 @@ LECTURER_NAV = [
     _item('faculty.classes', 'bi-people', 'My Classes', 'Teaching'),
     _item('faculty.attendance_overview', 'bi-check2-square', 'Attendance', 'Teaching'),
 
+    _item('faculty.proctor_students', 'bi-person-check', 'Proctor Students', 'Proctoring'),
+
     _item('faculty.reports', 'bi-graph-up', 'My Reports', 'Insights'),
 ]
 

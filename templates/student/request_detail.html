@@ -49,7 +49,7 @@
       {% if request.status.value == 'PENDING' %}
         <span class="status-banner__hint">&mdash; a lecturer will review it shortly</span>
       {% elif request.status.value == 'AWAITING_HOD' %}
-        <span class="status-banner__hint">&mdash; recommended by faculty, not yet a grant of permission</span>
+        <span class="status-banner__hint">&mdash; verified by faculty, awaiting the HOD's decision: not yet a grant of permission</span>
       {% elif request.status.value == 'CANCELLED' %}
         <span class="status-banner__hint">&mdash; withdrawn on
           {{ request.updated_at.strftime('%d %B %Y at %I:%M %p') }}</span>
@@ -146,7 +146,7 @@
           {% for entry in history %}
           <li class="border-bottom pb-2 mb-2">
             <div class="fw-semibold small">
-              {{ entry.action.value|title }} by {{ entry.faculty_name }}
+              {{ entry.action_label }} by {{ entry.faculty_name }}
             </div>
             <div class="form-text mt-1">{{ entry.actioned_at.strftime('%d %b %Y, %I:%M %p') }}</div>
             {% if entry.remarks %}<div class="small mt-1">{{ entry.remarks }}</div>{% endif %}

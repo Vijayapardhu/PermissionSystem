@@ -34,6 +34,7 @@
           <th>Reference</th>
           <th>Roll No</th>
           <th>Student</th>
+          <th>Queue</th>
           <th>Type</th>
           <th>From</th>
           <th>To</th>
@@ -50,6 +51,12 @@
           <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
           <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>
+            {% set route = record.route_display or 'GENERAL' %}
+            <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}">
+              {{ 'Proctor' if route == 'GENERAL' else route|title }}
+            </span>
+          </td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>
           <td class="text-nowrap">{{ date(record.end_date) }}</td>

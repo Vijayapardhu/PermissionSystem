@@ -65,15 +65,22 @@ def notify_faculty_of_requester_only(request: PermissionRequest, student: User,
 def notify_student_of_decision(request: PermissionRequest, student: User,
                                faculty: User, action: ApprovalAction,
                                remarks: str, base_url: str) -> bool:
-    # A lecturer's approval is a recommendation on its way to the HOD, so the
-    # wording has to say that rather than claim the permission is granted.
-    recommended = action == ApprovalAction.APPROVED
-    if recommended:
-        subject = f'Permission request #{request.id} recommended for approval'
+    # Three different facts, three different wordings. A lecturer's approval is
+    # final now; a forward is a verification on its way to the HOD, so the
+    # wording has to say the permission is not granted yet rather than claim it
+    # is.
+    if action == ApprovalAction.APPROVED:
+        subject = f'Your permission request #{request.id} has been approved'
         headline = (
-            'your lecturer has recommended it, and it now waits for the Head '
-            'of Department to give the final approval. It is not yet a grant '
-            'of permission.'
+            'your permission request has been approved by '
+            f'{faculty.name}. This is the final decision.'
+        )
+    elif action == ApprovalAction.FORWARDED:
+        subject = f'Permission request #{request.id} verified and sent to the HOD'
+        headline = (
+            'your lecturer has verified it and forwarded it to the Head of '
+            'Department for the final approval. It is not yet a grant of '
+            'permission.'
         )
     else:
         subject = 'Your permission request was rejected'
@@ -169,12 +176,17 @@ def notify_student_of_hod_decision(request: PermissionRequest, student: User,
 def notify_hod_of_recommendation(request: PermissionRequest, student: User,
                                  faculty: User, hod: User, remarks: str,
                                  base_url: str) -> bool:
-    """Ask the HOD for the decision the workflow reserves to them."""
+    """Ask the HOD for the decision the workflow reserves to them.
+
+    Sent when a lecturer verifies a request they cannot permit themselves and
+    forwards it. Kept under its historical name so existing callers and tests
+    keep reading.
+    """
     link = f'{base_url}/hod/requests/{request.id}'
-    subject = f'Approval needed - Request #{request.id} recommended by faculty'
+    subject = f'Approval needed - Request #{request.id} verified by faculty'
     body = (
         f'Hello {hod.name},\n\n'
-        f'A permission request has been recommended by the faculty and now '
+        f'A permission request has been verified by the faculty and now '
         f'needs your final approval.\n\n'
         f'Student      : {student.name} ({student.roll_number or "N/A"})\n'
         f'Type         : {request.permission_type.value.title()}\n'

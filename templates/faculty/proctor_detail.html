@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import roll, stat, csrf_field, empty_state with context %}
+{% block title %}{{ group.name }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="no-print mb-3">
+  <ol class="breadcrumb small mb-0">
+    <li class="breadcrumb-item"><a href="{{ url_for('faculty.proctor_students') }}">Proctor Students</a></li>
+    <li class="breadcrumb-item active">{{ group.name }}</li>
+  </ol>
+</nav>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">{{ group.name }}</h1>
+    <p class="page-head__sub">
+      {% if group.section_code %}Section {{ group.section_code }}{% endif %}
+      {% if group.academic_year %} &middot; {{ group.academic_year }}{% endif %}
+      &middot; {{ summary.roster }} student{{ '' if summary.roster == 1 else 's' }} under your proctorship
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.proctor_students') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All Proctor Lists
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  {{ stat('On List', summary.roster, 'people', 'primary') }}
+  {{ stat('Linked Accounts', summary.linked, 'link-45deg', 'success') }}
+  {{ stat('Not Yet Linked', summary.unlinked, 'question-circle', 'warning') }}
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-list-check"></i> Proctored Rolls</h2>
+    <span class="form-text">Permission requests from these students come to you</span>
+  </div>
+
+  {% if members %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Contact</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in members %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td>{{ roll(member.roll_number) }}</td>
+          <td class="text-nowrap">
+            {% if member.is_linked %}
+              {{ member.student_name }}
+            {% else %}
+              <span class="text-muted">Not provisioned</span>
+            {% endif %}
+          </td>
+          <td class="small text-muted">
+            {% if member.is_linked %}
+              {{ member.student_email or '—' }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <form method="post" class="d-inline"
+                  action="{{ url_for('faculty.delete_proctor_member', group_id=group.id, member_id=member.id) }}"
+                  onsubmit="return confirm('Remove {{ member.roll_number }} from this proctor list?');">
+              {{ csrf_field() }}
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="Remove from list">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>{{ summary.linked }} of {{ summary.roster }} rolls linked to student accounts.</span>
+  </div>
+  {% else %}
+    {{ empty_state('upload', 'List is empty',
+                   'Upload a spreadsheet of roll numbers to add the students you proctor.') }}
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-6">
+    <div class="card-au">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload / Replace Roster</h2></div>
+      <div class="card-au__body">
+        <form method="post" enctype="multipart/form-data"
+              action="{{ url_for('faculty.upload_proctor_roster', group_id=group.id) }}">
+          {{ csrf_field() }}
+          <label for="roster" class="form-label">Spreadsheet of roll numbers</label>
+          <input type="file" class="form-control mb-3" id="roster" name="roster"
+                 accept=".xlsx,.xlsm,.csv,.txt" required>
+          <div class="form-text mb-3">
+            Excel (.xlsx, .xlsm) or CSV. One roll number per row; a header row is
+            skipped. Existing rows are updated, not duplicated.
+          </div>
+          <button type="submit" class="btn btn-primary btn-pill">
+            <i class="bi bi-upload"></i> Import roster
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card-au" style="border-left:3px solid var(--au-danger)">
+      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-trash"></i> Delete List</h2></div>
+      <div class="card-au__body">
+        <p class="small text-muted">
+          Removes <strong>{{ group.name }}</strong> and its
+          {{ summary.roster }} {{ 'entry' if summary.roster == 1 else 'entries' }}.
+          Requests already routed to you are not affected.
+        </p>
+        <form method="post" action="{{ url_for('faculty.delete_proctor_group', group_id=group.id) }}"
+              onsubmit="return confirm('Delete {{ group.name }}? This cannot be undone.');">
+          {{ csrf_field() }}
+          <button type="submit" class="btn btn-outline-danger btn-pill">
+            <i class="bi bi-trash"></i> Delete this list
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

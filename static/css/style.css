@@ -723,6 +723,22 @@ a:hover { text-decoration: underline; }
 .table-au__actions { text-align: right; white-space: nowrap; }
 .table-au__strong { font-weight: 600; }
 
+/* A row waiting on the HOD carries a tint so the actionable part of a long
+   register reads at a glance. Kept to the first cell's edge rather than the
+   whole row, so zebra striping still scans. */
+.table-au__row--actionable td:first-child {
+  box-shadow: inset 3px 0 0 var(--au-primary);
+}
+
+/* The register filter bar pins under the header while a long table scrolls.
+   Top offset clears the fixed top bar; the card's own background keeps rows
+   from showing through. */
+.toolbar-sticky {
+  position: sticky;
+  top: 64px;
+  z-index: 5;
+}
+
 .table-foot {
   display: flex;
   flex-wrap: wrap;

@@ -1,4 +1,5 @@
 from datetime import date, datetime, time
+from typing import Optional
 
 from flask import current_app
 
@@ -7,7 +8,8 @@ from app.models import (
     User,
 )
 from app.models.permission import (
-    ApprovalModel, PermissionModel, ProofModel, normalise_members,
+    ApprovalModel, PermissionModel, ProofModel, classify_route,
+    normalise_members,
 )
 from app.models.user import UserModel
 from app.utils import email as mailer
@@ -148,6 +150,106 @@ def pick_faculty(student: User) -> User:
     return chosen
 
 
+def _configured_reviewer(setting_id) -> Optional[User]:
+    """The HOD's named reviewer for a queue, if they still hold the role.
+
+    A lecturer who has since been deactivated -- or whose account changed --
+    must not silently receive requests, so anything that is not an active
+    LECTURER reads as "not configured" and the next routing rule applies.
+    """
+    if not setting_id:
+        return None
+    user = UserModel.find_by_id(setting_id)
+    if user is not None and user.is_active and user.is_lecturer:
+        return user
+    return None
+
+
+def find_proctor_for_student(student: User) -> Optional[User]:
+    """The lecturer whose proctor list carries this student's roll number.
+
+    Proctoring and teaching are different lists: a lecturer teaches classes but
+    proctors rolls. The default queue is the proctor's, found through the
+    PROCTOR groups rather than the class rosters. When several lecturers
+    proctor the same roll, the one with the smallest open queue takes it.
+    """
+    from app.models.firestore import store
+
+    roll = (student.roll_number or '').strip().upper()
+    if not roll:
+        return None
+
+    owners = set()
+    for member_row in store.documents('class_members', roll_number=roll):
+        group_row = store.get('class_groups', member_row.get('class_id'))
+        if not group_row or group_row.get('kind') != 'PROCTOR':
+            continue
+        faculty_id = group_row.get('faculty_id')
+        if faculty_id:
+            owners.add(faculty_id)
+    if not owners:
+        return None
+
+    open_counts = {}
+    for row in store.documents('permission_requests',
+                               status=RequestStatus.PENDING.value):
+        faculty_id = row.get('assigned_faculty_id')
+        if faculty_id:
+            open_counts[faculty_id] = open_counts.get(faculty_id, 0) + 1
+
+    candidates = []
+    for faculty_id in owners:
+        user = UserModel.find_by_id(faculty_id)
+        if user is not None and user.is_active and user.is_lecturer:
+            candidates.append(user)
+    if not candidates:
+        return None
+    return min(candidates,
+               key=lambda u: (open_counts.get(u.id, 0), u.name or ''))
+
+
+def resolve_faculty(student: User, reason: str) -> User:
+    """Who reviews this request: event desk, curricular desk, or the proctor.
+
+    The HOD names one reviewer for hackathon/event requests and one for
+    curricular requests; everything else goes to the student's own proctor by
+    default, falling back to the general proctor and then to the least-loaded
+    lecturer. Each step degrades to the next, so an unconfigured queue or a
+    lecturer who left can never leave a request with nowhere to go.
+
+    The store reads are guarded rather than trusted: this runs inside
+    submission, and a routing lookup must never fail a student's request when
+    the fallback -- the old least-loaded behaviour -- is right there.
+    """
+    from app.models.settings import SettingsModel
+    import logging
+
+    category = classify_route(reason)
+    try:
+        routing = SettingsModel.get_routing()
+        if category == 'EVENT':
+            reviewer = _configured_reviewer(routing.get('event_faculty_id'))
+            if reviewer is not None:
+                return reviewer
+        elif category == 'CURRICULAR':
+            reviewer = _configured_reviewer(
+                routing.get('curricular_faculty_id'))
+            if reviewer is not None:
+                return reviewer
+        else:
+            proctor = find_proctor_for_student(student)
+            if proctor is not None:
+                return proctor
+            reviewer = _configured_reviewer(routing.get('general_faculty_id'))
+            if reviewer is not None:
+                return reviewer
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Routing lookup failed; falling back to least-loaded lecturer')
+
+    return pick_faculty(student)
+
+
 def submit_request(*, student: User, permission_type: str, reason: str,
                    start_date_raw: str, end_date_raw: str, start_time_raw: str,
                    end_time_raw: str, proof_file, base_url: str,
@@ -212,7 +314,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
     except UploadError as exc:
         raise ValidationError(str(exc))
 
-    faculty = pick_faculty(student)
+    faculty = resolve_faculty(student, reason)
 
     request_record = PermissionModel.create(
         student_id=student.id,
@@ -224,6 +326,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
         end_time=end_time,
         assigned_faculty_id=faculty.id,
         member_ids=member_id_list,
+        route_category=classify_route(reason),
     )
 
     ProofModel.create(
@@ -250,14 +353,19 @@ def act_on_request(*, request_id: int, faculty: User, action: ApprovalAction,
                    remarks: str, base_url: str) -> None:
     """Apply a lecturer's decision, record history, and notify student + HOD.
 
-    An approval here is a *recommendation*, not the grant: the request moves to
-    AWAITING_HOD and only the HOD can turn it into an APPROVED permission. A
-    rejection is final, because there is nothing left for the HOD to decide once
-    the reviewing lecturer has refused it.
+    Three outcomes, and they mean different things:
 
-    The student's notification says which of the two happened. Telling them
-    "approved" here and then having the HOD reject it is the one way this design
-    could still lose a student's trust.
+    - APPROVED is a final grant by the lecturer. The permission is issued here;
+      nobody else has to sign it.
+    - FORWARDED is verification without a grant: the lecturer checked the
+      request but cannot permit it themselves, so it moves to AWAITING_HOD and
+      only the HOD can turn it into an APPROVED permission.
+    - REJECTED is final, because there is nothing left for the HOD to decide
+      once the reviewing lecturer has refused it.
+
+    The student's notification says which of the three happened. Telling them
+    "approved" for a forward and then having the HOD reject it is the one way
+    this design could still lose a student's trust.
     """
     record = PermissionModel.find_by_id(request_id)
     if record is None:
@@ -269,11 +377,12 @@ def act_on_request(*, request_id: int, faculty: User, action: ApprovalAction,
     if student is None:
         raise ValidationError('The student record is missing.')
 
-    status = (
-        RequestStatus.AWAITING_HOD
-        if action == ApprovalAction.APPROVED
-        else RequestStatus.REJECTED
-    )
+    if action == ApprovalAction.APPROVED:
+        status = RequestStatus.APPROVED
+    elif action == ApprovalAction.FORWARDED:
+        status = RequestStatus.AWAITING_HOD
+    else:
+        status = RequestStatus.REJECTED
 
     PermissionModel.update_status(request_id, status, faculty_id=faculty.id)
     ApprovalModel.create(request_id, faculty.id, action, (remarks or '').strip())
@@ -299,10 +408,11 @@ def hod_act_on_request(*, request_id: int, hod: User, action: ApprovalAction,
                        member_ids=None) -> None:
     """The HOD's decision, which is the one that settles the permission.
 
-    Only a request the lecturer has already recommended can be actioned here. A
-    request still PENDING has not been reviewed by anybody, so treating it as
-    approvable would hand the HOD a shortcut around the stage the workflow puts
-    between them.
+    Only a request the lecturer has verified and forwarded can be actioned
+    here. A request still PENDING has not been reviewed by anybody, and a
+    request the lecturer approved outright is already granted -- so treating
+    either as approvable would hand the HOD a shortcut around the stage the
+    workflow puts between them.
 
     On a group permission the HOD may strike members off before approving, which
     is the whole reason the approved subset is stored separately from the

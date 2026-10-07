@@ -19,9 +19,12 @@ from flask import (
 from app.models import (
     ApprovalAction, PermissionType, RequestStatus, UserRole,
 )
-from app.models.classes import AttendanceModel, ClassModel, MemberModel
+from app.models.classes import (
+    AttendanceModel, ClassModel, MemberModel, KIND_CLASS, KIND_PROCTOR,
+)
 from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
+    classify_route,
 )
 from app.models.user import UserModel
 from app.permissions.pages import permission_required
@@ -38,6 +41,21 @@ def _parse_date(value, default):
     except (TypeError, ValueError):
         return default
 
+
+def annotate_routes(requests):
+    """Stamp the review queue each request arrived through.
+
+    New rows carry it; older rows are classified from the reason text, so the
+    register reads the same value for both.
+    """
+    for record in requests:
+        record.route_display = (
+            getattr(record, 'route_category', None)
+            or classify_route(getattr(record, 'reason', ''))
+        )
+    return requests
+
+
 faculty_bp = Blueprint('faculty', __name__, url_prefix='/faculty')
 
 APP_ROOT = 'https://cse-permission.adityauniversity.in'
@@ -48,7 +66,10 @@ APP_ROOT = 'https://cse-permission.adityauniversity.in'
 def dashboard():
     user = current_user()
     pending = PermissionModel.find_pending_for_faculty(user.id)
+    attach_members(pending)
+    annotate_routes(pending)
     history = PermissionModel.find_all_for_hod(limit=50)
+    annotate_routes(history)
 
     return render_template(
         'faculty/dashboard.html',
@@ -70,6 +91,10 @@ def request_detail(request_id: int):
     if user.is_lecturer and record.assigned_faculty_id != user.id:
         abort(403)
 
+    # The group list on this page reads member_details; without it a group
+    # renders as a solo request and the reviewer decides half-blind.
+    attach_members([record])
+    annotate_routes([record])
     student = UserModel.find_by_id(record.student_id)
     proofs = ProofModel.find_by_request(request_id)
     history = ApprovalModel.find_by_request(request_id)
@@ -87,21 +112,36 @@ def request_detail(request_id: int):
 @faculty_bp.route('/requests/<int:request_id>/action', methods=['POST'])
 @permission_required('faculty.action')
 def action(request_id: int):
+    """The lecturer's decision: grant it, forward it, or refuse it.
+
+    Approving grants the permission outright -- the HOD never sees it. A
+    lecturer who has verified the request but cannot permit it forwards it
+    instead, which is the only path that reaches the HOD. Rejecting ends it.
+    Forwarding and rejecting both need a remark, because the HOD (or the
+    student) has to know why.
+    """
     user = current_user()
     decision = request.form.get('decision', '').lower()
     remarks = (request.form.get('remarks') or '').strip()
 
-    if decision not in ('approve', 'reject'):
-        flash('Choose approve or reject.', 'danger')
+    if decision not in ('approve', 'forward', 'reject'):
+        flash('Choose approve, forward to HOD, or reject.', 'danger')
         return redirect(url_for('faculty.request_detail', request_id=request_id))
 
-    if decision == 'reject' and len(remarks) < 5:
-        flash('Add a remark so the student understands the rejection.', 'danger')
+    if decision in ('reject', 'forward') and len(remarks) < 5:
+        if decision == 'reject':
+            flash('Add a remark so the student understands the rejection.',
+                  'danger')
+        else:
+            flash('Add a remark so the HOD knows why this needs their decision.',
+                  'danger')
         return redirect(url_for('faculty.request_detail', request_id=request_id))
 
-    action_enum = (
-        ApprovalAction.APPROVED if decision == 'approve' else ApprovalAction.REJECTED
-    )
+    action_enum = {
+        'approve': ApprovalAction.APPROVED,
+        'forward': ApprovalAction.FORWARDED,
+        'reject': ApprovalAction.REJECTED,
+    }[decision]
 
     try:
         act_on_request(
@@ -115,8 +155,12 @@ def action(request_id: int):
         flash(str(exc), 'danger')
         return redirect(url_for('faculty.request_detail', request_id=request_id))
 
-    verb = 'approved' if decision == 'approve' else 'rejected'
-    flash(f'Request #{request_id} {verb}.', 'success')
+    verbs = {
+        'approve': 'approved',
+        'forward': 'verified and forwarded to the HOD',
+        'reject': 'rejected',
+    }
+    flash(f'Request #{request_id} {verbs[decision]}.', 'success')
     return redirect(url_for('faculty.dashboard'))
 
 
@@ -227,12 +271,12 @@ def _class_rolls_for(viewer, roll_number: str) -> list:
 @faculty_bp.route('/classes')
 @permission_required('faculty.classes')
 def classes():
-    """List the viewing lecturer's classes."""
+    """List the viewing lecturer's taught classes (not their proctor lists)."""
     user = current_user()
     # Pick up any roster rows saved before those students first signed in.
     linked_now = MemberModel.relink_unresolved()
 
-    owned = ClassModel.find_for_faculty(user.id)
+    owned = ClassModel.find_for_faculty(user.id, kind=KIND_CLASS)
 
     return render_template(
         'faculty/classes.html',
@@ -440,12 +484,156 @@ def attendance(class_id: int):
 
 def _owned_class(user, class_id: int):
     """Fetch a class, guaranteeing the viewer owns it (admins may read any)."""
-    group = ClassModel.find_by_id(class_id)
+    return _owned_group(user, class_id, KIND_CLASS)
+
+
+def _owned_group(user, group_id: int, kind: str = None):
+    """Fetch a group, guaranteeing the viewer owns it (admins may read any).
+
+    `kind` additionally pins the page to the right list: a proctor URL must
+    not open a taught class and vice versa, or the two lists the faculty keeps
+    would silently mix.
+    """
+    group = ClassModel.find_by_id(group_id)
     if group is None:
         abort(404)
     if not user.is_hod and group.faculty_id != user.id:
         abort(403)
+    if kind and (group.kind or KIND_CLASS) != kind:
+        abort(404)
     return group
+
+
+@faculty_bp.route('/proctor')
+@permission_required('faculty.proctor_students')
+def proctor_students():
+    """The lecturer's proctor lists: rolls whose requests they review.
+
+    Separate from the classes they teach. A class has attendance and
+    timetables; a proctor list only decides whose permission requests land in
+    this queue.
+    """
+    user = current_user()
+    linked_now = MemberModel.relink_unresolved()
+
+    groups = ClassModel.find_for_faculty(user.id, kind=KIND_PROCTOR)
+
+    return render_template(
+        'faculty/proctor.html',
+        user=user,
+        groups=groups,
+        linked_now=linked_now,
+    )
+
+
+@faculty_bp.route('/proctor/new', methods=['POST'])
+@permission_required('faculty.create_proctor_group')
+def create_proctor_group():
+    user = current_user()
+    name = (request.form.get('name') or '').strip()
+
+    if len(name) < 3:
+        flash('Give the proctor list a name of at least 3 characters.', 'danger')
+        return redirect(url_for('faculty.proctor_students'))
+
+    try:
+        group = ClassModel.create(
+            name=name,
+            faculty_id=user.id,
+            section_code=(request.form.get('section_code') or '').strip(),
+            academic_year=(request.form.get('academic_year') or '').strip(),
+            kind=KIND_PROCTOR,
+        )
+    except Exception:
+        flash('The proctor list could not be created. Please try again.', 'danger')
+        return redirect(url_for('faculty.proctor_students'))
+
+    flash(f'Proctor list "{group.name}" created. Upload a roster to add students.',
+          'success')
+    return redirect(url_for('faculty.proctor_group_detail', group_id=group.id))
+
+
+@faculty_bp.route('/proctor/<int:group_id>')
+@permission_required('faculty.proctor_group_detail')
+def proctor_group_detail(group_id: int):
+    """One proctor list and the rolls on it."""
+    user = current_user()
+    group = _owned_group(user, group_id, KIND_PROCTOR)
+
+    members = MemberModel.find_by_class(group_id)
+    summary = {
+        'roster': len(members),
+        'linked': sum(1 for m in members if m.is_linked),
+        'unlinked': sum(1 for m in members if not m.is_linked),
+    }
+
+    return render_template(
+        'faculty/proctor_detail.html',
+        user=user,
+        group=group,
+        members=members,
+        summary=summary,
+    )
+
+
+@faculty_bp.route('/proctor/<int:group_id>/roster', methods=['POST'])
+@permission_required('faculty.upload_proctor_roster')
+def upload_proctor_roster(group_id: int):
+    """Bulk-add roll numbers to a proctor list from an Excel or CSV roster."""
+    user = current_user()
+    _owned_group(user, group_id, KIND_PROCTOR)
+
+    upload = request.files.get('roster')
+    try:
+        rolls = parse_roster(upload)
+    except RosterError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.proctor_group_detail', group_id=group_id))
+
+    result = MemberModel.add_members(group_id, rolls)
+
+    message = (
+        f'Added {result["added"]} roll number'
+        f'{"" if result["added"] == 1 else "s"} '
+        f'({result["linked"]} matched to student accounts).'
+    )
+    flash(message, 'success')
+
+    if result['unresolved']:
+        preview = ', '.join(result['unresolved'][:6])
+        more = '' if len(result['unresolved']) <= 6 else \
+            f' and {len(result["unresolved"]) - 6} more'
+        flash(
+            f'{len(result["unresolved"])} roll numbers have no student account '
+            f'yet ({preview}{more}). They will link automatically once those '
+            'students sign in.',
+            'warning',
+        )
+
+    return redirect(url_for('faculty.proctor_group_detail', group_id=group_id))
+
+
+@faculty_bp.route('/proctor/<int:group_id>/members/<int:member_id>/delete',
+                  methods=['POST'])
+@permission_required('faculty.delete_proctor_member')
+def delete_proctor_member(group_id: int, member_id: int):
+    user = current_user()
+    _owned_group(user, group_id, KIND_PROCTOR)
+
+    if MemberModel.delete_member(member_id):
+        flash('Student removed from the proctor list.', 'success')
+    return redirect(url_for('faculty.proctor_group_detail', group_id=group_id))
+
+
+@faculty_bp.route('/proctor/<int:group_id>/delete', methods=['POST'])
+@permission_required('faculty.delete_proctor_group')
+def delete_proctor_group(group_id: int):
+    user = current_user()
+    group = _owned_group(user, group_id, KIND_PROCTOR)
+
+    if ClassModel.delete(group_id):
+        flash(f'Proctor list "{group.name}" deleted.', 'success')
+    return redirect(url_for('faculty.proctor_students'))
 
 
 def _permissions_for_date(members, on_date: date):
@@ -590,7 +778,7 @@ def _faculty_stats(faculty_id: int) -> dict:
     ]
 
     stats['trend'] = _trend_for(faculty_id)
-    stats['classes'] = ClassModel.find_for_faculty(faculty_id)
+    stats['classes'] = ClassModel.find_for_faculty(faculty_id, kind=KIND_CLASS)
     return stats
 
 
@@ -696,6 +884,12 @@ def _filtered_requests(status_filter, type_filter, date_from, date_to,
             row = store.get('users', faculty_id_value)
             faculty_names[faculty_id_value] = row.get('name') if row else None
         record.faculty_name = faculty_names.get(faculty_id_value)
+        # Rows written before routing existed carry no category; classifying
+        # from the reason keeps the register one value for old and new alike.
+        record.route_display = (
+            getattr(record, 'route_category', None)
+            or classify_route(getattr(record, 'reason', ''))
+        )
 
     requests.sort(key=lambda r: (r.created_at is None,
                                  r.created_at.isoformat() if hasattr(r.created_at, 'isoformat') else '',

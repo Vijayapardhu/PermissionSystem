@@ -70,8 +70,9 @@ to it, and `verify.py` asserts that.
 Every request has a printable letter at `/student/requests/<id>/letter`, reachable
 from the student's detail page, the lecturer's review page, and the HOD daily
 report. It is a formal document: letterhead, "To Whomsoever It May Concern",
-reference number `REQ-0001`, a bordered status block, and Faculty / HOD signature
-blocks.
+reference number `REQ-0001`, a bordered status block, and a named attribution
+line stating who granted it (the reviewing faculty, or the HOD) instead of
+signature blocks.
 
 The status block is colour-coded and states the outcome in words, including:
 
@@ -452,8 +453,8 @@ workflow can be exercised end to end. Set `DEV_MODE=false` once SSO is live — 
 | Role       | Access                                                     |
 |------------|------------------------------------------------------------|
 | `STUDENT`  | Submit requests, upload proof, view own history, withdraw pending |
-| `LECTURER` | Review assigned requests, approve or reject with remarks   |
-| `HOD`      | Analytics dashboard, all-requests filters, printable report |
+| `LECTURER` | Review assigned requests: approve outright, verify & forward to HOD, or reject with remarks; keep a proctor list and taught classes separately |
+| `HOD`      | Decide forwarded requests, import faculty from Excel, set request routing, analytics dashboard, filterable register, printable report |
 
 Roles come solely from the `users.email` column after a verified identity — never from
 client input.
@@ -462,16 +463,22 @@ client input.
 
 ```
 Student (Entra sign-in)
-  -> choose LEAVE or CLASSROOM
+  -> choose activity permission
   -> fill dates, reason, upload proof
-  -> lecturer is auto-assigned (fewest open requests)
+  -> routed by reason: hackathon/event to the event desk, curricular to the
+     curricular desk, everything else to the student's own proctor
+     (general proctor, then least-loaded lecturer as fallbacks)
   -> reviewer notified by Outlook email
 Lecturer
   -> opens request, previews proof inline
-  -> APPROVE or REJECT (remark required to reject)
-Student + HOD notified of the decision
+  -> APPROVE (grants the permission outright), VERIFY & FORWARD to the HOD
+     (for what they cannot permit themselves; remark required), or REJECT
+     (remark required)
+  -> student told which of the three happened; HOD informed, or asked to decide
 HOD
-  -> live charts, filterable approved list, print report
+  -> decides forwarded requests from the register (inline or detail page,
+     striking students off a group where needed)
+  -> live charts, filterable register, print report (HOD signature only)
 ```
 
 ## Project structure
@@ -604,24 +611,52 @@ Design rules:
 | HOD | Overview: Overview, All Requests, Students, Faculty Workload &middot; Academic: Classes, Daily Report &middot; Insights: Analytics |
 | Student | Top nav: Dashboard, New Request, My Requests, My Classes, Account |
 
-## Classes, rosters and attendance
+## Classes, proctor lists and attendance
 
-A lecturer creates a class, then bulk-loads the roster from a spreadsheet.
+A lecturer keeps two separate lists. **My Classes** is what they teach: create
+a class, then bulk-load the roster from a spreadsheet.
 
 ```
 POST /faculty/classes/new          name, section, academic year
 POST /faculty/classes/<id>/roster   .xlsx | .xlsm | .csv | .txt
 ```
 
-The parser tolerates a header row, numbers instead of text, and extra columns
-(`26B21CS058 - Ravi Kumar` still yields the roll number). Roll numbers with no
-student account are **stored anyway** and linked automatically the first time
-that student signs in, so a roster can be loaded before the cohort has ever used
-the portal.
+**Proctor Students** is who they mentor: proctor lists whose rolls have their
+permission requests routed to them. Same spreadsheet upload, no attendance.
+
+```
+GET  /faculty/proctor               proctor lists
+POST /faculty/proctor/new           name, section, academic year
+POST /faculty/proctor/<id>/roster   .xlsx | .xlsm | .csv | .txt
+```
+
+## Request routing
+
+A new request is classified from its reason text (`classify_route` in
+`app/models/permission.py`): hackathons, contests and events go to the event
+queue, curricular reasons to the curricular queue, everything else to the
+student's own proctor. The HOD names one reviewer per special queue -- plus a
+general proctor as fallback -- on the Faculty page, and adds lecturers from an
+Excel sheet with Name and Email columns:
+
+```
+POST /hod/faculty/import    Name + Email spreadsheet -> LECTURER accounts
+POST /hod/faculty/routing   event / curricular / general reviewer
+```
+
+## Attendance
+
+The roster parser tolerates a header row, numbers instead of text, and extra
+columns (`26B21CS058 - Ravi Kumar` still yields the roll number). Roll numbers
+with no student account are **stored anyway** and linked automatically the
+first time that student signs in, so a roster can be loaded before the cohort
+has ever used the portal. The faculty import parser instead finds Name and
+Email columns and reports malformed rows rather than aborting the sheet.
 
 | Feature | Route |
 |---|---|
 | Class list and creation | `/faculty/classes` |
+| Proctor lists and rolls | `/faculty/proctor` |
 | Roster + permissions for a chosen date | `/faculty/classes/<id>?date=YYYY-MM-DD` |
 | Attendance picker | `/faculty/attendance` |
 | Mark attendance | `/faculty/classes/<id>/attendance` |
@@ -665,8 +700,10 @@ double-actioning, cross-role isolation, and HOD analytics and reporting.
 - `MAX_LEAVE_DAYS` in `app/permissions/service.py` caps a single request at 30 days.
 - Reason categorisation for the HOD charts is keyword-based
   (`categorize_reason`) and can be swapped for a lookup table.
-- Reviewer load is balanced automatically: a new request goes to the lecturer with
-  the fewest pending items.
+- Reviewer routing is rule-based with fallbacks: event reasons to the event
+  desk, curricular reasons to the curricular desk, everything else to the
+  student's proctor; unclaimed requests fall back to the general proctor and
+  then to the lecturer with the fewest pending items.
 - Text searches match roll numbers and names case-insensitively in Python
   (`needle in value.upper()`). The original MySQL build searched under a
   case-insensitive collation, so `26b21cs058` matched a stored `26B21CS058`, and

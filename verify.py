@@ -1478,6 +1478,7 @@ def patch_models(user):
     originals = {
         'find_by_id': user_mod.UserModel.find_by_id,
         'get_hods': user_mod.UserModel.get_hods,
+        'get_lecturers': user_mod.UserModel.get_lecturers,
         'find_by_id_req': perm_mod.PermissionModel.find_by_id,
         'find_by_student': perm_mod.PermissionModel.find_by_student,
         'find_pending_for_faculty': perm_mod.PermissionModel.find_pending_for_faculty,
@@ -1500,6 +1501,10 @@ def patch_models(user):
 
     user_mod.UserModel.find_by_id = staticmethod(lambda _id: user)
     user_mod.UserModel.get_hods = staticmethod(lambda: [HOD])
+    # The HOD register offers a reviewer filter, so it reads the lecturer
+    # directory. Stubbed like the HOD list: the harness has no store, and the
+    # page is being exercised for its actions, not its directory.
+    user_mod.UserModel.get_lecturers = staticmethod(lambda: [LECTURER])
     perm_mod.PermissionModel.find_by_id = staticmethod(
         lambda rid: make_request(rid))
     perm_mod.PermissionModel.find_by_student = staticmethod(
@@ -1528,6 +1533,7 @@ def patch_models(user):
     def restore():
         user_mod.UserModel.find_by_id = originals['find_by_id']
         user_mod.UserModel.get_hods = originals['get_hods']
+        user_mod.UserModel.get_lecturers = originals['get_lecturers']
         perm_mod.PermissionModel.find_by_id = originals['find_by_id_req']
         perm_mod.PermissionModel.find_by_student = originals['find_by_student']
         perm_mod.PermissionModel.find_pending_for_faculty = \
@@ -1625,8 +1631,10 @@ try:
           all(token in page for token in ['data-labels', 'data-values']))
 
     page = client.get('/hod/report/print').get_data(as_text=True)
-    check('print report renders signature blocks',
-          'Faculty Signature' in page and 'HOD Signature' in page)
+    check('print report renders the HOD signature block',
+          'HOD Signature' in page)
+    check('  -> and no faculty signature: the report is the HOD\u2019s record',
+          'Faculty Signature' not in page)
     check('print report hides the print button when printing',
           'd-print-none' in page)
     check('print report includes roll numbers',
@@ -3012,23 +3020,44 @@ try:
 finally:
     _restore()
 
-# ---- The two stages ----
+# ---- The lecturer's three decisions ----
 _restore, _log = _with_service_patches(
     {500: make_request(500, RequestStatus.PENDING)}, _overlapping([]))
 try:
     svc.act_on_request(
         request_id=500, faculty=LECTURER,
-        action=ApprovalAction.APPROVED, remarks='Verified',
+        action=ApprovalAction.APPROVED, remarks='Approved',
         base_url='http://localhost',
     )
-    check('a lecturer approval does NOT grant the permission',
-          _log['status'] == [(500, RequestStatus.AWAITING_HOD)],
+    check('a lecturer approval grants the permission outright',
+          _log['status'] == [(500, RequestStatus.APPROVED)],
+          f'got {_log["status"]}')
+    check('  -> the HOD is informed rather than asked to act',
+          'hod-decision' in _log['mails']
+          and 'hod-recommendation' not in _log['mails'])
+    check('  -> and the student is told the decision is final',
+          'student-faculty' in _log['mails'])
+    check('  -> the grant is recorded in the history',
+          len(_log['history']) == 1)
+finally:
+    _restore()
+
+_restore, _log = _with_service_patches(
+    {505: make_request(505, RequestStatus.PENDING)}, _overlapping([]))
+try:
+    svc.act_on_request(
+        request_id=505, faculty=LECTURER,
+        action=ApprovalAction.FORWARDED, remarks='Beyond what I can permit',
+        base_url='http://localhost',
+    )
+    check('a lecturer forward does NOT grant the permission',
+          _log['status'] == [(505, RequestStatus.AWAITING_HOD)],
           f'got {_log["status"]}')
     check('  -> the HOD is asked for the decision',
           'hod-recommendation' in _log['mails'])
-    check('  -> and the student is told it is only a recommendation',
+    check('  -> and the student is told it is only verified, not granted',
           'student-faculty' in _log['mails'])
-    check('  -> the recommendation is recorded in the history',
+    check('  -> the forward is recorded in the history',
           len(_log['history']) == 1)
 finally:
     _restore()
@@ -3091,6 +3120,22 @@ try:
           f'got {_log["status"]}')
 finally:
     _restore()
+
+# ---- Routing: which queue a reason belongs to ----
+check('a hackathon reason routes to the event queue',
+      perm_mod.classify_route(
+          'Smart India Hackathon finals at the regional centre') == 'EVENT')
+check('a contest reason routes to the event queue',
+      perm_mod.classify_route('Inter-college coding contest') == 'EVENT')
+check('a curricular reason routes to the curricular queue',
+      perm_mod.classify_route(
+          'Industrial visit as part of curricular lab work') == 'CURRICULAR')
+check('an ordinary reason routes to the proctor queue',
+      perm_mod.classify_route(
+          'Medical appointment with the dentist at the city hospital')
+      == 'GENERAL')
+check('an empty reason still routes somewhere safe',
+      perm_mod.classify_route('') == 'GENERAL')
 
 # ---- Withdrawal up to the decision ----
 for _open, _label in [(RequestStatus.PENDING, 'pending'),
@@ -3207,8 +3252,9 @@ finally:
     _restore()
     fac_routes._filtered_requests = _real_filter
 
-# A lecturer holds `faculty.action`, which recommends. They do not hold
-# `hod.request_action`, which grants. The same POST has to be refused.
+# A lecturer holds `faculty.action`, which decides: approve outright, verify and
+# forward, or reject. They do not hold `hod.request_action`, which is the
+# HOD's own verdict on a forwarded request. The same POST has to be refused.
 _restore = patch_models(LECTURER)
 try:
     with client.session_transaction() as sess:

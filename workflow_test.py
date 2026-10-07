@@ -224,6 +224,7 @@ status, html = get(lecturer, f'/faculty/requests/{request_id}')
 check('lecturer can open the request', status == 200)
 check('student details visible', '26B21CS058' in html and '26B21CS058' in html)
 check('approve control present', 'value="approve"' in html)
+check('forward-to-HOD control present', 'value="forward"' in html)
 check('reject control present', 'value="reject"' in html)
 
 status, html = post_with_csrf(lecturer, f'/faculty/requests/{request_id}/action',
@@ -281,8 +282,8 @@ check('HOD filters apply', status == 200 and 'Approved' in html)
 
 status, html = get(hod, '/hod/report/print')
 check('print report renders', status == 200)
-check('report has signature blocks',
-      'Faculty Signature' in html and 'HOD Signature' in html)
+check('report carries the HOD signature only',
+      'Faculty Signature' not in html and 'HOD Signature' in html)
 check('report hides UI when printing', 'd-print-none' in html)
 
 # Verify the report lists exactly the records active on the report date, by

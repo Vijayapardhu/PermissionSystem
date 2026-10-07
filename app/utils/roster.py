@@ -25,6 +25,113 @@ class RosterError(Exception):
     """Raised when the uploaded roster cannot be read at all."""
 
 
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def parse_faculty_roster(file_storage: FileStorage) -> dict:
+    """Return {'entries': [{'name', 'email', 'row'}], 'errors': [...]}.
+
+    The HOD uploads a spreadsheet of lecturers with Name and Email columns and
+    each row becomes a LECTURER account. The header is found by content rather
+    than position, so "Faculty Name | Email ID" works as well as "Name |
+    Email". Rows with a missing name or a malformed email are reported rather
+    than aborting the whole import, because a 40-row sheet should not fail on
+    row 37.
+    """
+    filename = (file_storage.filename or '').lower()
+    extension = filename.rsplit('.', 1)[-1] if '.' in filename else ''
+
+    if extension not in ALLOWED_ROSTER_EXTENSIONS:
+        raise RosterError(
+            'Upload an Excel workbook (.xlsx, .xlsm) or a CSV file.'
+        )
+
+    file_storage.stream.seek(0)
+    raw = file_storage.stream.read()
+    file_storage.stream.seek(0)
+
+    if not raw:
+        raise RosterError('The uploaded file is empty.')
+
+    if extension in ('xlsx', 'xlsm'):
+        rows = _faculty_xlsx_rows(raw)
+    else:
+        rows = _faculty_delimited_rows(raw)
+
+    header_at = None
+    name_idx = email_idx = None
+    for lineno, row in enumerate(rows):
+        cells = [(str(cell).strip().lower() if cell is not None else '')
+                 for cell in row]
+        name_hit = next((i for i, cell in enumerate(cells)
+                         if 'name' in cell), None)
+        email_hit = next((i for i, cell in enumerate(cells)
+                          if 'email' in cell or 'mail' in cell), None)
+        if name_hit is not None and email_hit is not None:
+            header_at, name_idx, email_idx = lineno, name_hit, email_hit
+            break
+
+    if header_at is None:
+        raise RosterError(
+            'No header row with Name and Email columns was found. '
+            'The first row should name the columns, e.g. "Name, Email".'
+        )
+
+    entries, errors, seen = [], [], set()
+    for lineno, row in enumerate(rows[header_at + 1:], start=header_at + 2):
+        name = str(row[name_idx]).strip() if len(row) > name_idx and row[name_idx] is not None else ''
+        email = (str(row[email_idx]).strip().lower() if len(row) > email_idx and row[email_idx] is not None else '')
+        if not name and not email:
+            continue
+        if not name:
+            errors.append(f'Row {lineno}: missing name for {email or "this entry"}.')
+            continue
+        if not _EMAIL_RE.match(email):
+            errors.append(f'Row {lineno}: "{email or "—"}" is not a valid email.')
+            continue
+        if email in seen:
+            errors.append(f'Row {lineno}: {email} appears twice in the sheet.')
+            continue
+        seen.add(email)
+        entries.append({'name': name, 'email': email, 'row': lineno})
+
+    if not entries and not errors:
+        raise RosterError('No faculty rows were found below the header row.')
+    return {'entries': entries, 'errors': errors}
+
+
+def _faculty_xlsx_rows(raw: bytes) -> list:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        raise RosterError(
+            'Excel support is unavailable. Install openpyxl or upload a CSV file.'
+        )
+
+    try:
+        workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    except Exception as exc:
+        raise RosterError(f'The workbook could not be read: {exc}')
+
+    try:
+        sheet = workbook.worksheets[0]
+        return [list(row) for row in sheet.iter_rows(values_only=True)]
+    finally:
+        workbook.close()
+
+
+def _faculty_delimited_rows(raw: bytes) -> list:
+    for encoding in ('utf-8-sig', 'utf-8', 'latin-1'):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:  # pragma: no cover - latin-1 cannot fail
+        raise RosterError('The file could not be decoded as text.')
+    return [row for row in csv.reader(io.StringIO(text))]
+
+
 def parse_roster(file_storage: FileStorage) -> list:
     """Return a list of uppercased roll numbers found in the uploaded sheet."""
     filename = (file_storage.filename or '').lower()
