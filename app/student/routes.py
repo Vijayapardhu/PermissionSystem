@@ -80,8 +80,12 @@ def dashboard():
 @permission_required('student.new_request')
 def new_request():
     user = current_user()
+    from app.models.events import EventModel
+    events = EventModel.list_tree()
 
     if request.method == 'POST':
+        event_id_raw = (request.form.get('event_id') or '').strip()
+        event_id = int(event_id_raw) if event_id_raw.isdigit() else None
         try:
             request_id = submit_request(
                 student=user,
@@ -95,13 +99,9 @@ def new_request():
                 base_url=url_for('faculty.dashboard', _external=True).rsplit('/', 1)[0],
                 duplicate_ack=bool(request.form.get('duplicate_ack')),
                 member_ids=request.form.getlist('member_ids'),
+                event_id=event_id,
             )
         except DuplicateRequestError as exc:
-            # Caught ahead of ValidationError: it is a subclass, so the order is
-            # what keeps the overlapping requests on screen instead of only their
-            # count, each labelled with the student it belongs to. The form comes
-            # back with the student's values intact and the proof field cleared,
-            # because nothing was uploaded on this attempt.
             flash(str(exc), 'warning')
             return render_template(
                 'student/new_request.html',
@@ -112,6 +112,7 @@ def new_request():
                                 for c in exc.clashes},
                 selected_members=resolve_members(
                     user, request.form.getlist('member_ids')),
+                events=events,
             )
         except ValidationError as exc:
             flash(str(exc), 'danger')
@@ -119,6 +120,7 @@ def new_request():
                 'student/new_request.html', user=user, form=request.form,
                 selected_members=resolve_members(
                     user, request.form.getlist('member_ids')),
+                events=events,
             )
 
         flash(f'Request #{request_id} submitted and sent for review.', 'success')
@@ -129,6 +131,7 @@ def new_request():
         user=user,
         form={},
         default_type='CLASSROOM',
+        events=events,
     )
 
 

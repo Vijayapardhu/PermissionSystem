@@ -281,7 +281,7 @@ def submit_request(*, student: User, permission_type: str, reason: str,
                    start_date_raw: str, end_date_raw: str, start_time_raw: str,
                    end_time_raw: str, proof_file, base_url: str,
                    duplicate_ack: bool = False,
-                   member_ids=None) -> int:
+                   member_ids=None, event_id=None) -> int:
     """Validate, persist the request and its proof, then notify the reviewer."""
     # Checked against the offerable list, not the enum: leave management is
     # retired but `PermissionType.LEAVE` still exists so historical rows can be
@@ -341,7 +341,12 @@ def submit_request(*, student: User, permission_type: str, reason: str,
     except UploadError as exc:
         raise ValidationError(str(exc))
 
-    event = resolve_event(reason)
+    event = None
+    if event_id is not None:
+        from app.models.events import EventModel
+        event = EventModel.find_by_id(event_id)
+    else:
+        event = resolve_event(reason)
     faculty = resolve_faculty(student, reason, event)
 
     request_record = PermissionModel.create(

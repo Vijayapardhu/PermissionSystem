@@ -220,6 +220,25 @@
     <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-calendar-week"></i> 4 &middot; Schedule &amp; Reason</h2></div>
     <div class="card-au__body">
       <div class="row g-3">
+        {% if events %}
+        <div class="col-12">
+          <label for="event_id" class="form-label">Event <span class="text-muted fw-normal">(optional)</span></label>
+          <select class="form-select" id="event_id" name="event_id">
+            <option value="">No specific event</option>
+            {% for main in events %}
+            <optgroup label="{{ main.name }}">
+              <option value="{{ main.id }}" {{ 'selected' if form.get('event_id') == main.id|string }}>{{ main.name }}</option>
+              {% for sub in main.subs %}
+              <option value="{{ sub.id }}" {{ 'selected' if form.get('event_id') == sub.id|string }}>{{ sub.name }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+          <div class="form-text">
+            Select the event this request is for. It will be routed directly to the event coordinator.
+          </div>
+        </div>
+        {% endif %}
         <div class="col-md-6">
           <label for="start_date" class="form-label">From date <span class="text-danger">*</span></label>
           <input type="date" class="form-control" id="start_date" name="start_date"
