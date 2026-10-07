@@ -1924,6 +1924,32 @@ if os.path.isfile(logo_path) and os.path.isfile(crest_path) and Image:
                   '@media (pointer: coarse)', 'overflow-x: auto'):
         check(f'responsive CSS includes {token}', token in css)
 
+    # Printed output must be a document, not the app UI. Every shell page
+    # carries the print header and the print stylesheet hides the chrome
+    # (sidebar, top bar, buttons, forms, action columns) while keeping the
+    # data tables, so any Print button yields paper, not screenshots.
+    _base = open('templates/base.html', encoding='utf-8').read()
+    check('every shell page carries the print-document header',
+          'print-doc-head' in _base
+          and "asset('js/print.js')" in _base)
+    # The header mark is the crest, not the wordmark: shell HTML must keep
+    # exactly one aditya-logo.png (sidebar_test asserts the count), and the
+    # square emblem suits the compact header row better anyway.
+    check('print header uses the crest, not a second wordmark',
+          'print-doc-head__logo' in _base
+          and 'aditya-logo' not in _base)
+    check('the print filler reads the page heading, not a hardcoded title',
+          os.path.isfile('static/js/print.js')
+          and 'page-head__title' in open('static/js/print.js',
+                                         encoding='utf-8').read()
+          and 'beforeprint' in open('static/js/print.js',
+                                    encoding='utf-8').read())
+    for token in ('.au-sidebar-wrap', '.page-head__actions', '.table-au__actions',
+                  'iframe.proview', '.print-doc-head__title',
+                  'print-color-adjust: exact', '@page'):
+        check(f'print CSS covers {token}', token in css,
+              'printed pages would carry app chrome or lose their colours')
+
     # request.path must never be used in a template: child templates pass a
     # PermissionRequest as `request`, which shadows Flask's request proxy.
     shadowed = []
@@ -3239,6 +3265,9 @@ try:
           f'status {_reg_resp.status_code}')
     check('  -> and the reject action', 'REJECTED' in _reg,
           f'status {_reg_resp.status_code}')
+    check('  -> the page prints as a document, not the app UI',
+          'print-doc-head' in _reg and 'data-print-date' in _reg,
+          'no print-document header in the register')
     check('  -> and the dashboard counts the queue separately',
           'Awaiting HOD' in client.get('/hod/dashboard').get_data(as_text=True))
 

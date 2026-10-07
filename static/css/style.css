@@ -1298,18 +1298,115 @@ a:hover { text-decoration: underline; }
 
 /* ========================== Print ========================== */
 
+/* The printed-document header lives in the markup of every shell page but
+   must never appear on screen. */
+.print-doc-head { display: none; }
+
 @media print {
   .no-print, .no-print * { display: none !important; }
 
+  /* A printed document is always black on white, whatever theme the screen
+     is using. Declared after the dark block so it wins by source order. */
+  :root { color-scheme: light; }
+  [data-bs-theme='dark'] {
+    --au-page-bg: #ffffff;
+    --au-surface: #ffffff;
+    --au-surface-panel: #f8fafc;
+    --au-surface-alt: #fbfcfe;
+    --au-primary: #004e92;
+    --au-primary-dark: #003666;
+    --au-primary-soft: #e8f0fe;
+    --au-text: #16202f;
+    --au-text-muted: #5b6879;
+    --au-text-faint: #8b96a5;
+    --au-border: #cbd5e1;
+    --au-border-strong: #94a3b8;
+    --au-success-soft: #d8f5e9; --au-success-text: #046c4e;
+    --au-warning-soft: #fdf0d5; --au-warning-text: #92400e;
+    --au-danger-soft: #fde5e5;  --au-danger-text: #991b1b;
+    --bs-link-color: #004e92;
+  }
+
+  /* Every panel keeps its background fills: without this the printed sheet
+     keeps the text and loses the status colours, the zebra rows and the
+     badges -- the undesigned look the letter CSS already guards against. */
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   body, .report-shell { background: #fff !important; padding: 0 !important; }
 
-  .page-wrap { max-width: none; padding: 0 !important; }
+  /* ---- App chrome goes; only the document stays ----
+     Sidebar, top bar, footer, headings' action buttons, every form (filters,
+     decisions, uploads -- all controls, no records), every button, flash
+     messages, breadcrumbs, proof preview frames and the register's action
+     column have no meaning on paper. */
+  .au-sidebar-wrap, .app-topbar, .au-foot,
+  .page-head__actions, .toolbar, .toolbar-sticky, form,
+  .btn, .btn-close, .breadcrumb, .alert, .au-flashes,
+  .table-au__actions, iframe.proview,
+  .member-picker__search, .stat__icon { display: none !important; }
+  .toolbar-sticky { position: static; }
+
+  .au-app, .au-app__main { display: block; }
+  .au-content, .page-wrap, .page-wrap-narrow {
+    max-width: none; margin: 0; padding: 0 !important;
+  }
+
+  /* ---- The document header ---- */
+  .print-doc-head {
+    display: flex; align-items: center; gap: 6mm;
+    padding-bottom: 4mm; margin-bottom: 5mm;
+    border-bottom: 2.5px solid #b5730f;
+  }
+  .print-doc-head__logo { width: 20mm; max-width: 45%; object-fit: contain; }
+  .print-doc-head__univ { font-weight: 700; font-size: 1rem; color: #101c33; }
+  .print-doc-head__dept { font-size: .8rem; color: #475569; }
+  .print-doc-head__title { font-size: 1.25rem; font-weight: 700; color: #101c33; margin: .35rem 0 .1rem; }
+  .print-doc-head__meta { font-size: .75rem; color: #6b7688; }
+
+  /* The on-screen page heading would repeat the header title verbatim. */
+  .page-head { margin-bottom: .4rem; }
+  .page-head__title, .page-head__sub { display: none; }
+
+  /* ---- Document tables ----
+     Full grid lines, a shaded header that repeats on every sheet, rows that
+     never split across pages, and no sideways scrolling: a wide register
+     wraps instead of running off the paper. */
+  .au-table-wrap { overflow: visible !important; }
+  .table-au { min-width: 0 !important; font-size: .78rem; }
+  .table-au thead th {
+    position: static; background: #eef2f7 !important; color: #0f172a !important;
+    border: 1px solid #94a3b8; white-space: normal;
+  }
+  .table-au tbody td { border: 1px solid #cbd5e1; vertical-align: top; }
+  .table-au tbody tr:nth-child(even) { background: #f8fafc !important; }
+  .table-au tbody tr:hover { background: transparent !important; }
+  .table-foot { border-top: 2px solid #0f172a; font-size: .78rem; }
+
+  /* ---- Document sections ---- */
+  .card-au, .stat {
+    box-shadow: none !important; border: 1px solid #cbd5e1; border-radius: 0;
+    break-inside: avoid; margin-bottom: .6rem;
+  }
+  .stat-grid { gap: .5rem; margin-bottom: .6rem; }
+  .stat { padding: .55rem .7rem; }
+  .stat__value { font-size: 1.3rem; }
+  .definition { display: block; }
+  .definition dt, .definition dd {
+    border-bottom: 1px dotted #cbd5e1; padding: .3rem 0;
+  }
+  .status-banner { break-inside: avoid; }
+  canvas { max-width: 100% !important; }
+
+  /* Links are dead on paper: keep the words, drop the chrome. */
+  a { color: inherit !important; text-decoration: none !important; }
 
   .report-sheet { box-shadow: none; max-width: none; padding: 0; border-radius: 0; }
   .report-head { border-bottom: 2px solid #000; }
   .report-table tbody tr:nth-child(even) { background: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-  .card-au, .stat { box-shadow: none !important; break-inside: avoid; }
   .table-au thead { display: table-header-group; }
   .table-au tr { break-inside: avoid; }
 

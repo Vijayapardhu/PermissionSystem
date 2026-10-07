@@ -86,6 +86,20 @@
 {% endif %}
 
 <main class="{% block main_class %}au-content{% endblock %}">
+  {# Printed-document header. Hidden on screen; shown only in print, where it
+     turns any page's Print button into a formal departmental document --
+     letterhead, document title, generation date -- instead of an HTML dump of
+     the app UI. The title is filled from the page heading by print.js, so no
+     page has to name itself twice. #}
+  <header class="print-doc-head" aria-hidden="true">
+    <img class="print-doc-head__logo" src="{{ asset('images/aditya-crest.png') }}" alt="">
+    <div class="print-doc-head__text">
+      <div class="print-doc-head__univ">{{ UNIVERSITY_NAME }}</div>
+      <div class="print-doc-head__dept">{{ DEPARTMENT_NAME }}</div>
+      <div class="print-doc-head__title"></div>
+      <div class="print-doc-head__meta">Generated on <span data-print-date></span></div>
+    </div>
+  </header>
   {# Exposed as a block so a page that must not show a banner -- the sign-in
      split -- can override it. Overriding is not the same as hiding: the
      messages have already been read by the time CSS could act, so the override
@@ -128,6 +142,7 @@
 </div>{# /.au-app #}
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{{ asset('js/print.js') }}"></script>
 <script>
   function auToggleTheme() {
     var root = document.documentElement;
