@@ -113,6 +113,8 @@ PAGE_PERMISSIONS = {
     # separate from the lecturer's `faculty.action` above.
     'hod.request_action': (HOD,),
     'hod.students': (HOD,),
+    'hod.search': (HOD,),
+    'hod.import_students': (HOD,),
     # Where the per-member decision is actually made.
     'hod.request_detail': (HOD,),
     'hod.faculty_workload': (HOD,),

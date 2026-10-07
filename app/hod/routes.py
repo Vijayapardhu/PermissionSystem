@@ -848,3 +848,151 @@ def print_report():
         stats=stats,
         status_filter=status_filter,
     )
+
+
+@hod_bp.route('/search')
+@permission_required('hod.search')
+def search():
+    """Find a student by roll number or name and list their permissions."""
+    user = current_user()
+    query = (request.args.get('q') or '').strip()
+
+    results = []
+    if len(query) >= 2:
+        results = _search_students(user, query)
+
+    return render_template(
+        'hod/search.html',
+        user=user,
+        query=query,
+        results=results,
+    )
+
+
+def _search_students(viewer, query: str) -> list:
+    """Return students matching the query, with their permission summary."""
+    from app.models.firestore import store
+
+    needle = query.upper()
+    students = []
+    for row in store.documents('users', role=UserRole.STUDENT.value,
+                               is_active=True):
+        roll = (row.get('roll_number') or '').upper()
+        name = (row.get('name') or '').upper()
+        if needle and needle not in roll and needle not in name:
+            continue
+        students.append(row)
+
+    def rank(row):
+        roll = (row.get('roll_number') or '').upper()
+        if not needle:
+            return (0, roll)
+        if roll == needle:
+            return (0, roll)
+        if roll.startswith(needle):
+            return (1, roll)
+        return (2, roll)
+
+    students.sort(key=rank)
+
+    output = []
+    for row in students[:40]:
+        roll = (row.get('roll_number') or '').upper()
+        record = PermissionModel.find_by_student(row['id'], limit=25)
+        output.append({
+            'id': row['id'],
+            'name': row.get('name'),
+            'roll_number': roll,
+            'email': row.get('email'),
+            'phone': row.get('phone'),
+            'total': len(record),
+            'approved': sum(1 for r in record if r.status == RequestStatus.APPROVED),
+            'pending': sum(1 for r in record if r.status == RequestStatus.PENDING),
+            'requests': record,
+        })
+    return output
+
+
+@hod_bp.route('/students/import', methods=['GET', 'POST'])
+@permission_required('hod.import_students')
+def import_students():
+    """Add students from the HOD's CSV roster.
+
+    GET shows the import page; POST reads the uploaded CSV and creates a
+    STUDENT account per valid CSE row. Accounts sign in through Entra ID like
+    everyone else, matching on email at first sign-in.
+    """
+    if request.method == 'GET':
+        return render_template('hod/student_import.html', user=current_user())
+
+    upload = request.files.get('student_sheet')
+    if upload is None or not (upload.filename or '').strip():
+        flash('Choose a CSV file to import.', 'danger')
+        return redirect(url_for('hod.import_students'))
+
+    filename = (upload.filename or '').lower()
+    if not filename.endswith('.csv'):
+        flash('Only CSV files are supported for student import.', 'danger')
+        return redirect(url_for('hod.import_students'))
+
+    try:
+        import csv
+        from app.models.firestore import utc_now
+
+        stream = upload.stream.read().decode('utf-8', errors='ignore').splitlines()
+        reader = csv.reader(stream)
+        header = next(reader, None)
+
+        created = 0
+        existing = 0
+        errors = []
+
+        for line_no, row in enumerate(reader, start=2):
+            if len(row) < 2:
+                errors.append(f'Row {line_no}: not enough columns')
+                continue
+
+            roll = (row[0] or '').strip().upper()
+            name = (row[1] or '').strip()
+            raw_email = (row[21] if len(row) > 21 else '').strip()
+
+            if not roll or not name:
+                errors.append(f'Row {line_no}: missing roll number or name')
+                continue
+
+            email = (raw_email or '').lower().strip()
+            if not email or '@' not in email:
+                email = f'{roll.lower()}@adityauniversity.in'
+
+            email = email.lower()
+            if UserModel.find_by_email(email):
+                existing += 1
+                continue
+
+            UserModel.create(
+                None, email, name,
+                role=UserRole.STUDENT, department='CSE',
+                roll_number=roll,
+            )
+            created += 1
+
+    except Exception as exc:
+        flash(f'Import failed: {exc}', 'danger')
+        return redirect(url_for('hod.import_students'))
+
+    parts = []
+    if created:
+        parts.append(f'{created} student account{"s" if created != 1 else ""} created')
+    if existing:
+        parts.append(f'{existing} already existed')
+    flash(
+        ('Student import: ' + ', '.join(parts) + '.')
+        if parts else 'Student import: no new rows to add.',
+        'success' if created else 'warning',
+    )
+    for error in errors[:8]:
+        flash(error, 'warning')
+    if len(errors) > 8:
+        flash(f'... and {len(errors) - 8} more skipped rows.',
+              'warning')
+    return redirect(url_for('hod.import_students'))

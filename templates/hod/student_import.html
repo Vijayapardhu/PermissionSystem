@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}Import Students &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Import Students</h1>
+    <p class="page-head__sub">
+      Add CSE students from a CSV roster. The file must have roll number in the
+      first column and student name in the second column. Email is read from the
+      22nd column when present; otherwise the roll number is used to construct a
+      university mailbox.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.students') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-mortarboard"></i> All Students
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload CSV</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" enctype="multipart/form-data" class="row g-3">
+      <div class="col-12">
+        <label for="student_sheet" class="form-label">Student roster</label>
+        <input class="form-control" type="file" id="student_sheet" name="student_sheet"
+               accept=".csv" required>
+        <div class="form-text">
+          Only CSV files are accepted. Existing accounts are detected by email or
+          roll number and left unchanged.
+        </div>
+      </div>
+      <div class="col-12">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-upload"></i> Import Students
+        </button>
+        <a href="{{ url_for('hod.students') }}" class="btn btn-outline-secondary btn-pill">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if get_flashed_messages() %}
+<div class="au-flashes">
+  {% for message in get_flashed_messages(with_categories=true) %}
+  <div class="alert alert-{{ category }} mb-2">{{ message }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

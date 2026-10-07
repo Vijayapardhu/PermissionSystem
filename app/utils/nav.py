@@ -27,6 +27,8 @@ HOD_NAV = [
     _item('hod.dashboard', 'bi-speedometer2', 'Overview', 'Overview'),
     _item('hod.requests', 'bi-list-check', 'All Requests', 'Overview'),
     _item('hod.students', 'bi-mortarboard', 'Students', 'Overview'),
+    _item('hod.search', 'bi-search', 'Search', 'Overview'),
+    _item('hod.import_students', 'bi-file-earmark-arrow-up', 'Import Students', 'Overview'),
 
     _item('hod.faculty_workload', 'bi-person-workspace', 'Workload', 'Faculty'),
     _item('hod.import_faculty', 'bi-file-earmark-arrow-up', 'Add Faculty', 'Faculty'),
