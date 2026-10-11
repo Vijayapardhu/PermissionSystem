@@ -163,6 +163,41 @@ migrations/add_dean.py                 the Dean account
 migrations/check_college_data.py       inspect before importing
 ```
 
+### Auditing what is already there
+
+```
+DATABASE_BACKEND=sql .venv/bin/python migrations/audit_data.py
+```
+
+Read-only. It calls nothing but `store.documents`, and the database file is
+byte-identical afterwards — worth knowing before you point it at production.
+
+It reports, in order of severity:
+
+| | |
+|---|---|
+| `undecidable` | a record whose approver cannot exist. **Permanent** until the data or the workflow changes. Exits non-zero. |
+| `stranded` | a non-faculty applicant, which can never enter the workflow |
+| `stuck` | non-terminal and untouched for longer than `--stuck-days` (default 14) |
+| `empty` | a queue nobody is working through — including the HOD one a Deputy HOD works from |
+| `orphaned` | a reference to a record that is not there |
+
+Useful flags: `--stuck-days 30` to be less noisy, `--verbose` to list every
+record rather than only the problems.
+
+**Why it exists.** `verify.py` runs against synthetic fixtures, so it cannot
+tell you about the records you actually have. The live audit that prompted this
+found application #171 — the one Dean's own application, at `DEAN_PENDING`,
+which nobody could ever approve because the only person who can sign that stage
+is the applicant. It was written by a script calling `LeaveModel.create`
+directly, which takes an id and cannot tell who is applying, so neither the page
+grants nor `create_leave` could have stopped it. `submit_to_hod` now refuses
+non-teaching staff, which is the last gate before the workflow. The audit is
+what finds anything that still gets past it.
+
+Note the two together: the fix stops new records, the audit catches the old
+ones. Neither replaces the other.
+
 ---
 
 ## Day-to-day tasks

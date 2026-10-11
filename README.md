@@ -55,6 +55,14 @@ being protected is a decision about somebody's leave rather than a screen:
   straight there, and the service refuses it as well.
 - **No administrative panels** — no faculty register, routing or events.
 
+A **Dean** decides leave and cannot file it. That is not a ranking; the approval
+ladder simply ends at that role. A Dean's own application would be filed by the
+HOD, cleared to the Dean queue, and then be decidable by exactly one person —
+the applicant — whom the service refuses by id. So `submit_to_hod`, the last
+gate before the workflow, refuses anyone who is not teaching staff. The UI
+already did; this closes the path underneath it, because `LeaveModel.create`
+takes an id and cannot tell who is applying. See `migrations/audit_data.py`.
+
 Every request for a lecturer's queue is filtered to what they own or have
 decided. A lecturer cannot see another lecturer's students.
 
@@ -178,6 +186,18 @@ migrations/seed_firestore.py     create collections and indexes
 migrations/import_college_data.py  the faculty register
 migrations/import_cse_students.py  the student roster
 ```
+
+### Auditing real data
+
+```
+migrations/audit_data.py          read-only; reports what cannot be acted on
+```
+
+`verify.py` runs against synthetic fixtures and must pass on a fresh checkout,
+so it cannot tell you about the records you actually have. `audit_data.py` is
+the other half: it reads the live database and reports applications nobody can
+approve, records stuck in a stage, empty queues and orphaned references. It
+writes nothing — run it whenever the question is "what is already wrong".
 
 Full runbook for the live server: **[OPERATIONS.md](OPERATIONS.md)**.
 

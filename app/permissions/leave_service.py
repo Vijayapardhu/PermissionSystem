@@ -136,6 +136,10 @@ def create_leave(*, faculty, leave_type: str, from_date_raw: str,
         raise LeaveError(
             f'A single application cannot span more than {MAX_LEAVE_DAYS} days.')
 
+    # Refused here and again in `submit_to_hod`. This is the front gate and that
+    # is the one underneath it -- `LeaveModel.create` takes an id and cannot tell
+    # who is applying, so anything written below this line can bypass the check
+    # here. Both use `is_faculty` deliberately, so they cannot drift.
     if not faculty.is_faculty:
         raise LeaveError('Only teaching staff can apply for leave.')
 
@@ -581,12 +585,42 @@ def submit_to_hod(leave_id: int, applicant) -> FacultyLeave:
     whether the teaching is covered and an unanswered request is not coverage.
     `UNCOVERED` does not block: that is the applicant explicitly flagging a class
     they could not staff, which the plan says the HOD may approve over.
+
+    Also refused for an applicant who is not teaching staff. This is the last
+    gate before the workflow, and the only one below the UI, so it is where the
+    "every leave can be decided by somebody" invariant is actually enforced.
+    See the check below.
     """
     leave = LeaveModel.find_by_id(leave_id)
     if leave is None:
         raise LeaveError('That application no longer exists.')
     if leave.faculty_id != applicant.id:
         raise LeaveError('That application is not yours.')
+
+    # The last gate before the workflow, and the one that actually holds.
+    #
+    # `create_leave` refuses a non-faculty applicant at creation, and the page
+    # grants refuse them at every entry point -- but both of those are above
+    # this. `LeaveModel.create` takes an id and has no idea who is applying, so
+    # a script, an import or a future caller can put an undecidable record into
+    # the database, and the live data had exactly that: a Dean own application
+    # at DEAN_PENDING that nobody is able to approve.
+    #
+    # The reason is not that a Dean does not teach. It is that the ladder ends:
+    # `_next_approver_stage` files a non-HOD under HOD_PENDING, the HOD or a
+    # deputy clears it to DEAN_PENDING, and the only person who can decide a
+    # DEAN_PENDING leave is the Dean -- who is here the applicant, and whom
+    # `dean_act_on_leave` refuses by id. It would sit forever.
+    #
+    # Checked on the same predicate as creation, so the two cannot drift into
+    # disagreeing about who may file.
+    if not applicant.is_faculty:
+        raise LeaveError(
+            'Only teaching staff can apply for leave. A Dean decides leave '
+            'rather than filing it, and this portal has nobody above them to '
+            'decide their own application.'
+        )
+
     if leave.status not in SUBMITTABLE_STATUSES:
         raise LeaveError('This application has already been sent for approval.')
 
