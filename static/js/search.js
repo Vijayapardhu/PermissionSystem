@@ -1,13 +1,17 @@
 // The universal search box's behaviour, shared by every page that has one.
 //
-// The bar submits itself: typing is debounced and the list below updates as you
-// type, so the search is a control rather than a form to be submitted. That is
-// also why the Go button is removed rather than left in place -- see the macro
-// in _macros.html.
+// By default the bar submits itself: typing is debounced and the list below
+// updates as you type, so the search is a control rather than a form to be
+// submitted. That is also why the Go button is removed in that mode -- it would
+// be a second, louder way to do something the field already does.
 //
-// Everything is opt-in per box through [data-au-search]. A page with a search
-// field that must NOT submit itself (a typeahead inside a form, say) simply
-// leaves the attribute off.
+// A box marked data-au-search-live="off" does the opposite: it does not listen
+// to input at all, and keeps its button. For a search that re-renders the page,
+// submitting a beat after typing stops is a full navigation per few characters
+// -- the page flashes under the user's hands and loses its scroll position
+// between letters. Enter still works there, because Enter is deliberate.
+//
+// Everything is opt-in per box through [data-au-search].
 
 (function () {
   var DEBOUNCE_MS = 320;
@@ -29,6 +33,7 @@
       var go = box.querySelector('.au-search__go');
       var clear = box.querySelector('.au-search__clear');
       var timer = null;
+      var live = box.getAttribute('data-au-search-live') !== 'off';
 
       function submit() {
         if (timer) { clearTimeout(timer); timer = null; }
@@ -44,12 +49,16 @@
         }
       }
 
-      input.addEventListener('input', function () {
-        // Long enough to skip most of a pasted or fast-typed word, short enough
-        // that the list does not feel like it is ignoring the keyboard.
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(submit, DEBOUNCE_MS);
-      });
+      // Only in live mode. A manual box gets no listener here at all, so
+      // typing costs nothing until the button or Enter.
+      if (live) {
+        input.addEventListener('input', function () {
+          // Long enough to skip most of a pasted or fast-typed word, short
+          // enough that the list does not feel like it is ignoring you.
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(submit, DEBOUNCE_MS);
+        });
+      }
 
       input.addEventListener('keydown', function (event) {
         // Enter submits now rather than waiting out the debounce, and must not
@@ -89,10 +98,11 @@
           select.addEventListener('change', submit);
         });
 
-      // Without scripting the Go button is the only way to search. With
-      // scripting it is a second, louder way to do something the field already
-      // does, so it is removed rather than left to compete with the input.
-      if (go) go.hidden = true;
+      // In live mode the button is a second, louder way to do something the
+      // field already does, so it is removed rather than left to compete with
+      // the input. In manual mode it is the only way to search without pressing
+      // Enter, and the script must not take it away.
+      if (go && live) go.hidden = true;
     });
   });
 }());

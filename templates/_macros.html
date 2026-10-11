@@ -98,11 +98,22 @@
   removes it once the field is found, because the bar submits itself and a second
   way to do the same thing should not sit there looking like the primary action.
 #}
+{# `live` decides whether the box searches as you type.
+
+   True submits the form a beat after typing stops, which is right for a
+   filter over a list that is already on screen. False leaves the field alone
+   and waits for the Search button or Enter, which is right for a search that
+   re-renders the page: submitting on every pause means a full navigation per
+   few characters, and the results under the lecturer's hands jump and lose
+   their scroll position between letters.
+
+   The button is rendered either way and the script hides it only in live mode,
+   so the form still works with scripting off. #}
 {% macro search_box(value='', placeholder='Search', label='', size='bar',
                     autofocus=false, id='au-q', clear_url='', name='q',
-                    minlength=0) -%}
+                    minlength=0, live=true) -%}
 <div class="au-search au-search--{{ size }}">
-  <div class="au-search__box" data-au-search>
+  <div class="au-search__box" data-au-search{% if not live %} data-au-search-live="off"{% endif %}>
     <i class="bi bi-search au-search__icon" aria-hidden="true"></i>
     <input type="search" id="{{ id }}" name="{{ name }}"
            class="form-control au-search__input"
@@ -130,11 +141,11 @@
    in a toolbar of filters. `action` empty means "this page". #}
 {% macro search_form(value='', placeholder='Search', label='', size='wide',
                      autofocus=false, clear_url='', minlength=0,
-                     hint='') -%}
+                     hint='', live=true) -%}
 <form method="get" action="" class="mb-2" role="search">
   {{ search_box(value=value, placeholder=placeholder, label=label,
                 size=size, autofocus=autofocus, clear_url=clear_url,
-                minlength=minlength) }}
+                minlength=minlength, live=live) }}
   {% if hint %}
     <p class="au-search__hint">{{ hint }}</p>
   {% endif %}

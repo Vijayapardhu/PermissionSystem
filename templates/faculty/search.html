@@ -19,17 +19,20 @@
 </div>
 
 <div class="card-au au-searchbar">
+  {# live=false: a search here re-renders the page and scans the whole
+     department, so submitting a beat after typing stops meant a full
+     navigation per few characters. Type, then press Search or Enter. #}
   {{ search_form(value=query,
                  placeholder='Roll number or name, e.g. 26B21CS058',
                  label='Roll number or name', size='full', autofocus=true,
-                 minlength=2,
+                 minlength=2, live=false,
                  hint='Partial matches work. Results are limited to the '
                       ~ DEPARTMENT_NAME ~ '.') }}
 </div>
 
 {% if not query %}
   <div class="card-au">
-    {{ empty_state('search', 'Start typing to search',
+    {{ empty_state('search', 'Search for a student',
                    'Enter a roll number such as 26B21CS058, or part of a name, then press Search.') }}
   </div>
 {% elif not results %}
