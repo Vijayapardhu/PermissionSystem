@@ -729,6 +729,92 @@ a:hover { text-decoration: underline; }
 
 .stat:hover { box-shadow: var(--au-shadow); transform: translateY(-1px); }
 
+/* ---- Meta strip -------------------------------------------------------
+   Four small numbers on one line instead of four tiles. Used where the
+   numbers are context for the page rather than its subject -- a class roster
+   is about the table, not about how many students it holds. */
+.meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem 1.1rem;
+  margin-bottom: 1rem;
+  padding: .55rem .9rem;
+  background: var(--au-surface);
+  border: 1px solid var(--au-border);
+  border-radius: var(--au-radius-lg);
+  font-size: .82rem;
+  line-height: 1.3;
+}
+
+.meta-strip__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .35rem;
+  white-space: nowrap;
+}
+
+.meta-strip__value {
+  font-weight: 700;
+  font-size: .95rem;
+  color: var(--au-text);
+}
+
+.meta-strip__label {
+  color: var(--au-muted);
+  font-weight: 500;
+}
+
+.meta-strip__sep {
+  color: var(--au-border);
+  font-weight: 400;
+}
+
+.meta-strip__item--good    .meta-strip__value { color: var(--au-success); }
+.meta-strip__item--warn    .meta-strip__value { color: var(--au-warning); }
+.meta-strip__item--primary .meta-strip__value { color: var(--au-primary); }
+
+/* ---- Disclosure panel -------------------------------------------------
+   Admin actions -- uploading a roster, deleting a class -- kept on the page
+   but out of the way until asked for. They are destructive or irreversible
+   and a lecturer opening the page to read a roster did not come here to
+   delete anything. */
+.au-disclosure {
+  border: 1px solid var(--au-border);
+  border-radius: var(--au-radius-lg);
+  background: var(--au-surface);
+  margin-bottom: 1rem;
+}
+
+.au-disclosure > summary {
+  padding: .55rem .9rem;
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--au-muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+
+.au-disclosure > summary::-webkit-details-marker { display: none; }
+
+.au-disclosure > summary::before {
+  content: "\F64D";                      /* bi-chevron-right */
+  font-family: bootstrap-icons;
+  font-size: .8rem;
+  transition: transform .15s ease;
+}
+
+.au-disclosure[open] > summary::before { transform: rotate(90deg); }
+.au-disclosure > summary:hover { color: var(--au-text); }
+
+.au-disclosure__body {
+  padding: .25rem .9rem 1rem;
+  border-top: 1px solid var(--au-border);
+}
+
 .stat--success::before { background: var(--au-success); }
 .stat--warning::before { background: var(--au-warning); }
 .stat--danger::before  { background: var(--au-danger); }

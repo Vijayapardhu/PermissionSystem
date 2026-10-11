@@ -1,111 +1,107 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, type_badge, date, time_range, roll, stat, csrf_field, empty_state with context %}
+{% from '_macros.html' import type_badge, date, time_range, roll, csrf_field, empty_state with context %}
 {% block title %}{{ class_group.name }} &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
-<nav aria-label="breadcrumb" class="no-print mb-3">
-  <ol class="breadcrumb small mb-0">
-    <li class="breadcrumb-item"><a href="{{ url_for('faculty.classes') }}">My Classes</a></li>
-    <li class="breadcrumb-item active">{{ class_group.name }}</li>
-  </ol>
-</nav>
-
 <div class="page-head">
   <div>
-    <h1 class="page-head__title">{{ class_group.name }}</h1>
+    <h1 class="page-head__title">
+      {{ class_group.name }}
+      {% if class_group.section_code %}
+        <span class="badge text-bg-light ms-1">{{ class_group.section_code }}</span>
+      {% endif %}
+    </h1>
     <p class="page-head__sub">
-      {% if class_group.section_code %}Section {{ class_group.section_code }}{% endif %}
-      {% if class_group.academic_year %} &middot; {{ class_group.academic_year }}{% endif %}
-      &middot; {{ summary.roster }} student{{ '' if summary.roster == 1 else 's' }} on the roster
+      {% if class_group.academic_year %}{{ class_group.academic_year }} &middot; {% endif %}
+      {{ summary.roster }} on the roster &middot;
+      {{ view_date.strftime('%d %b %Y') }}
     </p>
   </div>
   <div class="page-head__actions">
-    {# This page is the class's view; the edit page shows each stored value and
-       previews the difference before anything is written. #}
+    {# The breadcrumb that used to sit above this heading repeated the title
+       and the button below it, for about forty pixels. #}
     <a href="{{ url_for('faculty.edit_class', class_id=class_group.id) }}"
        class="btn btn-outline-secondary btn-pill">
       <i class="bi bi-pencil-square"></i> Edit
     </a>
     <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
-      <i class="bi bi-arrow-left"></i> All Classes
+      <i class="bi bi-arrow-left"></i> Classes
     </a>
   </div>
 </div>
 
-<div class="stat-grid">
-  {{ stat('On Roster', summary.roster, 'people', 'primary') }}
-  {{ stat('Linked Accounts', summary.linked, 'link-45deg', 'success') }}
-  {{ stat('On Permission', summary.on_permission, 'file-earmark-check', 'info') }}
-  {{ stat('Not Yet Linked', summary.unlinked, 'question-circle', 'warning') }}
-</div>
-
-<div class="card-au mb-3">
-  <div class="card-au__head">
-    <h2 class="card-au__title"><i class="bi bi-calendar3"></i> Permissions On</h2>
-    <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
-      <label for="date" class="form-label mb-0">Date</label>
-      <input type="date" class="form-control form-control-sm"
-             id="date" name="date" value="{{ view_date }}" style="width:auto">
-      <button type="submit" class="btn btn-sm btn-primary btn-pill">Show</button>
-      {% if view_date != now_date %}
-      <a href="{{ url_for('faculty.class_detail', class_id=class_group.id) }}"
-         class="btn btn-sm btn-outline-secondary btn-pill">Today</a>
-      {% endif %}
-    </form>
-  </div>
-  <div class="card-au__body py-2">
-    <p class="small text-muted mb-0">
-      Approved permissions in force on
-      <strong>{{ view_date.strftime('%d %B %Y') }}</strong>.
-      Cancelled, rejected and pending requests are excluded.
-    </p>
-  </div>
+{# Four numbers on one line. They were four 90px tiles, which is ninety pixels
+   of the screen spent on context before the table the page exists to show --
+   and on a phone it pushed the roster off the screen entirely. #}
+<div class="meta-strip">
+  <span class="meta-strip__item">
+    <span class="meta-strip__value">{{ summary.roster }}</span>
+    <span class="meta-strip__label">on roster</span>
+  </span>
+  <span class="meta-strip__item meta-strip__item--good">
+    <span class="meta-strip__value">{{ summary.on_permission }}</span>
+    <span class="meta-strip__label">on permission</span>
+  </span>
+  <span class="meta-strip__item">
+    <span class="meta-strip__value">{{ summary.linked }}</span>
+    <span class="meta-strip__label">with an account</span>
+  </span>
+  {% if summary.unlinked %}
+  <span class="meta-strip__item meta-strip__item--warn">
+    <span class="meta-strip__value">{{ summary.unlinked }}</span>
+    <span class="meta-strip__label">not linked</span>
+  </span>
+  {% endif %}
+  <span class="meta-strip__item" style="margin-left:auto">
+    <span class="meta-strip__label">
+      Approved permissions in force &mdash; cancelled, rejected and pending excluded
+    </span>
+  </span>
 </div>
 
 <div class="card-au mb-3">
   <div class="card-au__head">
     <h2 class="card-au__title">
       <i class="bi bi-list-check"></i>
-      {% if show_all %}Class Roster &amp; Permissions{% else %}On Permission{% endif %}
+      {% if show_all %}Full class{% else %}On permission{% endif %}
     </h2>
-    {# The default view is the students who have permission, because that is
-       what a lecturer opens this page to answer. The full roster is one click
-       away rather than hidden, since "who am I teaching" is the other half of
-       the question. Carried in the URL rather than a form so the browser's back
-       button undoes it. #}
-    <span class="form-text">
-      {% if show_all %}
-        {{ rows | length }} of {{ summary.roster }}
-      {% else %}
-        {{ rows | length }} of {{ summary.roster }} on permission
-      {% endif %}
-    </span>
-  </div>
 
-  <div class="px-3 pt-2 pb-0 d-flex justify-content-end no-print">
-    {% if show_all %}
-      <a class="btn btn-sm btn-outline-secondary btn-pill"
-         href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat()) }}">
-        <i class="bi bi-file-earmark-check"></i> Show only on permission
-      </a>
-    {% else %}
-      <a class="btn btn-sm btn-outline-secondary btn-pill"
-         href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat(), view='all') }}">
-        <i class="bi bi-people"></i> Full class ({{ summary.roster }})
-      </a>
-    {% endif %}
+    {# The date picker used to live in a card of its own above the table, with
+       a paragraph explaining what the date meant. It is a filter; filters sit
+       in the header of the thing they filter. #}
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-center no-print">
+      {% if show_all %}<input type="hidden" name="view" value="all">{% endif %}
+      <input type="date" class="form-control form-control-sm"
+             id="date" name="date" value="{{ view_date.isoformat() }}"
+             style="width:auto" aria-label="Date">
+      <button type="submit" class="btn btn-sm btn-primary btn-pill">Show</button>
+      {% if view_date != today %}
+        <a href="{{ url_for('faculty.class_detail', class_id=class_group.id, view='all' if show_all else none) }}"
+           class="btn btn-sm btn-outline-secondary btn-pill">Today</a>
+      {% endif %}
+      {% if show_all %}
+        <a href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat()) }}"
+           class="btn btn-sm btn-outline-secondary btn-pill">
+          <i class="bi bi-file-earmark-check"></i> Only on permission
+        </a>
+      {% else %}
+        <a href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat(), view='all') }}"
+           class="btn btn-sm btn-outline-secondary btn-pill">
+          <i class="bi bi-people"></i> Full class ({{ summary.roster }})
+        </a>
+      {% endif %}
+    </form>
   </div>
 
   {% if rows %}
   <div class="au-table-wrap">
-    <table class="table-au">
+    <table class="table-au table-au--narrow">
       <thead>
         <tr>
           <th class="table-au__idx">#</th>
           <th>Roll No</th>
           <th>Student</th>
           <th>Contact</th>
-          <th>On Date</th>
           <th>Permission</th>
           <th class="table-au__actions"></th>
         </tr>
@@ -115,29 +111,30 @@
         {% set member = row.member %}
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
-          <td>{{ roll(member.roll_number) }}</td>
+          <td class="text-nowrap">{{ roll(member.roll_number) }}</td>
           <td class="text-nowrap">
             {% if member.is_linked %}
-              {{ member.student_name }}
+              {{ member.student_name or '—' }}
             {% else %}
               <span class="text-muted">Not provisioned</span>
             {% endif %}
           </td>
-          <td class="small text-muted">
+          {# Phone before email. A lecturer ringing a student about a permission
+             needs the number; the mailbox is for the paperwork, and 1,137 of
+             these accounts have no mailbox at all. #}
+          <td class="small text-nowrap">
             {% if member.is_linked %}
-              {{ member.student_email or '—' }}
-            {% else %}
-              —
-            {% endif %}
-          </td>
-          <td>
-            {% if row.has_permission %}
-              <span class="badge-au badge-au--approved"><i class="bi bi-check-circle"></i> Yes</span>
-            {% elif member.is_linked %}
-              <span class="badge-au badge-au--cancelled"><i class="bi bi-dash-circle"></i> No</span>
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endif %}
+              {% if member.phone %}
+                <a href="tel:{{ member.phone }}">{{ member.phone }}</a>
+              {% endif %}
+              {% if member.student_email %}
+                <div class="form-text text-truncate" style="max-width:16rem"
+                     title="{{ member.student_email }}">{{ member.student_email }}</div>
+              {% endif %}
+              {% if not member.phone and not member.student_email %}
+                <span class="text-muted">&mdash;</span>
+              {% endif %}
+            {% else %}&mdash;{% endif %}
           </td>
           <td class="small">
             {% if row.has_permission %}
@@ -146,40 +143,33 @@
                 {{ type_badge(record.permission_type) }}
                 <span class="text-muted small">
                   {{ date(record.start_date) }} &rarr; {{ date(record.end_date) }}
+                  {% if record.start_time %} &middot; {{ time_range(record.start_time, record.end_time) }}{% endif %}
                 </span>
                 <div class="small text-muted clamp-2" title="{{ record.reason }}">{{ record.reason }}</div>
                 <a href="{{ url_for('faculty.request_detail', request_id=record.id) }}"
-                   class="small no-print">View request</a>
+                   class="small no-print">Open request</a>
               </div>
               {% endfor %}
             {% else %}
-              <span class="text-muted small">No permission on this date</span>
+              <span class="text-muted small">None on this date</span>
             {% endif %}
           </td>
           <td class="table-au__actions">
-            <form method="post" class="d-inline"
-                  action="{{ url_for('faculty.delete_member', class_id=class_group.id, member_id=member.id) }}"
-                  onsubmit="return confirm('Remove {{ member.roll_number }} from this class?');">
-              {{ csrf_field() }}
-              <button type="submit" class="btn btn-sm btn-outline-secondary"
-                      title="Remove from roster">
-                <i class="bi bi-x-lg"></i>
-              </button>
-            </form>
+            {% if member.is_linked %}
+              <a href="{{ url_for('faculty.search', q=member.roll_number) }}"
+                 class="btn btn-sm btn-outline-secondary btn-pill"
+                 title="Open this student's record">Open</a>
+            {% else %}
+              <span class="text-muted small">&mdash;</span>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  <div class="table-foot">
-    <span>
-      {{ summary.on_permission }} on permission &middot;
-      {{ summary.linked }} of {{ summary.roster }} linked to an account
-    </span>
-  </div>
   {% else %}
-    {# Two different empties: "nobody on permission" is good news and must not
+    {# Two different empties. "Nobody has permission" is good news and must not
        be rendered as "your roster is empty", which is a different problem with
        a different fix. #}
     {% if show_all %}
@@ -188,28 +178,27 @@
     {% else %}
       {{ empty_state('check2-circle', 'Nobody has permission on this date',
                      'Every student in this section is available.') }}
-      <div class="text-center pb-3">
-        <a class="btn btn-outline-secondary btn-pill"
-           href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat(), view='all') }}">
-          <i class="bi bi-people"></i> Show the full class
-        </a>
-      </div>
     {% endif %}
   {% endif %}
 </div>
 
-<div class="row g-3">
-  <div class="col-12 col-lg-6">
-    <div class="card-au">
-      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload / Replace Roster</h2></div>
-      <div class="card-au__body">
+{# Upload and delete were two half-width cards below the fold, always visible,
+   on every visit to a page whose purpose is reading a roster. Both are
+   administrative and one of them is destructive, so they are here on request
+   rather than in the way. #}
+<details class="au-disclosure no-print">
+  <summary><i class="bi bi-gear"></i> Class settings &mdash; upload or replace the roster, or delete this class</summary>
+  <div class="au-disclosure__body">
+    <div class="row g-3">
+      <div class="col-12 col-lg-7">
+        <h3 class="form-label mb-2">Upload / replace roster</h3>
         <form method="post" enctype="multipart/form-data"
               action="{{ url_for('faculty.upload_roster', class_id=class_group.id) }}">
           {{ csrf_field() }}
           <label for="roster" class="form-label">Spreadsheet of roll numbers</label>
-          <input type="file" class="form-control mb-3" id="roster" name="roster"
+          <input type="file" class="form-control mb-2" id="roster" name="roster"
                  accept=".xlsx,.xlsm,.csv,.txt" required>
-          <div class="form-text mb-3">
+          <div class="form-text mb-2">
             Excel (.xlsx, .xlsm) or CSV. One roll number per row; a header row is
             skipped. Existing rows are updated, not duplicated.
           </div>
@@ -218,15 +207,11 @@
           </button>
         </form>
       </div>
-    </div>
-  </div>
 
-  <div class="col-12 col-lg-6">
-    <div class="card-au" style="border-left:3px solid var(--au-danger)">
-      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-trash"></i> Delete Class</h2></div>
-      <div class="card-au__body">
+      <div class="col-12 col-lg-5">
+        <h3 class="form-label mb-2 text-danger">Delete class</h3>
         <p class="small text-muted">
-          Removes <strong>{{ class_group.name }}</strong>, its
+          Removes <strong>{{ class_group.name }}</strong> and its
           {{ summary.roster }} roster {{ 'entry' if summary.roster == 1 else 'entries' }}.
           Permission requests are not affected.
         </p>
@@ -240,5 +225,5 @@
       </div>
     </div>
   </div>
-</div>
+</details>
 {% endblock %}

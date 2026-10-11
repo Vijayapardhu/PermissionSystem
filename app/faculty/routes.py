@@ -530,6 +530,7 @@ def class_detail(class_id: int):
     group = _owned_class(user, class_id)
 
     view_date = _parse_date(request.args.get('date'), date.today())
+    today = date.today()
     members = MemberModel.find_by_class(class_id)
 
     permissions_by_student, on_permission = _permissions_for_date(
