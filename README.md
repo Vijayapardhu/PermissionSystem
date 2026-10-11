@@ -1,801 +1,237 @@
 # CSE Permission & Leave Tracking System
 
-Flask + Firestore permission tracker for the Department of Computer Science & Engineering,
-built to the SRS: Microsoft Entra ID sign-in, Leave and Classroom permission requests,
-proof upload, lecturer verification, and an HOD analytics dashboard with printable reports.
+A college portal for co-curricular and extracurricular **permission requests**
+and for **faculty leave**. A student asks to be absent for an event; the
+lecturer who owns that section decides. Everything else in this file exists to
+make that decision correct, fast, and auditable.
+
+Live at **<https://permission.vijayapardhu.tech>**
+
+> **For whoever runs this:** see **[OPERATIONS.md](OPERATIONS.md)** — deployment,
+> backups, restoring, data imports, troubleshooting. That is the document you
+> want at 2am. This one explains what the thing is.
+
+---
+
+## What it does
+
+**Permission requests.** A student asks to miss class on given dates, for a
+stated reason, alone or as a group. It lands in the queue of somebody who can
+judge it. They approve or refuse, the student is notified, and an approved
+request produces a printable letter with a QR code that a college can verify.
+
+**Faculty leave.** Teaching staff file leave; it climbs a fixed ladder
+(lecturer → HOD → Dean). Period-level substitution is tracked against the
+timetable, so an uncovered period is visible rather than discovered.
+
+**Classwork and objections.** A lecturer schedules assessed work against a
+section. If it clashes with a permission that was already granted, that
+permission is suspended and sent back for review — the request had been
+approved against a world in which there was no exam that day. Any lecturer can
+raise an objection; the reviewer answers. This is the module that stops the
+department discovering a clash after the fact.
+
+---
+
+## The five roles
+
+| Role | Sees | Can do |
+|---|---|---|
+| **Student** | Their own requests, classes, proctor | File a request alone or as a group, upload proof, print a letter, withdraw |
+| **Lecturer** | Their own classes, proctored students, their own decisions | Decide requests, schedule classwork, answer objections, file leave, upload a roster |
+| **Deputy HOD** | Everything a lecturer sees, **plus** the department's whole queue | Grant or refuse **any** request directly, read who currently holds a permission |
+| **HOD** | The whole department | Everything above, plus routing, the faculty register, events, the student register, and appointing deputies |
+| **Dean** | Faculty leave only | Sign leave, above the HOD |
+
+A **Deputy HOD** is a promotion, not a new person: the same account with more
+authority, so their classes and proctor list do not move. They get exactly two
+powers — deciding directly, and reading the permission register — and
+deliberately **not** the administrative panels, and **not** authority over their
+own leave.
+
+Every request for a lecturer's queue is filtered to what they own or have
+decided. A lecturer cannot see another lecturer's students.
+
+---
+
+## How a request is routed
+
+1. **The proctor wins.** If the student is on a lecturer's proctor list, it goes
+   to that lecturer.
+2. **Then an event.** A request naming a college event goes to that event's
+   coordinator.
+3. **Then a review desk.** Desks are configured rows — a name, some words, a
+   reviewer, an order — so a sports desk or a placements desk is a form, not a
+   code change.
+4. **Otherwise the least-loaded queue.**
+
+Escalated requests wait for the HOD. The HOD, or a Deputy HOD, may also take any
+request directly without waiting for its reviewer.
+
+---
+
+## Running it locally
+
+```bash
+git clone https://github.com/Vijayapardhu/PermissionSystem.git
+cd PermissionSystem
+python setup.py          # virtualenv, dependencies, .env, schema. Safe to re-run.
+# fill in the real values in .env  (CLIENT_ID, TENANT_ID, CLIENT_SECRET, …)
+python wsgi.py           # http://127.0.0.1:5000
+```
+
+`setup.py` is safe to re-run — it skips anything already in place.
+
+To point it at the existing student data rather than starting empty, copy a
+`local-dev.db` next to the code, or run the college import in `migrations/`.
+
+### The data store
+
+Firestore by default. Set `DATABASE_BACKEND=sql` to use SQL instead — either
+SQLite (a local file, nothing to install) or Postgres via `DATABASE_URL`. Both
+speak the same interface, so nothing in `app/` changes. The VM this project
+runs on uses SQLite at `local-dev.db`.
+
+**That file holds real student records. It is gitignored and must never be
+committed.**
+
+---
 
 ## Layout
 
-Staff pages use a two-column shell: a persistent sidebar and the content column.
-Students keep the compact top navigation.
-
-The sidebar is a **real flex sibling**, not a fixed column paired with a
-`margin-left` on the content. That distinction matters:
-
-- With `position: fixed` + `margin-left`, the two must be kept exactly the same
-  width forever. Below the `lg` breakpoint the sidebar becomes an off-canvas
-  drawer while the margin would still apply, leaving a permanent empty strip
-  down the left of every mobile and tablet page.
-- As a flex item (`flex: 0 0 var(--au-sidebar-w)` on the sidebar, `flex: 1 1 auto`
-  with `min-width: 0` on the column) the two meet exactly at any width, with no
-  offset to drift.
-
-Bootstrap's `offcanvas-lg` forces `width: auto !important` at `lg` and uses
-`--bs-offcanvas-width` below it, so both are overridden explicitly rather than
-left to the cascade.
-
-Wide tables scroll inside `.au-table-wrap` (`overflow-x: auto` as a **base**
-rule, not inside a `max-width` query, or the document overflows on desktop).
-`.au-content` and `.card-au` carry `min-width: 0` so a wide table cannot stretch
-the flex column.
-
-Verified in headless Chrome at 1600 / 1280 / 1000 / 992 / 900 px: zero gap
-between sidebar and content, and zero horizontal overflow.
-
-## Branding
-
-The interface mirrors `digitalservices.adityauniversity.in`. Tokens were taken
-from that site's stylesheet rather than eyeballed:
-
-| Token | Value |
-|-------|-------|
-| Primary | `#004e92` (dark `#003666`) |
-| Top bar gradient | `linear-gradient(140deg, #000428, #013c6e, #000428)` |
-| Page background | `aliceblue` |
-| Surface / panel | `#ffffff` / `#f8fafc` |
-| Border | `#e2e8f0` |
-| Text | `#1e293b`, muted `#475569` |
-| Status | success `#10b981`, warning `#f59e0b`, danger `#ef4444` |
-| Radius | 8 / 12 / 16 / 20 / pill |
-| Max width | 1400px |
-| Font | Google Sans |
-
-All tokens live in `static/css/style.css` as CSS variables, and a dark theme is
-included with a toggle in the top bar (choice persists in `localStorage`).
-
-The Aditya University gold logo ships as two assets, because the source is a
-wide wordmark that must never be cropped:
-
-| Asset | Size | Use |
-|---|---|---|
-| `aditya-logo.png` | 3134×1168 (2.68:1) | Top bar, login card, printed letterhead — always `object-fit: contain` |
-| `aditya-crest.png` | 512×512 | Favicon and square slots; the sun emblem cropped from the wordmark |
-
-The wordmark sits on a white plate (`.au-logo-plate`) so the gold reads against
-the dark blue gradient. Nothing in the CSS or templates applies `object-fit: cover`
-to it, and `verify.py` asserts that.
-
-## Formal permission letter
-
-Every request has a printable letter at `/student/requests/<id>/letter`, reachable
-from the student's detail page, the lecturer's review page, and the HOD daily
-report. It is a formal document: letterhead, "To Whomsoever It May Concern",
-reference number `REQ-0001`, a bordered status block, and a named attribution
-line stating who granted it (the reviewing faculty, or the HOD) instead of
-signature blocks.
-
-The status block is colour-coded and states the outcome in words, including:
-
-| Status | Wording |
-|---|---|
-| `APPROVED` | APPROVED — "has been **APPROVED**" |
-| `REJECTED` | REJECTED — "has been **REJECTED**" |
-| `PENDING` | AWAITING VERIFICATION — explicitly not a grant of permission |
-| `CANCELLED` | CANCELLED BY STUDENT — "confers no permission whatsoever" |
-
-## Request status display
-
-`CANCELLED` appears everywhere a status can appear: the status badge, the coloured
-banner on the request detail page (with the withdrawal timestamp), the formal
-letter, and every table and report. `CANCELLED` and `EXPIRED` sit alongside
-`PENDING`, `APPROVED` and `REJECTED` in the schema.
-
-## Student identity: roll number
-
-University mailboxes are provisioned as `<rollno>@adityauniversity.in` in lower
-case (for example `26b21cs058@adityauniversity.in`) and the Outlook display name
-is the same value, so **`roll_number` is the authoritative student identifier**.
-There is no separate PIN column.
-
-`derive_roll_number()` in `app/models/user.py` reads it from the mailbox and
-falls back to the display name, so the value is populated automatically on first
-sign-in even before the HOD edits the record. `roll_number` is nullable and
-renders as `—` when the department has not recorded one.
-
-## Stack
-
-| Layer     | Technology                                    |
-|-----------|-----------------------------------------------|
-| Frontend  | HTML5, Bootstrap 5.3, Bootstrap Icons, Chart.js 4 |
-| Backend   | Python 3, Flask 3, Jinja2                     |
-| Auth      | Microsoft Entra ID (MSAL, authorization code) |
-| Data      | Cloud Firestore, or SQLite / PostgreSQL — see [the store](#the-data-store) |
-| Storage   | Cloudflare R2 (S3 API, boto3), private bucket, year/month keys |
-| Email     | Outlook SMTP via Flask-Mail                   |
-| Hosting   | Render (web service, gunicorn)                |
-
-## The data store
-
-Everything above `app/models/` talks to one object called `store` and never
-knows what is behind it. Two implementations satisfy that interface:
-
-| `DATABASE_BACKEND` | Backend | Used for |
-|---|---|---|
-| unset, or `firestore` | Cloud Firestore | the current deployment |
-| `sql` | SQLite (`SQLITE_PATH`), or PostgreSQL (`DATABASE_URL`) | local development, and Render's managed Postgres |
-
-Choosing one is a config change, not a code change. `app/models/firestore.py` and
-`app/models/sqlstore.py` both expose `documents`, `get`, `insert`, `update`,
-`delete`, `next_id` and `ping`, and both share the type mapping in
-`app/models/values.py`, so a record written through one reads back identically
-through the other.
-
-### Why the SQL store exists
-
-Firestore's free tier meters reads, and the leave workflow fans out across a
-collection on purpose — "who is free at 09:30 on Friday?" has to consider every
-lecturer's periods, who is on leave, and who has already taken a substitution.
-That is correct as a query and expensive as a bill: the availability search
-originally cost roughly 400 reads for one leave application and could exhaust a
-project's daily quota from a single page view. (It did, in development, and took
-the deployed service down with it until the quota reset.)
-
-SQLite removes the quota entirely and needs no installation — it is inside
-Python. The import of the whole college dataset takes about two seconds against
-it. PostgreSQL is the production target for the same reason SQLite is the local
-one: they are the same dialect, so the query that runs on your machine is the
-query that runs in production.
-
-### Why not MongoDB
-
-It would not fix the quota, because the cost is the fan-out, not the engine —
-you would still hand-join four queries and still have to memoise them. It would
-not match production either, since the department's other platform uses
-Firestore. And it is not SQL, so the transactional approval the leave workflow
-needs would be harder, not easier.
-
-### The Postgres host matters
-
-Do not point `DATABASE_URL` at Supabase. That is the host this app moved *off*:
-
-> *"The direct Supabase host is IPv6-only and Render has no IPv6 route to it, so
-> a Postgres deployment there cannot open a connection at all."*
-
-Use Render's own managed Postgres, whose internal URL is reachable from the web
-service.
-
-### What the SQL store does not change
-
-Documents are still stored one JSON row per document, with a side table indexing
-the fields that get filtered. The records are still read one collection at a
-time and joined in Python, because that is how the models were written. On SQLite
-that is free, so the fan-out stops mattering — but the availability search is
-still four queries rather than one.
-
-Moving the timetable and adjustments onto real tables would collapse that into a
-single indexed join, and is the natural next step if it ever needs to be. It is
-deliberately not done yet: it means migrating every model, and there is nothing
-pressing about it now that the reads are not billed per query.
-
-One thing SQL *does* add: real transactions. `store.transaction()` lets a
-multi-document write commit or roll back as a unit, which is how an approval can
-be made atomic. Approving a leave touches the leave, its adjustments and the
-balance, and a half-written approval would show a leave granted against
-adjustments that were never closed.
-
-## Deploy to Render
-
-The app runs on Render, keeps its records in Cloud Firestore and its proofs in a private Cloudflare R2 bucket.
-
-### 1. Firebase: the database
-
-Create a project, then **Project settings → Service accounts → Generate new
-private key** and save the JSON. Record:
-
-| Value | Used for |
-|---|---|
-| `FIREBASE_PROJECT_ID` | Project settings → General |
-| `FIRESTORE_DATABASE` | `(default)`, unless you created a named database |
-| `FIREBASE_CREDENTIALS_PATH` | Server-side only. Path to that JSON. |
-
-The key bypasses Firestore security rules, so it is a server-side secret: never
-put it in a template, a JavaScript file, or any client-side code, and rotate it if
-it is ever committed or pasted somewhere it should not be.
-
-There is no schema to apply. Firestore collections come into being when a
-document is written, so create the accounts the app expects with:
-
-```bash
-python migrations/seed_firestore.py
+```
+app/
+  auth/      sign-in, sessions, the account page
+  models/    the data layer, one module per subject
+  permissions/
+    service.py              request rules, routing, who may decide what
+    pages.py                the role/page table — every route must appear here
+    classwork_service.py    scheduling, clash detection, objections
+  faculty/ hod/ dean/ deputy/ student/
+    routes.py               the views for each role
+  utils/     email, navigation, QR letters, change previews
+templates/   Jinja, one folder per role
+static/      css, js, vendored Bootstrap and icons
+migrations/  import scripts — run these, they are not part of the app
+verify.py    the main test suite
 ```
 
-The seed is idempotent — it keys on the email address and leaves anything already
-there alone.
+### Two rules the code enforces on itself
 
-On Render there is no key file on disk, so paste the JSON itself into
-`FIREBASE_CREDENTIALS_JSON` there and leave the path unset. Missing credentials do
-not stop the boot: the app serves its health path and every data-backed request
-reports the store as unavailable, which is the same shape as a database outage.
+**Every route must be granted to a role.** `app/permissions/pages.py` raises at
+start-up if an endpoint is not in its table. A new route cannot be added without
+deciding who may reach it — it is not open to any signed-in account by default.
 
-Two things worth knowing about how the data layer works:
+**Edits preview before they write.** Renaming a class, changing a request,
+moving classwork: the form shows what each field holds now, and saving renders
+the differences first. This is uniform across the app, because a preview is the
+last place to notice that moving a date suspended three permissions.
 
-- Ordering happens in Python. Firestore can sort on a single field, but
-  `where(...).order_by(...)` across two fields needs a composite index created in
-  the console first, and an app that errors until someone does that is a worse
-  failure than one that sorts a few hundred documents.
-- Each collection keeps a counter document and hands out the next integer id
-  inside a transaction, so ids in URLs stay integers and two concurrent creates
-  cannot collide.
+---
 
-### 2. Cloudflare: proof bucket
+## Deploying elsewhere
 
-**R2 → Create bucket**, name it `proofs`, and leave **public access off**.
-
-Proofs are medical and identity documents. A public bucket would hand every
-object to anyone with the URL; the app instead fetches each object through
-`/faculty/proofs/<id>/download`, which authorises the request first.
-
-Then **R2 → Manage R2 API Tokens → Create Account API token** with *Object Read &
-Write* on that bucket, and record:
-
-| Value | Used for |
-|---|---|
-| `R2_ACCOUNT_ID` | R2 overview, right-hand side |
-| `R2_ACCESS_KEY_ID` | Server-side only |
-| `R2_SECRET_ACCESS_KEY` | Server-side only |
-
-These are R2 credentials, not AWS ones. The token bypasses every bucket policy,
-so it is a server-side secret: never put it in a template, a JavaScript file, or
-any client-side code, and rotate it if it is ever committed or pasted somewhere
-it should not be. Uploads fail with a plain error on the form if it is missing,
-not at startup.
-
-### 3. Storage backend
-
-Proofs go to Cloudflare R2 by default. Set `STORAGE_BACKEND=supabase` with
-`SUPABASE_URL` / `SUPABASE_SECRET_KEY` to keep using the old Supabase Storage
-bucket for a deployment that still holds proofs there; those keys are otherwise
-unused. Never put a service-role key in a template, a JavaScript file, or any
-client-side code, and rotate it if it is ever committed or pasted somewhere it
-should not be.
-
-### 4. Entra ID
-
-Under **App registrations → your app → Authentication → Web**, add the exact
-redirect URI. Entra matches character for character, so paste it rather than
-typing it — and take the hostname from the service's own URL, because a second
-service on Render gets a `-1` suffix:
+The live server runs this under gunicorn behind nginx. `render.yaml` is also
+checked in for Render, and `Procfile` carries the same command.
 
 ```
-https://<the exact hostname in your Render dashboard>/auth/callback
+gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 wsgi:app
 ```
 
-Set the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
-
-### 5. Render
-
-The repository carries a `render.yaml` blueprint:
-
-```bash
-render blueprint launch
-```
-
-It creates the web service and prompts for each `sync: false` value. Or set it
-up by hand with **New → Web Service**:
-
-| Setting | Value |
-|---|---|
-| Runtime | Python |
-| Build command | `pip install --upgrade pip && pip install -r requirements.txt` |
-| Start command | `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - wsgi:app` |
-| Health check path | `/healthz` |
-
-`render.yaml` and `Procfile` hold the start command, so leave Render's field on
-its default and let it read the blueprint.
-
-Environment variables to set on the service:
-
-| Variable | Source |
-|---|---|
-| `FIREBASE_CREDENTIALS_JSON` | The service account key, pasted in (Render has no key file) |
-| `SECRET_KEY` | Render's **Generate** button |
-| `CLIENT_ID`, `TENANT_ID`, `CLIENT_SECRET` | Entra ID |
-| `REDIRECT_URI` | `https://<your exact Render hostname>/auth/callback` |
-| `STORAGE_BACKEND` | `r2` |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |
-| `R2_BUCKET` | `proofs` |
-| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Only if `STORAGE_BACKEND=supabase` |
-| `FIRESTORE_TIMEOUT_SECONDS` | `8` |
-| `FIRESTORE_RETRIES` | `2` |
-| `SESSION_COOKIE_SECURE` | `true` (Render terminates TLS) |
-| `DEV_MODE` | `false` |
-| `FLASK_DEBUG` | `false` |
-
-### Two Render constraints worth knowing
-
-**Free plans block outbound SMTP.** Ports 25, 465 and 587 are blocked, and
-`smtp.office365.com` needs 587. On the free plan the app still works, but every
-notification is silently suppressed — `app/utils/email.py` logs the failure and
-continues so a student's request is never lost. `render.yaml` therefore targets
-the `starter` plan. To stay on free, leave `MAIL_USERNAME` empty and accept that
-no email is sent.
-
-**Sessions are signed cookies, not files.** Render's filesystem is ephemeral and
-is wiped on every deploy and every 15-minute idle spin-down, so a filesystem
-session store would sign everyone out on a schedule. The cookie store needs no
-extra service and survives both, provided `SECRET_KEY` is set — if it is not, the
-app falls back to a hardcoded development value and every deploy invalidates all
-sessions.
-
-### Deploy-time settings that matter
-
-- `--workers 2` rather than 4: it halves the memory and the per-request store
-  calls, and this workload does not need the throughput.
-- `--timeout 120`: uploads run to 5 MB and the permission letter renders inline,
-  which is tight against gunicorn's 30-second default.
-- `/healthz` stays 200 even when Firestore is unreachable. Render restarts the
-  service on a non-2xx health check, and restarting cannot fix a database the
-  container cannot route to — the replacement process has the same network path.
-  The probe reports `{"status":"ok","database":"unreachable"}` instead, and caches
-  that verdict for `HEALTH_DB_CACHE_SECONDS` so polling does not itself take a
-  pooled connection.
-
-## Install on a new computer
-
-### Prerequisites
-
-| Requirement | Version | Notes |
-|---|---|---|
-| Python | 3.9 or newer | <https://www.python.org/downloads/> &mdash; tick **"Add Python to PATH"** on Windows |
-| A Git client | any | Or download this repository as a ZIP |
-| A Firebase project | any | The database and the service account key |
-| A Cloudflare account | any | The proof bucket and its R2 API token |
-
-You also need the department's Entra ID values, read from
-**Entra ID &rarr; App registrations &rarr; Aditya University Permission Portal**:
-
-| Value | Where it lives |
-|---|---|
-| `CLIENT_ID` | Overview |
-| `TENANT_ID` | Overview |
-| `CLIENT_SECRET` | Certificates &amp; secrets &rarr; New client secret (copy the **value**) |
-
-### Steps
-
-```bash
-# 1. Get the code
-git clone https://github.com/Vijayapardhu/PermissionSystem.git
-cd PermissionSystem
-
-# 2. Automated setup: virtual environment, dependencies, .env, schema
-python setup.py
-
-# 3. Enter the real values in .env
-#    CLIENT_ID, TENANT_ID, CLIENT_SECRET,
-#    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
-
-# 4. Start the app
-python wsgi.py
-```
-
-Open **<http://127.0.0.1:5000>**. `setup.py` is safe to re-run: it skips
-anything already in place.
-
-### Manual setup
-
-```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-copy .env.example .env      # Windows
-cp .env.example .env        # macOS / Linux
-```
-
-Then fill in `.env` and create the storage bucket and database (below).
-
-### Seed the database
-
-The app creates no collections itself; Firestore does that on first write. Seed
-the accounts the app expects once, after the credentials are in `.env`:
-
-```bash
-python migrations/seed_firestore.py
-```
-
-It writes the three staff accounts and four students, skips any account whose
-email already exists, and touches nothing else. Re-run it whenever you want the
-sample accounts back.
-
-
-Then set the connection string in `.env`:
-
-```env
-FIREBASE_PROJECT_ID=your-project-id
-FIREBASE_CREDENTIALS_PATH=/path/to/service-account.json
-```
-
-### Create the proof bucket
-
-In the Cloudflare dashboard: **R2 → Create bucket**, name `proofs`, public access
-off, then **Manage R2 API Tokens → Create Account API token** (Object Read &
-Write) and put the three values in `.env`. Nothing is written to the local
-filesystem any more, so there is no `storage/proofs/` directory to create.
-
-### Signing in
-
-While `DEV_MODE=true` the login page shows a **local account picker** using the
-same code path as real sign-in, so you can test everything before IT responds:
-
-| Role | Email |
-|---|---|
-| HOD | `hod.cse@adityauniversity.in` |
-| Lecturer | `lecturer1.cse@adityauniversity.in`, `lecturer2.cse@adityauniversity.in` |
-| Student | `26b21cs058@adityauniversity.in`, `26b21cs059@`, `25b21cs012@`, `24b21cs145@` |
-
-Once Outlook sign-in works, set `DEV_MODE=false`; `/auth/dev-login` then returns 404
-and cannot be used to bypass Microsoft.
-
-### Serving on a shared machine or server
-
-`python wsgi.py` runs the Flask development server, which is for testing only.
-
-```bash
-pip install waitress            # Windows
-waitress-serve --port=8080 wsgi:app
-
-pip install gunicorn            # Linux / Render
-gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 wsgi:app
-```
-
-The target is `wsgi:app`, not `app:app`. `wsgi.py` cannot be called `app.py`
-because the `app/` package would shadow it: Python resolves `import app` to the
-package directory, so gunicorn would load `app/__init__.py`, find no `app`
-attribute in it, and exit with
-`AppImportError: Failed to find attribute 'app' in 'app'`.
-
-Then in `.env`:
-
-```env
-HOST=0.0.0.0
-PORT=8080
-FLASK_DEBUG=false
-SESSION_COOKIE_SECURE=true      # only once HTTPS is in front of the app
-```
-
-**Redirect URI.** Entra ID matches redirect URIs exactly. Serving from anywhere
-other than `localhost:5000` means adding that URL under
-**App registrations &rarr; your app &rarr; Authentication &rarr; Web &rarr; Redirect URIs**
-and setting the same string in `REDIRECT_URI`. A mismatch gives `AADSTS50011`.
-
-### Troubleshooting
-
-| Symptom | Cause and fix |
-|---|---|
-| `AppImportError: Failed to find attribute 'app' in 'app'` | The Start Command in the Render dashboard reads `gunicorn app:app`. It must be `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - wsgi:app`. The WSGI callable lives in `wsgi.py`; `app` is the package, and there is deliberately no `app.py` to point at, because a top-level one would shadow the package |
-| `python: command not found` | Python missing or not on PATH; reinstall and tick "Add Python to PATH" |
-| `ModuleNotFoundError: flask` | Virtual environment not active, or dependencies not installed |
-| `Firestore is not configured` | `FIREBASE_CREDENTIALS_JSON` / `_PATH` is missing or is not valid JSON |
-| `FIREBASE_CREDENTIALS_PATH does not exist: {"type":"service_account"...}` | The service account JSON went into `FIREBASE_CREDENTIALS_PATH` instead of `FIREBASE_CREDENTIALS_JSON`. The app reads it anyway and warns, but the dashboard should be corrected: the JSON belongs in `_JSON`, and `_PATH` should hold a file path or be deleted |
-| `could not translate host name` / `Connection refused` | The service account credentials are wrong, or the project id does not match the key |
-| `DeadlineExceeded` | One store call passed `FIRESTORE_TIMEOUT_SECONDS`. It is raised rather than retried past the budget on purpose |
-| "The user directory is temporarily unavailable" on sign-in | Firestore is not answering. Search the log for `Firestore documents failed` — it names the call, the last driver error and how many attempts were made |
-| The log says `Firestore documents failed after 2 attempts` | The project is unreachable from this host, the credentials are wrong, or Firestore is not enabled for the project |
-| The log says `DefaultCredentialsError` | No credentials were found. `FIREBASE_CREDENTIALS_JSON` is set but empty — a Render env var cannot be an empty string, it has to hold the JSON or be deleted |
-| `/healthz` reports `"database": "unreachable"` | Firestore is not answering. The probe still returns 200 on purpose: restarting cannot fix a network path, and a restart loop is worse than the fault |
-| The dev picker is empty, sign-in is refused | `migrations/seed_firestore.py` has not been run, or the signed-in email is not one of the seeded accounts |
-| `Proof storage is not configured on this server` | The R2 credentials are missing, so no proof can be stored |
-| `row-level security` error | The app is connecting with the `anon` role. Use the project owner DSN |
-| Upload fails with a storage error | Bucket set to Public? It must be private |
-| No email ever arrives on Render | Free plan blocks ports 25/465/587. See "Two Render constraints" |
-| Sign-in loops back to the login page | `REDIRECT_URI` does not match the registered redirect URI exactly |
-| `AADSTS50011` | Same redirect URI mismatch |
-| Sign-in fails immediately | `CLIENT_SECRET` wrong, expired, or still a placeholder |
-| Port already in use | Change `PORT` in `.env`, or stop whatever is using it |
-| `setup.py` skipped the seed | It needs `FIREBASE_CREDENTIALS_PATH` (or `_JSON`) in `.env` first; then run `python migrations/seed_firestore.py` |
-| Every data-backed page returns 503 | Firestore unreachable. The health path still returns 200; check the credentials and the project |
-| Proof download returns 404 | Object missing from the bucket, or `file_path` in the database no longer matches |
-
-## Authentication
-
-Real sign-in uses Microsoft Entra ID. Request these values from university IT:
-
-| Setting      | Where it comes from                          |
-|--------------|----------------------------------------------|
-| `CLIENT_ID`  | App registration &gt; Overview               |
-| `TENANT_ID`  | App registration &gt; Overview               |
-| `CLIENT_SECRET` | Certificates &amp; secrets                |
-| `REDIRECT_URI` | Matches `REDIRECT_URI` in `.env`          |
-
-Register the redirect URI under **Authentication &gt; Add a platform &gt; Web**.
-
-Until IT provides these, `DEV_MODE=true` shows a local sign-in picker on the login
-page. It resolves roles through the same `users` table as the Entra path, so the
-workflow can be exercised end to end. Set `DEV_MODE=false` once SSO is live — the
-`/auth/dev-login` route then returns 404.
-
-## Roles
-
-| Role       | Access                                                     |
-|------------|------------------------------------------------------------|
-| `STUDENT`  | Submit requests, upload proof, view own history, withdraw pending |
-| `LECTURER` | Review assigned requests: approve outright, verify & forward to HOD, or reject with remarks; keep a proctor list and taught classes separately |
-| `HOD`      | Decide forwarded requests, import faculty from Excel, set request routing, analytics dashboard, filterable register, printable report |
-
-Roles come solely from the `users.email` column after a verified identity — never from
-client input.
-
-## Workflow
+**The Start Command must be `wsgi:app`, never `app:app`.** The `app/` package
+directory wins over any same-named module in Python's import system, so
+`gunicorn app:app` resolves to the *package* and fails with:
 
 ```
-Student (Entra sign-in)
-  -> choose activity permission
-  -> fill dates, reason, upload proof
-  -> routed by reason: hackathon/event to the event desk, curricular to the
-     curricular desk, everything else to the student's own proctor
-     (general proctor, then least-loaded lecturer as fallbacks)
-  -> reviewer notified by Outlook email
-Lecturer
-  -> opens request, previews proof inline
-  -> APPROVE (grants the permission outright), VERIFY & FORWARD to the HOD
-     (for what they cannot permit themselves; remark required), or REJECT
-     (remark required)
-  -> student told which of the three happened; HOD informed, or asked to decide
-HOD
-  -> decides forwarded requests from the register (inline or detail page,
-     striking students off a group where needed)
-  -> live charts, filterable register, print report (HOD signature only)
+Failed to find attribute 'app' in 'app'
+AppImportError: module 'app' has no attribute 'app'
 ```
 
-## Project structure
+That is why the entry point is `wsgi.py` and not `app.py` — see its docstring.
+
+### Health check
+
+`GET /healthz` returns `{"database":"ok","status":"ok"}` and non-200 if the
+database is unreachable. Point Render's and any uptime monitor's health check at
+it; it is the one endpoint that proves the whole stack works.
+
+### Signing in without Microsoft
+
+`DEV_MODE=true` enables a local sign-in that bypasses Entra ID, for
+demonstrations. **It must be off in production.**
+
+If sign-in fails with `AADSTS50011`, the reply URL in the Azure app
+registration does not exactly match `REDIRECT_URI` in `.env` — including scheme,
+trailing slash and port. Copy the URL from the error and match it character for
+character.
+
+### Seeding an empty database
 
 ```
-config.py              Settings loaded from .env
-setup.py               Automated first-time setup
-wsgi.py                 WSGI entry point (development server, gunicorn/waitress)
-requirements.txt       Pinned dependencies
-Procfile               gunicorn start command for Render
-render.yaml            Render blueprint (env vars, start command, health check)
-app/__init__.py        Application factory, blueprints, /healthz, error handlers
-app/auth/              MSAL client and sign-in routes
-app/models/            Dataclasses, the store interface, and its two backends
-  values.py              How a Python value is stored and read back, shared by both
-  firestore.py           Firestore implementation, and the backend selector
-  sqlstore.py            SQL implementation (SQLite / PostgreSQL)
-app/permissions/       Validation and orchestration (service layer)
-app/student/           Student portal routes
-app/faculty/           Lecturer portal, classes, attendance, leave, proof download
-app/hod/               Analytics, register, reports
-app/utils/             Security helpers, Cloudflare R2 proof storage, roster parsing, email, navigation, letter QR codes
-templates/             Jinja2 templates
-templates/student/letter.html    Formal A4 permission letter, one page, with its QR code
-templates/auth/verify.html        Public, account-free page a letter's QR code opens
-static/                CSS, Chart.js dashboard, Aditya logo assets
-migrations/
-  seed_firestore.py       Idempotent seed of the staff and student accounts
-  import_college_data.py  Loads the college's faculty, sections, timetables, students
-verify.py              Unit harness, no database required
-workflow_test.py       End-to-end over HTTP
-class_features_test.py Classes, roster and attendance
-sidebar_test.py        Every page for every role
+migrations/seed_firestore.py     create collections and indexes
+migrations/import_college_data.py  the faculty register
+migrations/import_cse_students.py  the student roster
 ```
 
-Nothing is written to the local filesystem at runtime. Uploaded proofs live in
-the private R2 bucket under `<year>/<month>/<uuid>.<ext>`, and
-`proof_documents.file_path` holds that object key.
+Full runbook for the live server: **[OPERATIONS.md](OPERATIONS.md)**.
 
-## Security notes
-
-- No local passwords; identities come from Microsoft.
-- Proof uploads are validated by extension **and** magic bytes, so a renamed
-  `.exe` or script is rejected.
-- Stored object keys are random UUIDs; original names are kept only in the database.
-- Object keys are validated, refusing absolute paths, `..` segments and anything
-  that would resolve outside the bucket root.
-- The R2 bucket is private. Proofs are served only through an authorised
-  route, never by guessing a URL.
-- Row Level Security is enabled on every table with no `anon` or `authenticated`
-  policy, so roll numbers and reasons are unreachable through the Data API even
-  if the publishable key leaks.
-- Proof downloads are authorised: a student sees only their own, a lecturer only
-  their assigned requests.
-- `next` redirects are restricted to same-site relative paths.
-- The service-role key is read from the environment only, never rendered.
-
-## Security
-
-| Control | Implementation |
-|---|---|
-| Identity | Microsoft Entra ID only; roles come from the `users` table, never from input |
-| CSRF | Every `POST`/`PUT`/`PATCH`/`DELETE` validated against a per-session token in `app/utils/security.py` |
-| Sign-out | `POST`-only, so it cannot be triggered by a link or prefetch |
-| Session fixation | Session cleared and CSRF token rotated on every sign-in |
-| Idle timeout | Session discarded after `IDLE_TIMEOUT_SECONDS` (default 3600) of inactivity |
-| Cookies | `HttpOnly`, `SameSite=Lax`, custom name; add `SESSION_COOKIE_SECURE=true` under HTTPS |
-| Headers | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `COOP`, `Permissions-Policy` |
-| Caching | `Cache-Control: no-store` on `/student`, `/faculty`, `/hod` pages |
-| Uploads | Extension **and** magic-byte validation, 5 MB cap, random object keys, key-traversal refusal |
-| Authorisation | Role guards per route; students see only their own requests, lecturers only assigned ones |
-| Redirects | `next` restricted to same-site relative paths |
-| Data access | The service account key is server-side only, and no Firebase web config is used server-side |
-| Proof storage | Private R2 bucket, fetched through an authorised route |
-| Letter verification | `/verify/<ref>.<signature>` is public and read-only; the signature is derived from `SECRET_KEY`, so a link cannot be forged and a reference number cannot be walked |
-
-Set `SESSION_COOKIE_SECURE=true` and serve over HTTPS before going live.
-
-## Verifying a letter by QR code
-
-Every permission letter carries a QR code in its header. Scanning it opens
-`/verify/<ref>.<signature>`, which works **without an account** — a gatekeeper, a
-class representative or an employer can open it on a phone. The page shows the
-PIN, the reference number, the student's name and department, the permission
-type and period, the reason stated, the status, the reviewing faculty, the
-decision date and any remarks. The letter states the same URL in writing, so it
-still verifies if the code is smudged.
-
-The signature in the URL is the access control, and it is there for a specific
-reason: a bare `/verify/REQ-0001` would let anyone walk the whole department, and
-these records carry medical reasons. The signature is produced by this app from
-`SECRET_KEY` and is deliberately **not** timestamped, so a reprint of a letter
-produces the same code and a letter already in circulation keeps verifying. The
-trade-off is that rotating `SECRET_KEY` invalidates every letter already printed.
-
-The page is a read-only receipt: no form, no session, and no data that only staff
-can see. A link that does not verify returns 404, the same as a record that does
-not exist, so the endpoint cannot be used to test which reference numbers are
-real.
-
-### Signing out
-
-- **Sign out** — ends the portal session only.
-- **Sign out of all Microsoft sessions** — additionally ends the university SSO
-  session, so other university services and other devices are signed out too.
-
-The sign-out button is a `POST` form, so a link, an image tag or a browser
-prefetch can never end someone's session. Navigating straight to
-`/auth/logout` is still supported: `GET` shows a confirmation page with the
-CSRF-protected `POST` form rather than a bare 405. Any other method mismatch
-renders a branded 405 page rather than Werkzeug's default.
-
-## Navigation
-
-Staff get a persistent sidebar; students keep the compact top navigation.
-Definition lives in `app/utils/nav.py`, rendered by `templates/_sidebar.html`,
-and injected as `nav_items` / `nav_sections` by a context processor.
-
-One markup tree serves both presentations: a fixed column at `lg` and above,
-and a Bootstrap off-canvas drawer below it, opened from the header button.
-
-Design rules:
-
-- Deep navy surface (`#0a1f38`) rather than the busy header gradient, so page
-  content carries the colour.
-- **Gold (`#ffd166`) appears only on the current page** — as the active row
-  tint, the active icon tile fill, and the left marker. Nowhere else.
-- Icons sit in 30px rounded tiles so the list scans vertically.
-- Footer holds the signed-in user block and a separate sign-out row.
-- `aria-current="page"` on the active link; visible focus rings throughout.
-
-| Role | Sections and pages |
-|---|---|
-| Lecturer | Review: Overview, All Requests, Find Student &middot; Teaching: My Classes, Attendance &middot; Insights: My Reports |
-| HOD | Overview: Overview, All Requests, Students &middot; Faculty: Workload, Add Faculty, Routing &middot; Academic: Classes, Daily Report &middot; Insights: Analytics |
-| Student | Top nav: Dashboard, New Request, My Requests, My Classes, Account |
-
-## Classes, proctor lists and attendance
-
-A lecturer keeps two separate lists. **My Classes** is what they teach: create
-a class, then bulk-load the roster from a spreadsheet.
-
-```
-POST /faculty/classes/new          name, section, academic year
-POST /faculty/classes/<id>/roster   .xlsx | .xlsm | .csv | .txt
-```
-
-**Proctor Students** is who they mentor: proctor lists whose rolls have their
-permission requests routed to them. Same spreadsheet upload, no attendance.
-
-```
-GET  /faculty/proctor               proctor lists
-POST /faculty/proctor/new           name, section, academic year
-POST /faculty/proctor/<id>/roster   .xlsx | .xlsm | .csv | .txt
-```
-
-## Request routing
-
-A new request is classified from its reason text (`classify_route` in
-`app/models/permission.py`): hackathons, contests and events go to the event
-queue, curricular reasons to the curricular queue, everything else to the
-student's own proctor. The HOD names one reviewer per special queue -- plus a
-general proctor as fallback -- on the Faculty page, and adds lecturers from an
-Excel sheet with Name and Email columns:
-
-```
-POST /hod/faculty/import    Name + Email spreadsheet -> LECTURER accounts
-POST /hod/faculty/routing   event / curricular / general reviewer
-```
-
-## Attendance
-
-The roster parser tolerates a header row, numbers instead of text, and extra
-columns (`26B21CS058 - Ravi Kumar` still yields the roll number). Roll numbers
-with no student account are **stored anyway** and linked automatically the
-first time that student signs in, so a roster can be loaded before the cohort
-has ever used the portal. The faculty import parser instead finds Name and
-Email columns and reports malformed rows rather than aborting the sheet.
-
-| Feature | Route |
-|---|---|
-| Class list and creation | `/faculty/classes` |
-| Proctor lists and rolls | `/faculty/proctor` |
-| Roster + permissions for a chosen date | `/faculty/classes/<id>?date=YYYY-MM-DD` |
-| Attendance picker | `/faculty/attendance` |
-| Mark attendance | `/faculty/classes/<id>/attendance` |
-
-Attendance defaults to `PRESENT`, auto-switches to `ON_PERMISSION` for any
-student with an approved permission covering that date, refuses future dates, and
-upserts so re-marking updates rather than duplicating. `ON_PERMISSION` is only
-ever applied when an **approved** request actually spans that date.
+---
 
 ## Tests
 
 ```bash
-python verify.py              # 392 checks, no database required
-python workflow_test.py       # end-to-end over HTTP
-python class_features_test.py # classes / roster / attendance
-python sidebar_test.py        # every page for every role
+python verify.py              # 900+ checks, no database needed
+python workflow_test.py       # end-to-end over HTTP, against a running server
+python class_features_test.py # classes and rosters
+python sidebar_test.py        # every page, for every role
 ```
 
-The first three all pass. The last three need the server running **and**
-credentials set, because they assert against real store state. Point
-`BASE` in each at the server if it is not on `http://localhost:5000`.
+`verify.py` is the one to run. The other three need the server up with
+credentials set, because they assert against real state.
 
-`verify.py` covers app construction, role enforcement, sign-in failure modes,
-upload security against an in-memory fake of the R2 S3 API, request
-validation, `TIME` normalisation, CSRF and logout redirects, proof-key
-containment, branding assets, responsive CSS rules, deployment settings in
-`render.yaml` and `Procfile`, template compilation (including the
-`with context` requirement for macros and the ban on `request.path`, which child
-templates shadow), and full page rendering.
+Three checks in `verify.py` are known to fail and have done for some time: two
+around conflicting-submission previews and one about an unknown event
+coordinator. They are stale harness assertions, not defects — see the comment
+at the top of the file.
 
-`workflow_test.py` drives the running server over HTTP and then asserts database
-state: real sign-in, submission with a genuine PDF upload, rejection of a `.php`
-upload and of a `.pdf` containing script, lecturer approve/reject rules, blocked
-double-actioning, cross-role isolation, and HOD analytics and reporting.
+---
 
-## Notes
+## Security
 
-- Outlook SMTP often blocks the default port, and Render's free plan blocks it
-  outright. If delivery fails, the app logs it and continues rather than
-  rejecting the student's request.
-- `MAX_LEAVE_DAYS` in `app/permissions/service.py` caps a single request at 30 days.
-- Reason categorisation for the HOD charts is keyword-based
-  (`categorize_reason`) and can be swapped for a lookup table.
-- Reviewer routing is rule-based with fallbacks: event reasons to the event
-  desk, curricular reasons to the curricular desk, everything else to the
-  student's proctor; unclaimed requests fall back to the general proctor and
-  then to the lecturer with the fewest pending items.
-- Text searches match roll numbers and names case-insensitively in Python
-  (`needle in value.upper()`). The original MySQL build searched under a
-  case-insensitive collation, so `26b21cs058` matched a stored `26B21CS058`, and
-  every user-facing search has kept that behaviour since.
-- Chart and report days are bucketed in `REPORT_TIMEZONE` (default
-  `Asia/Kolkata`). Timestamps are stored in UTC, and the store converts them on
-  the way out, so a request submitted at 23:30 IST charts under that IST day
-  rather than the following UTC one.
-- `get_stats_for_hod()` computes a `reasons` breakdown that no template renders.
-  It is kept because the method is part of the HOD analytics surface, but it runs
-  on every dashboard load for nothing.
+- Sign-in is Microsoft Entra ID. `DEV_MODE` enables a local password-less
+  sign-in and **must be off anywhere real** — check it first if the site is
+  misbehaving.
+- Content-Security-Policy is set in nginx, not the app. Bootstrap and its icons
+  are served from `/static/vendor`, so the policy needs no third-party host.
+- Uploads are validated by content, not by extension, and proof files are
+  served from a key-checked route rather than a public directory.
+- Every write is POST with a CSRF token. Sign-out is POST for the same reason.
+- The supervisor's SSH, fail2ban, unattended upgrades and sysctl hardening are
+  described in [OPERATIONS.md](OPERATIONS.md).
 
-## Local setup notes
+---
 
-There is no local database or object store to install. Firestore holds the
-records and Cloudflare R2 holds the proofs, so local development uses the same
-two services as production.
+## Known gaps
 
-Seeding needs no client and no redirect: `python migrations/seed_firestore.py` works
-the same on every platform, and it exits non-zero if the write fails.
+- **Sign-in is effectively closed to students.** Of 1,138 student accounts, the
+  great majority have no email address, and that number rises as students sign
+  in for the first time. The accounts, names and phone numbers are all correct;
+  the college mailboxes are not allocated. This is an IT task, not a code
+  change. To see the current figure:
 
+  ```bash
+  cd /home/ubuntu/app && SQLITE_PATH=local-dev.db DATABASE_BACKEND=sql .venv/bin/python -c "
+  from app import create_app; from app.models import UserRole
+  from app.models.user import UserModel
+  a = create_app()
+  with a.app_context():
+      s = UserModel._by_role(UserRole.STUDENT.value, 'name')
+      print('students:', len(s), 'with an email:', sum(1 for u in s if u.email))"
+  ```
+- **No automated backup of the live database.** See
+  [OPERATIONS.md](OPERATIONS.md#backups) — this is the most serious gap here.
+- `MAIL_USERNAME` is empty on the live server, so **no notification email is
+  actually sent**. The code path runs and logs a suppression notice. Students
+  must open the site to see decisions until SMTP is configured.
+- Faculty leave substitutions are computed from the timetable, which is
+  maintained by hand.
