@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, change_table with context %}
+{% block title %}Confirm classwork changes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Confirm your changes</h1>
+    <p class="page-head__sub">
+      {{ changes | length }} field{{ '' if changes | length == 1 else 's' }} of
+      &ldquo;{{ entry.title }}&rdquo; will change. Nothing has been saved yet.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil"></i> Back to editing
+    </a>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-arrow-left-right"></i> What will change
+    </h2>
+  </div>
+  <div class="card-au__body">
+    {{ change_table(changes) }}
+  </div>
+</div>
+
+{# The consequence of the change, stated before it is applied rather than in a
+   message afterwards. Moving the date is what decides which permissions get
+   restored and which get suspended, and it is the one edit here that reaches
+   beyond this record -- so it gets said out loud at the point of consent. #}
+<div class="card-au mt-3" style="border-left:3px solid var(--au-warning)">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-exclamation-triangle"></i> What else this will do
+    </h2>
+  </div>
+  <div class="card-au__body">
+    <ul class="small mb-0">
+      {% if entry.objection_count %}
+        <li>
+          The {{ entry.objection_count }} permission{{ '' if entry.objection_count == 1 else 's' }}
+          this currently suspends will be <strong>restored</strong> and their
+          objections closed.
+        </li>
+      {% else %}
+        <li>This currently suspends no permissions, so nothing is restored.</li>
+      {% endif %}
+      <li>
+        If the new date or session clashes with a granted permission, that
+        permission will be suspended and sent back to its reviewer.
+      </li>
+      <li>Lowering the importance below Moderate stops it raising objections at all.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check2"></i> Save</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post"
+          action="{{ url_for('faculty.classwork_edit_apply', classwork_id=entry.id) }}">
+      {{ csrf_field() }}
+      <input type="hidden" name="class_id" value="{{ form.class_id }}">
+      <input type="hidden" name="title" value="{{ form.title }}">
+      <input type="hidden" name="date" value="{{ form.date }}">
+      <input type="hidden" name="importance" value="{{ form.importance }}">
+      <input type="hidden" name="notes" value="{{ form.notes }}">
+      {# Slot and session are hidden rather than a visible field because the
+         confirm table already shows the resolved session; carrying them through
+         unchanged avoids re-resolving a timetable that may have been edited
+         since the preview was rendered. #}
+      <input type="hidden" name="session" value="{{ form.get('session', entry.period_label or '') }}">
+      {% if entry.period %}<input type="hidden" name="period" value="{{ entry.period }}">{% endif %}
+
+      <div class="d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-check2"></i>
+          Save {{ changes | length }} change{{ '' if changes | length == 1 else 's' }}
+        </button>
+        <a href="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+           class="btn btn-outline-secondary btn-pill">Back to editing</a>
+        <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+           class="btn btn-outline-secondary btn-pill">Discard</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state, time_range with context %}
+{% block title %}{{ entry.title }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">{{ entry.title }}</h1>
+    <p class="page-head__sub">
+      {{ entry.class_name or 'No class' }}
+      {% if entry.section_code %} &middot; {{ entry.section_code }}{% endif %}
+      &middot; {{ entry.date.strftime('%A, %d %B %Y') }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+    <a href="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+       class="btn btn-outline-primary btn-pill">
+      <i class="bi bi-pencil"></i> Edit
+    </a>
+    <a href="{{ url_for('faculty.classwork') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All classwork
+    </a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-file-text"></i> Details</h2>
+      </div>
+      <div class="card-au__body">
+        <dl class="definition">
+          <dt>Class</dt><dd>{{ entry.class_name or '—' }}</dd>
+          <dt>Section</dt><dd>{{ entry.section_code or '—' }}</dd>
+          <dt>Date</dt><dd>{{ entry.date.strftime('%d %B %Y (%A)') }}</dd>
+          <dt>Session</dt>
+          <dd>
+            {{ entry.session_label }}
+            {% if entry.start_time %}
+              <span class="form-text d-block">
+                {{ time_range(entry.start_time, entry.end_time) }}
+                {% if entry.period %} &middot; period {{ entry.period }}{% endif %}
+              </span>
+            {% endif %}
+          </dd>
+          <dt>Importance</dt>
+          <dd>
+            <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+            <span class="d-block form-text">{{ entry.importance_help }}</span>
+          </dd>
+          {% if entry.notes %}
+          <dt>Note</dt><dd>{{ entry.notes }}</dd>
+          {% endif %}
+          <dt>Recorded</dt>
+          <dd>{{ entry.created_at.strftime('%d %B %Y at %I:%M %p') if entry.created_at else '—' }}</dd>
+          {% if entry.updated_at and entry.created_at
+                and entry.updated_at != entry.created_at %}
+          <dt>Last changed</dt>
+          <dd>{{ entry.updated_at.strftime('%d %B %Y at %I:%M %p') }}</dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-inboxes"></i> Permissions this affects</h2>
+        <span class="form-text">{{ objections | length }} open</span>
+      </div>
+      {% if objections %}
+      <div class="au-table-wrap">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th>Request</th>
+              <th>Student</th>
+              <th>Dates</th>
+              <th>Reviewer</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for objection in objections %}
+            <tr>
+              <td class="table-au__strong text-nowrap">
+                REQ-{{ '%04d' % objection.request_id }}
+              </td>
+              <td class="text-nowrap">
+                {{ objection.request.student_name if objection.request else '—' }}
+              </td>
+              <td class="small text-nowrap">
+                {% if objection.request %}
+                  {{ objection.request.start_date.strftime('%d %b') }}
+                  &ndash;
+                  {{ objection.request.end_date.strftime('%d %b %Y') }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="small">{{ objection.assigned_faculty_name or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-foot">
+        <span>
+          These were granted, then sent back for review because this classwork
+          clashed with them. They are waiting on the reviewer named above.
+        </span>
+      </div>
+      {% else %}
+      <div class="card-au__body">
+        {% if entry.raises_objections %}
+          <p class="text-muted mb-0 small">
+            <i class="bi bi-check2-circle"></i>
+            Nothing is affected right now. If a permission is granted for
+            {{ entry.date.strftime('%d %B') }} it will be sent back for review.
+          </p>
+        {% else %}
+          <p class="text-muted mb-0 small">
+            <i class="bi bi-info-circle"></i>
+            {{ entry.importance_label }} classwork is shown to reviewers but does
+            not reopen anything that was already granted.
+          </p>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-5">
+    <div class="card-au" style="border-left:3px solid var(--au-danger)">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-trash"></i> Delete</h2>
+      </div>
+      <div class="card-au__body">
+        {# Says what will happen to the permissions, not just that the row goes
+           away. Deleting is not a tidy-up: it puts back every permission this
+           suspended, and a lecturer should be choosing that rather than being
+           surprised by it. #}
+        <p class="small">
+          {% if objections %}
+            Deleting this will restore
+            <strong>{{ objections | length }} permission{{ '' if objections|length == 1 else 's' }}</strong>
+            that it suspended, and close the objections raised against it.
+          {% else %}
+            Deleting this removes the record. It has not suspended anything, so
+            no permission will change.
+          {% endif %}
+          There is no undo.
+        </p>
+        <form method="post"
+              action="{{ url_for('faculty.classwork_delete', classwork_id=entry.id) }}"
+              onsubmit="return confirm('Delete &quot;{{ entry.title }}&quot;?{% if objections %} {{ objections|length }} permission(s) will be restored.{% endif %} This cannot be undone.');">
+          {{ csrf_field() }}
+          <button type="submit" class="btn btn-outline-danger btn-pill w-100">
+            <i class="bi bi-trash"></i> Delete this classwork
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

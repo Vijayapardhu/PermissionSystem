@@ -1,0 +1,205 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Record classwork &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Record Classwork</h1>
+    <p class="page-head__sub">
+      What your section has scheduled. Reviewers see it when deciding on a
+      permission, and recording it after a permission was granted sends that
+      permission back for review.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classwork') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All classwork
+    </a>
+  </div>
+</div>
+
+{# One question per block, in the order they are asked, rather than a grid of
+   every field at once. The old page put all seven on one screen beside a table,
+   which is why it needed a two-column layout to be readable at all -- and it is
+   still a phone-first page, because this is filled in between classes. #}
+<form method="post" action="{{ url_for('faculty.classwork_new') }}" class="row g-3">
+  {{ csrf_field() }}
+
+  <div class="col-12 col-lg-8">
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-people"></i> Which section?</h2>
+      </div>
+      <div class="card-au__body">
+        <div class="mb-2">
+          <label class="form-label" for="cw-class">Class</label>
+          <select class="form-select" id="cw-class" name="class_id" required>
+            <option value="">Choose a class…</option>
+            {% for group in classes %}
+              <option value="{{ group.id }}" {{ 'selected' if chosen_class == group.id }}>
+                {{ group.name }}{% if group.section_code %} &middot; {{ group.section_code }}{% endif %}
+                ({{ group.member_count }} student{{ '' if group.member_count == 1 else 's' }})
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-text">
+          {{ 'Pick a date to load the timetable slots for this section.' if chosen_class
+             else 'Choose a class, then pick a date to load its timetable slots.' }}
+        </div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-calendar-event"></i> Which day?</h2>
+      </div>
+      <div class="card-au__body">
+        <div class="row g-2">
+          <div class="col-7">
+            <label class="form-label" for="cw-date">Date</label>
+            <input type="date" class="form-control" id="cw-date" name="date"
+                   value="{{ form.get('date') or chosen_date.isoformat() }}"
+                   min="{{ now_date }}" required>
+          </div>
+          <div class="col-5 d-flex align-items-end">
+            {# Reloads the page rather than fetching slots behind the scenes, so
+               the class and date survive a refresh and the back button works.
+               A lecturer who picks the wrong day comes back here rather than
+               losing the half-filled form. #}
+            <button type="submit" formaction="{{ url_for('faculty.classwork_new') }}"
+                    formmethod="get" class="btn btn-outline-secondary w-100">
+              <i class="bi bi-calendar-week"></i> Load slots
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-pencil-square"></i> What is it?</h2>
+      </div>
+      <div class="card-au__body">
+        <label class="visually-hidden" for="cw-title">Title</label>
+        <input type="text" class="form-control form-control-lg" id="cw-title" name="title"
+               maxlength="120" required
+               value="{{ form.get('title', '') }}"
+               placeholder="Project review, internal exam, slip test">
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-clock"></i> When in the day?</h2>
+      </div>
+      <div class="card-au__body">
+        <fieldset>
+          <legend class="visually-hidden">Session</legend>
+          {% if slots %}
+            <div class="mb-2">
+              {% for slot in slots %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="period"
+                       id="cw-period-{{ slot.period }}" value="{{ slot.period }}"
+                       {{ 'checked' if form.get('period') == slot.period|string }}>
+                <label class="form-check-label" for="cw-period-{{ slot.period }}">
+                  {{ slot.label }}
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="session"
+                     id="cw-session-none" value="" checked>
+              <label class="form-check-label" for="cw-session-none">
+                <span class="text-muted">Not in a timetable slot</span>
+              </label>
+            </div>
+          {% else %}
+            <p class="form-text mb-2">
+              No timetable slots loaded for this class and date. Choose a session
+              below, or go back and load the slots.
+            </p>
+          {% endif %}
+
+          <div class="mt-2">
+            {% for value, label in [('full_day', 'Full day'),
+                                    ('morning', 'Morning'),
+                                    ('afternoon', 'Afternoon')] %}
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="session"
+                     id="cw-session-{{ value }}" value="{{ value }}"
+                     {{ 'checked' if form.get('session') == value
+                        or (not slots and not form.get('session') and loop.first) }}>
+              <label class="form-check-label" for="cw-session-{{ value }}">{{ label }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="form-text mt-1">
+            A timetable slot uses that section's real clock times. A session uses
+            the department's standard span.
+          </div>
+        </fieldset>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-exclamation-triangle"></i> How important?</h2>
+      </div>
+      <div class="card-au__body">
+        {% for value, label, help_text in choices %}
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="importance"
+                 id="cw-imp-{{ value.value }}" value="{{ value.value }}"
+                 {{ 'checked' if form.get('importance', '') == value.value
+                    or (not form.get('importance') and loop.first) }}
+                 {{ 'required' if loop.first }}>
+          <label class="form-check-label" for="cw-imp-{{ value.value }}">
+            <strong>{{ label }}</strong>
+            <span class="d-block form-text">{{ help_text }}</span>
+          </label>
+        </div>
+        {% endfor %}
+        <div class="form-text mt-1">
+          Moderate and above can suspend a permission that was already granted.
+          Notification and Minor are shown to reviewers but do not reopen
+          anything.
+        </div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-sticky"></i> Note (optional)</h2>
+      </div>
+      <div class="card-au__body">
+        <textarea class="form-control" id="cw-notes" name="notes" rows="2"
+                  maxlength="400"
+                  placeholder="Anything a reviewer should know — room change, syllabus.">{{ form.get('notes', '') }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card-au" style="border-left:3px solid var(--au-primary)">
+      <div class="card-au__body">
+        <p class="small mb-3">
+          <i class="bi bi-info-circle"></i>
+          Recording <strong>Moderate</strong> or above may suspend a permission
+          that was already granted and send it back to its reviewer. You will be
+          told how many, on the next screen.
+        </p>
+        <button type="submit" class="btn btn-primary btn-pill w-100 mb-2">
+          <i class="bi bi-check-circle"></i> Record classwork
+        </button>
+        <a href="{{ url_for('faculty.classwork') }}"
+           class="btn btn-outline-secondary btn-pill w-100">Cancel</a>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

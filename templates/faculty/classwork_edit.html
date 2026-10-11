@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Edit {{ entry.title }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Edit Classwork</h1>
+    <p class="page-head__sub">
+      Each field shows what it holds now. Saving previews the differences before
+      anything is written.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Cancel
+    </a>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+      class="row g-3">
+  {{ csrf_field() }}
+
+  <div class="col-12 col-lg-8">
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-people"></i> Which section?</h2>
+      </div>
+      <div class="card-au__body">
+        <label class="visually-hidden" for="cw-class">Class</label>
+        <select class="form-select" id="cw-class" name="class_id" required>
+          {% for group in classes %}
+            <option value="{{ group.id }}" {{ 'selected' if entry.class_id == group.id }}>
+              {{ group.name }}{% if group.section_code %} &middot; {{ group.section_code }}{% endif %}
+              ({{ group.member_count }} student{{ '' if group.member_count == 1 else 's' }})
+            </option>
+          {% endfor %}
+        </select>
+        <div class="form-text mt-1">Now: {{ entry.class_name or '—' }}</div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-calendar-event"></i> Which day?</h2>
+      </div>
+      <div class="card-au__body">
+        <div class="row g-2">
+          <div class="col-7">
+            <label class="visually-hidden" for="cw-date">Date</label>
+            <input type="date" class="form-control" id="cw-date" name="date"
+                   value="{{ entry.date.isoformat() }}" required>
+          </div>
+          <div class="col-5 d-flex align-items-end">
+            {# Reloads so the slot list below matches the date just chosen. Same
+               reason as the create form: the fields already filled in survive
+               the round trip through the URL only for what is in the query, so
+               this is deliberately a plain GET of the same route -- the title
+               and note are re-entered by hand rather than silently lost. #}
+            <button type="submit" class="btn btn-outline-secondary w-100">
+              <i class="bi bi-calendar-week"></i> Update slots
+            </button>
+          </div>
+        </div>
+        <div class="form-text mt-1">Now: {{ entry.date.strftime('%d %B %Y (%A)') }}</div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-pencil-square"></i> What is it?</h2>
+      </div>
+      <div class="card-au__body">
+        <label class="visually-hidden" for="cw-title">Title</label>
+        <input type="text" class="form-control form-control-lg" id="cw-title" name="title"
+               maxlength="120" required value="{{ entry.title }}">
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-clock"></i> When in the day?</h2>
+      </div>
+      <div class="card-au__body">
+        <fieldset>
+          <legend class="visually-hidden">Session</legend>
+          {% if slots %}
+            <div class="mb-2">
+              {% for slot in slots %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="period"
+                       id="cw-period-{{ slot.period }}" value="{{ slot.period }}"
+                       {{ 'checked' if entry.period == slot.period }}>
+                <label class="form-check-label" for="cw-period-{{ slot.period }}">
+                  {{ slot.label }}
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="session"
+                     id="cw-session-none" value=""
+                     {{ 'checked' if not entry.period }}>
+              <label class="form-check-label" for="cw-session-none">
+                <span class="text-muted">Not in a timetable slot</span>
+              </label>
+            </div>
+          {% else %}
+            <p class="form-text mb-2">
+              No timetable slots for this section on this date. Keep the current
+              session, or move the date to a day the section meets.
+            </p>
+          {% endif %}
+
+          <div class="mt-2">
+            {% for value, label in [('full_day', 'Full day'),
+                                    ('morning', 'Morning'),
+                                    ('afternoon', 'Afternoon')] %}
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="session"
+                     id="cw-session-{{ value }}" value="{{ value }}"
+                     {{ 'checked' if entry.period_label == value }}>
+              <label class="form-check-label" for="cw-session-{{ value }}">{{ label }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="form-text mt-1">Now: {{ entry.session_label }}</div>
+        </fieldset>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-exclamation-triangle"></i> How important?</h2>
+      </div>
+      <div class="card-au__body">
+        {% for value, label, help_text in choices %}
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="importance"
+                 id="cw-imp-{{ value.value }}" value="{{ value.value }}"
+                 {{ 'checked' if entry.importance == value.value }}>
+          <label class="form-check-label" for="cw-imp-{{ value.value }}">
+            <strong>{{ label }}</strong>
+            <span class="d-block form-text">{{ help_text }}</span>
+          </label>
+        </div>
+        {% endfor %}
+        <div class="form-text mt-1">Now: {{ entry.importance_label }}</div>
+      </div>
+    </div>
+
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-sticky"></i> Note (optional)</h2>
+      </div>
+      <div class="card-au__body">
+        <textarea class="form-control" id="cw-notes" name="notes" rows="2"
+                  maxlength="400">{{ entry.notes or '' }}</textarea>
+        {% if entry.notes %}
+          <div class="form-text mt-1">Now: {{ entry.notes }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card-au" style="border-left:3px solid var(--au-primary)">
+      <div class="card-au__body">
+        {# Stated up front rather than discovered after saving. Moving the date
+           or the session changes what this clashes with, which may restore
+           permissions and may suspend new ones -- and neither is visible from
+           the form itself. #}
+        <p class="small mb-3">
+          <i class="bi bi-exclamation-triangle"></i>
+          Moving the date or the session changes what this clashes with.
+          Anything it currently suspends will be restored, and anything the new
+          date clashes with will be sent for review.
+        </p>
+        <button type="submit" class="btn btn-primary btn-pill w-100 mb-2">
+          <i class="bi bi-check-circle"></i> Preview changes
+        </button>
+        <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+           class="btn btn-outline-secondary btn-pill w-100">Cancel</a>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

@@ -304,6 +304,34 @@ class User:
     def roll_number_display(self) -> str:
         return self.roll_number or '—'
 
+    @property
+    def staff_code_display(self) -> str:
+        """The college's own number for a member of staff, or a dash.
+
+        Every member of teaching staff has an employee code and none has a roll
+        number, so anything printing a roll for everybody shows a lecturer a
+        dash under a heading that says "Roll number" -- which reads as missing
+        data rather than as the wrong identifier.
+        """
+        return self.employee_code or '—'
+
+    @property
+    def id_label(self) -> str:
+        """What to call this person's identifier on screen: roll or employee code.
+
+        The two populations are identified by different numbers and the
+        difference is not cosmetic -- a roll number is the college's own for a
+        student, an employee code is the payroll number for staff. Printing one
+        under the other's heading is how a lecturer ends up looking like an
+        account with nothing filled in.
+        """
+        return 'Roll number' if self.is_student else 'Employee code'
+
+    @property
+    def id_value(self) -> str:
+        """The identifier itself, whichever kind this person has."""
+        return self.roll_number if self.is_student else self.employee_code
+
 
 @dataclass
 class PermissionRequest:

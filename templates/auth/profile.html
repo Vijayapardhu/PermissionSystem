@@ -26,7 +26,16 @@
   <div class="card-au__body">
     <dl class="definition">
       <dt>Full name</dt><dd class="fw-semibold">{{ user.name }}</dd>
-      <dt>Roll number</dt><dd>{{ roll(user.roll_number, large=true) }}</dd>
+      {# One row, labelled by whoever is signed in. A lecturer has no roll
+         number, so the old row rendered a dash under "Roll number" for all
+         220 of them. #}
+      <dt>{{ user.id_label }}</dt>
+      <dd>
+        {% if user.is_student %}{{ roll(user.roll_number, large=true) }}
+        {% elif user.employee_code %}
+          <span class="roll roll--lg">{{ user.employee_code }}</span>
+        {% else %}<span class="text-muted">&mdash;</span>{% endif %}
+      </dd>
       <dt>Email</dt><dd>{{ user.email }}</dd>
       <dt>Phone number</dt><dd>{{ user.phone or '—' }}</dd>
       <dt>Department</dt><dd>{{ user.department }}</dd>

@@ -95,11 +95,18 @@ class ObjectionStatus(Enum):
 
     `REJECTED` is the reviewer overruling the lecturer who raised it, and the
     permission ends.
+
+    `WITHDRAWN` is nobody's decision. It is set when the classwork itself
+    changed or was deleted, so the claim "this work clashed with that grant"
+    stopped being true before anybody answered it. The permission is put back
+    at the same moment, because a permission may not stay suspended on the
+    strength of a record that no longer exists.
     """
 
     PENDING = 'PENDING'
     ACCEPTED = 'ACCEPTED'
     REJECTED = 'REJECTED'
+    WITHDRAWN = 'WITHDRAWN'
 
 
 @dataclass
@@ -309,6 +316,21 @@ class ClassworkModel:
     def find_by_id(classwork_id: int) -> Optional[Classwork]:
         row = store.get(CLASSWORK, classwork_id)
         return ClassworkModel._to_classwork(row) if row else None
+
+    @staticmethod
+    def update(classwork_id: int, **values) -> bool:
+        """Merge changed fields into one entry.
+
+        A merge rather than a replace, so a field the caller does not pass
+        keeps its stored value. `updated_at` is written by the store's `touch`,
+        which is what makes the list's "last changed" column honest -- an edit
+        that produced no field change still counts as an edit.
+        """
+        return store.update(CLASSWORK, classwork_id, values)
+
+    @staticmethod
+    def delete(classwork_id: int) -> bool:
+        return store.delete(CLASSWORK, classwork_id)
 
     @staticmethod
     def find_for_faculty(faculty_id: int, class_id: int = None,

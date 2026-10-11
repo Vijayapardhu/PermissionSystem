@@ -58,6 +58,9 @@ from app.permissions.leave_service import (
     suggest_faculty,
     withdraw_substitution as withdraw_substitution_service,
 )
+from app.permissions.classwork_edit_service import (
+    delete_classwork, update_classwork,
+)
 from app.permissions.classwork_service import (
     # Aliased for the same reason as the leave service above: the routes below
     # are called `create_classwork` and `respond_to_objection`, so importing
@@ -70,7 +73,9 @@ from app.permissions.classwork_service import (
     timetable_options,
 )
 from app.permissions.pages import permission_required
-from app.permissions.service import ValidationError, act_on_request, student_can_view
+from app.permissions.service import (
+    ValidationError, act_on_request, parse_date, student_can_view,
+)
 from app.utils.changes import diff_fields, summarise
 from app.utils.files import UploadError, fetch_proof
 from app.utils.qr import letter_qr
@@ -1662,51 +1667,296 @@ def download_proof(proof_id: int):
 # into the queue with the reason attached.
 
 
+"""Split the classwork page into a list and separate pages for the rest.
+
+One page held a seven-field form beside a read-only table, and the table had no
+way to act on a row. That is fine on a laptop and unusable on a phone, which is
+where a lecturer standing in a corridor before a lab actually is. And a form
+that scrolls off the top of the page while the table scrolls under it is a form
+nobody finishes.
+
+Four pages, each doing one thing:
+
+    /faculty/classwork                  the list, with view/edit/delete
+    /faculty/classwork/new              the create form
+    /faculty/classwork/<id>             one entry
+    /faculty/classwork/<id>/edit        change it, previewing first
+    /faculty/classwork/<id>/delete      remove it (POST, confirmed)
+
+The list keeps a class and date filter in the URL rather than in the form,
+because "what have I got next week" is a question asked repeatedly and the
+answer should survive a refresh.
+
+The edit follows the same two-step preview every other edit in this app uses:
+the form shows what each field holds now, and the POST renders the differences
+before anything is written. Classwork is not special here -- a slip test moved
+from period 3 to period 5 changes what it clashes with, and a preview is the
+last place to notice that.
+"""
+from datetime import date
+
+
+
+def _my_classes(user):
+    return ClassModel.find_for_faculty(user.id, kind=KIND_CLASS)
+
+
+def _my_entry(entry_id, user):
+    """Fetch one of this lecturer's entries, or 404.
+
+    A 404 rather than a 403 for somebody else's entry: confirming that an id
+    exists is a small leak, and this page is one lecturer's own list where the
+    only realistic id to guess is their own.
+    """
+    entry = ClassworkModel.find_by_id(entry_id)
+    if entry is None or entry.faculty_id != user.id:
+        abort(404)
+    return entry
+
+
 @faculty_bp.route('/classwork')
 @permission_required('faculty.classwork')
 def classwork():
-    """The lecturer's own classwork, and the form to add one.
-
-    One page rather than a list and a separate form. The lecturer's reason for
-    being here is almost always "I am about to put something on a date", and
-    making that two navigations deep is how the feature goes unused.
-    """
+    """The list. One row per piece of work, with what to do about it."""
     user = current_user()
-    classes = ClassModel.find_for_faculty(user.id, kind=KIND_CLASS)
+    classes = _my_classes(user)
 
-    entries = ClassworkModel.find_for_faculty(user.id)
+    entries = ClassworkModel.find_for_faculty(user.id, limit=300)
     attach_classwork_context(entries)
 
-    # Slot options are per class *and* per date, so they are fetched for the
-    # class and date currently chosen on the form rather than for all of them.
-    # Every combination up front is a full timetable scan per class per day.
-    slots = []
-    chosen_class = request.args.get('class_id', type=int)
-    chosen_date = _parse_date(request.args.get('date'), date.today())
-    if chosen_class:
-        group = next((c for c in classes if c.id == chosen_class), None)
-        if group is not None:
-            slots = timetable_options(group, chosen_date)
+    # Filters live in the query string so a refresh keeps them, and so a link
+    # to "your classwork for Thursday" is something a lecturer can send.
+    class_filter = request.args.get('class_id', type=int)
+    when = request.args.get('date')
+    view_date = None
+    if when:
+        try:
+            view_date = parse_date(when, 'date')
+        except ValidationError:
+            view_date = None
+
+    shown = entries
+    if class_filter:
+        shown = [e for e in shown if e.class_id == class_filter]
+    if view_date:
+        shown = [e for e in shown if e.date == view_date]
+
+    # Upcoming first, then whatever is behind -- separated rather than merged,
+    # because "what is coming" and "what did I already do" are different
+    # questions and a single date-ordered list answers neither well.
+    today = date.today()
+    upcoming = [e for e in shown if e.date and e.date >= today]
+    past = [e for e in shown if e.date and e.date < today]
+    past.reverse()
 
     return render_template(
         'faculty/classwork.html',
         user=user,
         classes=classes,
-        entries=entries,
-        slots=slots,
-        importance_choices=importance_choices(),
-        chosen_class=chosen_class,
-        chosen_date=chosen_date,
+        entries=shown,
+        upcoming=upcoming,
+        past=past,
+        total=len(entries),
+        class_filter=class_filter,
+        view_date=view_date,
+        today=today,
     )
 
 
-@faculty_bp.route('/classwork/create', methods=['POST'])
+@faculty_bp.route('/classwork/new', methods=['GET', 'POST'])
 @permission_required('faculty.create_classwork')
-def create_classwork():
-    """Record the classwork, and suspend whatever it clashes with."""
+def classwork_new():
+    """The create form, on a page of its own."""
     user = current_user()
+    classes = _my_classes(user)
+
+    if not classes:
+        flash('Create a class first — classwork is scheduled against a '
+              'section.', 'warning')
+        return redirect(url_for('faculty.classes'))
+
+    # The class and date on the URL seed the form, so "record this for the
+    # section I am looking at" is one link rather than four dropdown trips.
+    chosen_class = request.args.get('class_id', type=int)
+    if request.method == 'POST':
+        chosen_class = request.form.get('class_id', type=int)
+    group = next((c for c in classes if c.id == chosen_class), None)
+
+    if request.method == 'POST':
+        try:
+            entry, objections = create_classwork_service(
+                faculty=user,
+                class_id=chosen_class,
+                title=request.form.get('title', ''),
+                date_raw=request.form.get('date', ''),
+                importance_raw=request.form.get('importance', ''),
+                period_raw=request.form.get('period'),
+                session_raw=request.form.get('session'),
+                notes=request.form.get('notes', ''),
+                base_url=request.host_url.rstrip('/'),
+            )
+        except ValidationError as exc:
+            flash(str(exc), 'danger')
+            return redirect(url_for('faculty.classwork_new',
+                                    class_id=chosen_class))
+
+        # The fact that matters most is the consequence, not the save. Say it
+        # on the page the lecturer lands on.
+        if objections:
+            flash(f'Recorded. It clashes with {len(objections)} granted '
+                  f'permission{"" if len(objections) == 1 else "s"}, which '
+                  f'{"has" if len(objections) == 1 else "have"} been sent '
+                  f'back for review.', 'warning')
+        else:
+            flash(f'Recorded "{entry.title}".', 'success')
+        return redirect(url_for('faculty.classwork_detail',
+                                classwork_id=entry.id))
+
+    # Slot options for the class and date currently chosen, rather than for
+    # every combination up front -- that is a full timetable scan per class.
+    # Written straight-line rather than as one expression because the chosen
+    # date can arrive from the query string, from the form, or not at all, and
+    # folding three cases into a conditional expression made the failure mode
+    # (a slot list for the wrong day) invisible.
+    group = next((c for c in classes if c.id == chosen_class), None)
+    raw_date = request.form.get('date') if request.method == 'POST' \
+        else request.args.get('date')
+    chosen_date = date.today()
+    if raw_date:
+        try:
+            chosen_date = parse_date(raw_date, 'date')
+        except ValidationError:
+            chosen_date = date.today()
+    slots = timetable_options(group, chosen_date) if group else []
+
+    return render_template(
+        'faculty/classwork_new.html',
+        user=user,
+        classes=classes,
+        slots=slots,
+        chosen_class=chosen_class,
+        chosen_date=chosen_date,
+        now_date=date.today().isoformat(),
+        choices=importance_choices(),
+        form=request.form,
+    )
+
+
+@faculty_bp.route('/classwork/<int:classwork_id>')
+@permission_required('faculty.classwork')
+def classwork_detail(classwork_id: int):
+    """One entry, with the permissions it currently clashes with."""
+    user = current_user()
+    entry = _my_entry(classwork_id, user)
+    attach_classwork_context([entry])
+
+    objections = ObjectionModel.find_pending()
+    mine = [o for o in objections if o.classwork_id == entry.id]
+    for objection in mine:
+        record = PermissionModel.find_by_id(objection.request_id)
+        objection.request = record
+
+    return render_template(
+        'faculty/classwork_detail.html',
+        user=user,
+        entry=entry,
+        objections=mine,
+    )
+
+
+@faculty_bp.route('/classwork/<int:classwork_id>/edit', methods=['GET', 'POST'])
+@permission_required('faculty.edit_classwork')
+def classwork_edit(classwork_id: int):
+    """Change an entry. The POST previews the differences, like every other edit."""
+    user = current_user()
+    entry = _my_entry(classwork_id, user)
+    classes = _my_classes(user)
+
+    if request.method == 'POST':
+        from app.utils.changes import diff_fields, summarise
+
+        form = {
+            'class_id': request.form.get('class_id', type=int),
+            'title': (request.form.get('title') or '').strip(),
+            'date': request.form.get('date', ''),
+            'importance': request.form.get('importance', ''),
+            'notes': (request.form.get('notes') or '').strip(),
+        }
+        try:
+            proposed = _proposed_values(entry, form)
+        except ValidationError as exc:
+            flash(str(exc), 'danger')
+            return redirect(url_for('faculty.classwork_edit',
+                                    classwork_id=entry.id))
+
+        changes = diff_fields(_current_values(entry), proposed)
+        if not changes:
+            flash('Nothing was changed.', 'info')
+            return redirect(url_for('faculty.classwork_detail',
+                                    classwork_id=entry.id))
+
+        return render_template(
+            'faculty/classwork_edit_confirm.html',
+            user=user,
+            entry=entry,
+            changes=changes,
+            summary=summarise(changes),
+            form=form,
+            classes=classes,
+        )
+
+    slots = timetable_options(
+        next((c for c in classes if c.id == entry.class_id), None), entry.date
+    )
+    return render_template(
+        'faculty/classwork_edit.html',
+        user=user,
+        entry=entry,
+        classes=classes,
+        slots=slots,
+        choices=importance_choices(),
+        form={},
+    )
+
+
+def _current_values(entry):
+    return {
+        'class_id': entry.class_id,
+        'title': entry.title,
+        'date': entry.date.isoformat() if entry.date else '',
+        'importance': entry.importance.value,
+        'notes': entry.notes or '',
+    }
+
+
+def _proposed_values(entry, form):
+    """Turn the submitted form into comparable values, validating as it goes."""
+    from app.models.classes import ClassModel
+
+    class_id = form.get('class_id')
+    group = ClassModel.find_by_id(class_id) if class_id else None
+    if group is None or group.faculty_id != entry.faculty_id:
+        raise ValidationError('Choose a class from your own list.')
+
+    return {
+        'class_id': class_id,
+        'title': form['title'],
+        'date': form['date'],
+        'importance': form['importance'],
+        'notes': form['notes'],
+    }
+
+
+@faculty_bp.route('/classwork/<int:classwork_id>/edit/apply', methods=['POST'])
+@permission_required('faculty.edit_classwork')
+def classwork_edit_apply(classwork_id: int):
+    """Write the previewed change, then re-check what it clashes with."""
+    user = current_user()
+    entry = _my_entry(classwork_id, user)
+
     try:
-        entry, objections = create_classwork_service(
+        updated, opened, withdrawn = update_classwork(
+            entry=entry,
             faculty=user,
             class_id=request.form.get('class_id', type=int),
             title=request.form.get('title', ''),
@@ -1715,24 +1965,57 @@ def create_classwork():
             period_raw=request.form.get('period'),
             session_raw=request.form.get('session'),
             notes=request.form.get('notes', ''),
-            base_url=APP_ROOT,
         )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.classwork_edit',
+                                classwork_id=classwork_id))
+
+    # Moving or removing work changes which grants are suspended. Both lists
+    # are reported: a change that quietly reopened four permissions is the one
+    # fact a lecturer must not have to discover from a student's email.
+    messages = []
+    if withdrawn:
+        messages.append(
+            f'{len(withdrawn)} permission'
+            f'{"" if len(withdrawn) == 1 else "s"} this no longer clashes with '
+            f'{"was" if len(withdrawn) == 1 else "were"} restored'
+        )
+    if opened:
+        messages.append(
+            f'{len(opened)} granted permission'
+            f'{"" if len(opened) == 1 else "s"} now '
+            f'{"clashes" if len(opened) == 1 else "clash"} and '
+            f'{"was" if len(opened) == 1 else "were"} sent for review'
+        )
+    flash('Saved.' + (' ' + '; '.join(messages) + '.' if messages else ''),
+          'warning' if messages else 'success')
+
+    return redirect(url_for('faculty.classwork_detail',
+                            classwork_id=updated.id))
+
+
+@faculty_bp.route('/classwork/<int:classwork_id>/delete', methods=['POST'])
+@permission_required('faculty.classwork_delete')
+def classwork_delete(classwork_id: int):
+    """Remove an entry, restoring any permissions it had suspended."""
+    user = current_user()
+    entry = _my_entry(classwork_id, user)
+
+    try:
+        restored = delete_classwork(entry=entry, faculty=user)
     except ValidationError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('faculty.classwork'))
 
-    # The count is the fact the lecturer needs right now. "Saved" alone would
-    # let them close the tab believing nothing was affected, and only discover
-    # later that three students had lost a permission they were told was granted.
-    if objections:
-        flash(
-            f'Classwork recorded. {len(objections)} granted '
-            f'{"permission was" if len(objections) == 1 else "permissions were"} '
-            f'suspended and sent back to the reviewer.',
-            'warning',
-        )
+    if restored:
+        flash(f'Deleted "{entry.title}". '
+              f'{len(restored)} permission'
+              f'{"" if len(restored) == 1 else "s"} that {"it" if len(restored) == 1 else "they"} '
+              f'had suspended {"was" if len(restored) == 1 else "were"} restored.',
+              'warning')
     else:
-        flash('Classwork recorded.', 'success')
+        flash(f'Deleted "{entry.title}".', 'success')
 
     return redirect(url_for('faculty.classwork'))
 

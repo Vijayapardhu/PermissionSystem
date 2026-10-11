@@ -161,6 +161,28 @@ PAGE_PERMISSIONS = {
     # role gate only.
     'faculty.classwork': STAFF,
     'faculty.create_classwork': STAFF,
+    # Editing and removing are separate grants from creating, so they can be
+    # given out separately without a second table entry later. Both are scoped
+    # to the signed-in person's own entries by `_my_entry`, which 404s on
+    # anybody else's -- the grant is the role gate, the ownership check is the
+    # data gate, and the two are not the same thing.
+    #
+    # Note what editing now means. Moving a date or a session withdraws the
+    # objections the old version raised and may open new ones, which suspends
+    # permissions. So this is not a cosmetic edit and is not folded into
+    # `faculty.classwork`.
+    'faculty.edit_classwork': STAFF,
+    # Named after the endpoint, not after a description. An earlier attempt at
+    # this table used `faculty.delete_classwork`, and the boot-time check caught
+    # the mismatch rather than leaving the route quietly ungated.
+    'faculty.classwork_delete': STAFF,
+    # Reading one entry, and the GET half of the edit form, are the same gate as
+    # the list they sit behind -- `faculty.classwork` above. Separate keys for
+    # them would mean three places to change when the rule moves.
+    'faculty.classwork_detail': STAFF,
+    'faculty.classwork_new': STAFF,
+    'faculty.classwork_edit': STAFF,
+    'faculty.classwork_edit_apply': STAFF,
     'faculty.objections': STAFF,
     # The write that decides a disputed permission, granted separately for the
     # same reason as `faculty.action` above: it changes the status of a request

@@ -64,7 +64,14 @@
           {{ current_user().name }}
         {% endif %}
       </span>
-      <span class="au-side__who-role">{{ current_user().role.value|title }}</span>
+      {# Staff are identified by their employee code, not a roll number -- they
+         do not have one, and printing an empty value under a roll label reads
+         as a broken account rather than as the wrong identifier. #}
+      {% if not current_user().is_student and current_user().employee_code %}
+        <span class="au-side__who-role">{{ current_user().employee_code }}</span>
+      {% else %}
+        <span class="au-side__who-role">{{ current_user().role.value|title }}</span>
+      {% endif %}
     </a>
 
     {# Sign-out is POST so a link or prefetch can never end the session. #}

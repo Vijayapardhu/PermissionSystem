@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import csrf_field, empty_state with context %}
+{% from '_macros.html' import csrf_field, empty_state, stat with context %}
 {% block title %}Classwork &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -7,196 +7,203 @@
   <div>
     <h1 class="page-head__title">Classwork</h1>
     <p class="page-head__sub">
-      Record what your section has scheduled. Reviewers see it when deciding on a
-      permission request, and recording it after a permission was granted suspends
-      that permission and sends it back to you.
+      What your sections have scheduled. Reviewers see this when deciding on a
+      permission, and recording work after a permission was granted sends that
+      permission back for review.
     </p>
   </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.classwork_new') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-circle"></i> Record classwork
+    </a>
+  </div>
 </div>
 
-<div class="row g-3">
-  <div class="col-12 col-lg-5">
-    <div class="card-au">
-      <div class="card-au__head">
-        <h2 class="card-au__title"><i class="bi bi-plus-circle"></i> Schedule Classwork</h2>
-      </div>
-      <div class="card-au__body">
-        {% if not classes %}
-          <div class="alert alert-warning mb-0">
-            <i class="bi bi-exclamation-triangle"></i>
-            Create a class first — classwork is scheduled against a section, and
-            the roster on that section is what tells the system which students it
-            affects.
-            <a href="{{ url_for('faculty.classes') }}" class="alert-link">My Classes</a>
-          </div>
-        {% else %}
-        <form method="post" action="{{ url_for('faculty.create_classwork') }}">
-          {{ csrf_field() }}
+{% if not classes %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Create a class first &mdash; classwork is scheduled against a section, and the
+    roster on that section is what tells the system which students it affects.
+    <a href="{{ url_for('faculty.classes') }}" class="alert-link">My Classes</a>
+  </div>
+{% else %}
 
-          <div class="mb-3">
-            <label class="form-label" for="cw-class">Class</label>
-            <select class="form-select" id="cw-class" name="class_id" required>
-              {% for group in classes %}
-                <option value="{{ group.id }}"
-                        {{ 'selected' if chosen_class == group.id }}>
-                  {{ group.name }}{% if group.section_code %} ({{ group.section_code }}){% endif %}
-                </option>
-              {% endfor %}
-            </select>
-            <div class="form-text">
-              {{ 'Pick a class and date to load its timetable slots.' if not chosen_class }}
-            </div>
-          </div>
+{# Filters live in the URL, not in the form, so a refresh keeps them and
+   "your classwork for Thursday" is a link a lecturer can send to a colleague. #}
+<form method="get" class="row g-2 align-items-end mb-3 no-print">
+  <div class="col-12 col-sm-6 col-lg-4">
+    <label class="form-label" for="f-class">Class</label>
+    <select class="form-select" id="f-class" name="class_id">
+      <option value="">All my classes</option>
+      {% for group in classes %}
+        <option value="{{ group.id }}" {{ 'selected' if class_filter == group.id }}>
+          {{ group.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-12 col-sm-6 col-lg-3">
+    <label class="form-label" for="f-date">Date</label>
+    <input type="date" class="form-control" id="f-date" name="date"
+           value="{{ view_date.isoformat() if view_date else '' }}">
+  </div>
+  <div class="col-12 col-lg-auto">
+    <button type="submit" class="btn btn-primary btn-pill w-100">
+      <i class="bi bi-funnel"></i> Filter
+    </button>
+  </div>
+  {% if class_filter or view_date %}
+  <div class="col-12 col-lg-auto">
+    <a href="{{ url_for('faculty.classwork') }}" class="btn btn-outline-secondary btn-pill w-100">
+      Clear
+    </a>
+  </div>
+  {% endif %}
+</form>
 
-          <div class="row g-2 mb-3">
-            <div class="col-7">
-              <label class="form-label" for="cw-date">Date</label>
-              <input type="date" class="form-control" id="cw-date" name="date"
-                     value="{{ chosen_date.isoformat() if chosen_date else '' }}"
-                     min="{{ now_date }}" required>
-            </div>
-            <div class="col-5 d-flex align-items-end">
-              <button type="button" class="btn btn-outline-secondary w-100"
-                      onclick="var d=document.getElementById('cw-date').value;
-                               if(d){window.location='{{ url_for('faculty.classwork') }}?class_id='
-                               +document.getElementById('cw-class').value+'&date='+d;}">
-                <i class="bi bi-calendar-week"></i> Load slots
-              </button>
-            </div>
-          </div>
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-calendar3"></i> Upcoming
+    </h2>
+    <span class="form-text">{{ upcoming | length }} item{{ '' if upcoming|length == 1 else 's' }}</span>
+  </div>
 
-          <div class="mb-3">
-            <label class="form-label" for="cw-title">What is it?</label>
-            <input type="text" class="form-control" id="cw-title" name="title"
-                   maxlength="120" required
-                   placeholder="Project review, internal exam, slip test…">
-          </div>
-
-          <fieldset class="mb-3">
-            <legend class="form-label">When</legend>
-            {% if slots %}
-              <div class="mb-2">
-                {% for slot in slots %}
-                <div class="form-check">
-                  <input class="form-check-input" type="radio" name="period"
-                         id="cw-period-{{ slot.period }}" value="{{ slot.period }}">
-                  <label class="form-check-label" for="cw-period-{{ slot.period }}">
-                    {{ slot.label }}
-                  </label>
-                </div>
-                {% endfor %}
-              </div>
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="session"
-                       id="cw-session-none" value="" checked>
-                <label class="form-check-label" for="cw-session-none">
-                  <span class="text-muted">Not in a timetable slot</span>
-                </label>
-              </div>
-            {% else %}
-              <p class="form-text mb-2">
-                No slots loaded for this class and date. Choose a session below,
-                or load the slots above.
-              </p>
+  {% if upcoming %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Classwork</th>
+          <th>Class</th>
+          <th>Date</th>
+          <th>Session</th>
+          <th>Importance</th>
+          <th class="table-au__num">Pending</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in upcoming %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">
+            <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+               class="text-decoration-none">{{ entry.title }}</a>
+            {% if entry.notes %}
+              <span class="d-block form-text">{{ entry.notes }}</span>
             {% endif %}
-
-            <div class="mt-2">
-              {% for value, label in [('full_day', 'Full day'),
-                                      ('morning', 'Morning'),
-                                      ('afternoon', 'Afternoon')] %}
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="session"
-                       id="cw-session-{{ value }}" value="{{ value }}"
-                       {{ 'checked' if not slots }}>
-                <label class="form-check-label" for="cw-session-{{ value }}">{{ label }}</label>
-              </div>
-              {% endfor %}
+          </td>
+          <td class="small">{{ entry.class_name or '—' }}</td>
+          <td class="text-nowrap">{{ entry.date.strftime('%d %b %Y') }}</td>
+          <td class="small text-nowrap">{{ entry.session_label }}</td>
+          <td>
+            <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+          </td>
+          <td class="table-au__num">
+            {# Only shown when there is something to count. A zero on every row
+               is noise that trains people to ignore the column. #}
+            {% if entry.objection_count %}
+              <span class="badge-au badge-au--pending">{{ entry.objection_count }}</span>
+            {% else %}
+              <span class="text-muted">&mdash;</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <div class="btn-group btn-group-sm" role="group"
+                 aria-label="Actions for {{ entry.title }}">
+              <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+                 class="btn btn-outline-secondary" title="View">
+                <i class="bi bi-eye"></i><span class="visually-hidden">View</span>
+              </a>
+              <a href="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+                 class="btn btn-outline-primary" title="Edit">
+                <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
+              </a>
+              <form method="post" class="d-inline"
+                    action="{{ url_for('faculty.classwork_delete', classwork_id=entry.id) }}"
+                    onsubmit="return confirm('Delete &quot;{{ entry.title }}&quot;? Any permission it suspended will be restored.');">
+                {{ csrf_field() }}
+                <button type="submit" class="btn btn-outline-danger" title="Delete">
+                  <i class="bi bi-trash"></i><span class="visually-hidden">Delete</span>
+                </button>
+              </form>
             </div>
-            <div class="form-text mt-1">
-              A timetable slot uses that section's real clock times. A session uses
-              the department's standard span.
-            </div>
-          </fieldset>
-
-          <div class="mb-3">
-            <label class="form-label" for="cw-importance">How important is it?</label>
-            {% for value, label, help_text in importance_choices %}
-            <div class="form-check">
-              <input class="form-check-input" type="radio" name="importance"
-                     id="cw-imp-{{ value.value }}" value="{{ value.value }}"
-                     {{ 'checked' if loop.first }}
-                     {{ 'required' if loop.first }}>
-              <label class="form-check-label" for="cw-imp-{{ value.value }}">
-                <strong>{{ label }}</strong>
-                <span class="d-block form-text">{{ help_text }}</span>
-              </label>
-            </div>
-            {% endfor %}
-            <div class="form-text mt-1">
-              Moderate and above can suspend a permission that was already granted.
-              Notification and Minor are shown to reviewers but do not reopen
-              anything.
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label" for="cw-notes">Note (optional)</label>
-            <textarea class="form-control" id="cw-notes" name="notes" rows="2"
-                      maxlength="400"
-                      placeholder="Anything the reviewer should know"></textarea>
-          </div>
-
-          <button type="submit" class="btn btn-primary w-100">
-            <i class="bi bi-check2"></i> Record classwork
-          </button>
-        </form>
-        {% endif %}
-      </div>
-    </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-
-  <div class="col-12 col-lg-7">
-    <div class="card-au">
-      <div class="card-au__head">
-        <h2 class="card-au__title"><i class="bi bi-journal-check"></i> Scheduled</h2>
-        <span class="form-text">{{ entries | length }} item{{ '' if entries|length == 1 else 's' }}</span>
-      </div>
-      {% if entries %}
-      <div class="au-table-wrap">
-        <table class="table-au">
-          <thead>
-            <tr>
-              <th class="table-au__idx">#</th>
-              <th>Classwork</th>
-              <th>Date</th>
-              <th>Session</th>
-              <th>Importance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for entry in entries %}
-            <tr>
-              <td class="table-au__idx">{{ loop.index }}</td>
-              <td class="table-au__strong">{{ entry.title }}
-                {% if entry.notes %}
-                  <span class="d-block form-text">{{ entry.notes }}</span>
-                {% endif %}
-              </td>
-              <td>{{ entry.date }}</td>
-              <td>{{ entry.session_label }}</td>
-              <td>
-                <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-        {{ empty_state('bi-journal-check', 'Nothing scheduled yet',
-            'Anything you record here appears on the reviewer\'s screen when a student requests a permission for those dates.') }}
-      {% endif %}
-    </div>
-  </div>
+  {% else %}
+    {{ empty_state('bi-calendar3', 'Nothing scheduled ahead',
+        'Record a slip test, an assignment or a viva and it will appear here and on the reviewer\'s screen when a student asks for those dates.') }}
+  {% endif %}
 </div>
+
+{% if past %}
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-archive"></i> Already past
+    </h2>
+    <span class="form-text">{{ past | length }} item{{ '' if past|length == 1 else 's' }}</span>
+  </div>
+  {# Collapsed by default. A lecturer asks "what is coming" far more often than
+     "what did I do last month", and the past is still there one click away. #}
+  <details>
+    <summary class="px-3 py-2 form-text" style="cursor:pointer">
+      Show the {{ past | length }} already past
+    </summary>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Classwork</th>
+          <th>Class</th>
+          <th>Date</th>
+          <th>Importance</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in past %}
+        <tr>
+          <td class="table-au__strong">
+            <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+               class="text-decoration-none">{{ entry.title }}</a>
+          </td>
+          <td class="small">{{ entry.class_name or '—' }}</td>
+          <td class="text-nowrap">{{ entry.date.strftime('%d %b %Y') }}</td>
+          <td><span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span></td>
+          <td class="table-au__actions">
+            <div class="btn-group btn-group-sm" role="group">
+              <a href="{{ url_for('faculty.classwork_detail', classwork_id=entry.id) }}"
+                 class="btn btn-outline-secondary" title="View">
+                <i class="bi bi-eye"></i><span class="visually-hidden">View</span>
+              </a>
+              <a href="{{ url_for('faculty.classwork_edit', classwork_id=entry.id) }}"
+                 class="btn btn-outline-primary" title="Edit">
+                <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
+              </a>
+              <form method="post" class="d-inline"
+                    action="{{ url_for('faculty.classwork_delete', classwork_id=entry.id) }}"
+                    onsubmit="return confirm('Delete &quot;{{ entry.title }}&quot;? Any permission it suspended will be restored.');">
+                {{ csrf_field() }}
+                <button type="submit" class="btn btn-outline-danger" title="Delete">
+                  <i class="bi bi-trash"></i><span class="visually-hidden">Delete</span>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  </details>
+</div>
+{% endif %}
+{% endif %}
 {% endblock %}
