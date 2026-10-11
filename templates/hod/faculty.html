@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import stat, empty_state with context %}
+{% from '_macros.html' import stat, empty_state, csrf_field with context %}
 {% block title %}Faculty Workload &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -51,6 +51,7 @@
           <th class="table-au__num">Decisions</th>
           <th class="table-au__num">Classes</th>
           <th class="table-au__center">Load</th>
+          <th class="table-au__actions">Deputy</th>
         </tr>
       </thead>
       <tbody>
@@ -59,7 +60,16 @@
         {% set load = ((lecturer.pending / busiest) * 100) | round | int %}
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
-          <td class="table-au__strong text-nowrap">{{ lecturer.name }}</td>
+          <td class="table-au__strong text-nowrap">
+            {{ lecturer.name }}
+            {% if lecturer.role == 'DEPUTY_HOD' %}
+              {# Marked in the name rather than a separate column, so a deputy is
+                 still findable by searching and by reading down the list. #}
+              <span class="badge text-bg-info ms-1" title="Deputy HOD — can decide requests directly">
+                <i class="bi bi-shield-check"></i> Deputy
+              </span>
+            {% endif %}
+          </td>
           <td class="small text-muted">{{ lecturer.email }}</td>
           <td class="table-au__num">
             {% if lecturer.pending %}
@@ -79,6 +89,37 @@
               <div class="progress-bar bg-{{ 'danger' if load > 66 else ('warning' if load > 33 else 'success') }}"
                    style="width: {{ load }}%"></div>
             </div>
+          </td>
+          <td class="table-au__actions">
+            {# The HOD already comes here to look at teaching staff, so this is
+               where the deputy control belongs. A deputy is a promotion, not a
+               new appointment: their classes, proctor list and leave stay
+               exactly as they were, which is why this is one button rather than
+               a form. #}
+            {% if lecturer.role == 'DEPUTY_HOD' %}
+              <form method="post" class="d-inline"
+                    action="{{ url_for('hod.set_deputy') }}"
+                    onsubmit="return confirm('Revoke Deputy HOD from {{ lecturer.name }}? They keep their classes and proctor list.');">
+                {{ csrf_field() }}
+                <input type="hidden" name="faculty_id" value="{{ lecturer.id }}">
+                <input type="hidden" name="make_deputy" value="0">
+                <button type="submit" class="btn btn-sm btn-outline-secondary btn-pill">
+                  Revoke deputy
+                </button>
+              </form>
+            {% elif lecturer.role == 'LECTURER' and lecturer.id != user.id %}
+              <form method="post" class="d-inline" action="{{ url_for('hod.set_deputy') }}"
+                    onsubmit="return confirm('Make {{ lecturer.name }} a Deputy HOD? They will be able to decide any request directly.');">
+                {{ csrf_field() }}
+                <input type="hidden" name="faculty_id" value="{{ lecturer.id }}">
+                <input type="hidden" name="make_deputy" value="1">
+                <button type="submit" class="btn btn-sm btn-outline-primary btn-pill">
+                  <i class="bi bi-shield-plus"></i> Make deputy
+                </button>
+              </form>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

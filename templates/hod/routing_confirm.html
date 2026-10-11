@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, change_table with context %}
+{% block title %}Confirm routing &middot; {{ APP_NAME }}{% endblock %}
+
+{% block main_class %}page-wrap-narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Confirm your changes</h1>
+    <p class="page-head__sub">
+      {{ changes | length }} queue{{ '' if changes | length == 1 else 's' }}
+      will be re-pointed. Nothing has been saved yet.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.routing') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil"></i> Back to editing
+    </a>
+  </div>
+</div>
+
+<div class="alert alert-warning">
+  <i class="bi bi-people"></i>
+  Routing decides whose queue every <em>future</em> student request lands in.
+  Requests already assigned are not moved.
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-arrow-left-right"></i> What will change
+    </h2>
+  </div>
+  <div class="card-au__body">
+    {{ change_table(changes) }}
+  </div>
+</div>
+
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check2"></i> Save</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.apply_routing') }}">
+      {{ csrf_field() }}
+      <input type="hidden" name="event_faculty_id" value="{{ form.event_faculty_id }}">
+      <input type="hidden" name="curricular_faculty_id" value="{{ form.curricular_faculty_id }}">
+      <input type="hidden" name="general_faculty_id" value="{{ form.general_faculty_id }}">
+
+      <div class="d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-check2"></i> Save {{ changes | length }} change{{ '' if changes | length == 1 else 's' }}
+        </button>
+        <a href="{{ url_for('hod.routing') }}"
+           class="btn btn-outline-secondary btn-pill">
+          <i class="bi bi-x-lg"></i> Exit without saving
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

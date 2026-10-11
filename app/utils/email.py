@@ -154,9 +154,21 @@ def notify_member_not_covered(request: PermissionRequest, requester: User,
 def notify_student_of_hod_decision(request: PermissionRequest, student: User,
                                    hod: User, action: ApprovalAction,
                                    remarks: str, base_url: str) -> bool:
-    """The HOD's verdict, which is the one the student's letter will carry."""
+    """The escalated verdict, which is the one the student's letter carries.
+
+    Reached both by an HOD deciding a request a lecturer forwarded, and by
+    an HOD or Deputy HOD taking one directly. `hod` is whichever of them
+    signed it, and the wording follows them.
+    """
     verb = 'approved' if action == ApprovalAction.APPROVED else 'rejected'
-    subject = f'Your permission request was {verb} by the HOD'
+    # The office comes from the decision-maker's own role. A Deputy HOD
+    # signs this too, and printing them as the Head of Department would put
+    # a title on the letter that they do not hold.
+    office = {
+        'HOD': 'the Head of Department',
+        'DEPUTY_HOD': 'the Deputy Head of Department',
+    }.get(getattr(getattr(hod, 'role', None), 'value', ''), 'the department')
+    subject = f'Your permission request was {verb} by {office}'
     link = f'{base_url}/student/requests/{request.id}'
     body = (
         f'Hello {student.name},\n\n'
@@ -217,3 +229,95 @@ def notify_hod_of_decision(request: PermissionRequest, student: User,
         f'--\n{current_app.config["APP_NAME"]}'
     )
     return _send(subject, [hod.email], body)
+
+
+# --- Classwork objections -------------------------------------------------
+#
+# Three messages. The awkward one is the middle: telling a student only that a
+# permission is suspended, without saying what suspended it, leaves them unable
+# to appeal; telling them classwork clashes without saying the permission is not
+# granted right now leaves them holding a letter that no longer stands. So the
+# suspension mail carries both and leads with the fact that matters.
+
+
+def notify_reviewer_of_objection(request: PermissionRequest, student: User,
+                                 reviewer: User, classwork, raiser: User,
+                                 base_url: str) -> bool:
+    """Ask the original reviewer to re-decide a permission that was suspended."""
+    link = f'{base_url}/faculty/requests/{request.id}'
+    subject = f'Classwork clashes with Request #{request.id} — review again'
+    body = (
+        f'Hello {reviewer.name},\n\n'
+        f'{raiser.name} has scheduled classwork that clashes with a permission '
+        f'you granted. The permission has been suspended and is back with you.\n\n'
+        f'Request ID   : #{request.id}\n'
+        f'Student      : {student.name} ({student.roll_number or "N/A"})\n'
+        f'For          : {request.reason}\n'
+        f'Dates        : {request.start_date} to {request.end_date}\n\n'
+        f'Classwork    : {classwork.title}\n'
+        f'Section      : {classwork.class_name or "-"}\n'
+        f'Date         : {classwork.date}\n'
+        f'Session      : {classwork.session_label}\n'
+        f'Importance   : {classwork.importance_label}\n'
+        f'Note         : {classwork.notes or "-"}\n\n'
+        f'Uphold the objection to put the permission back, or overrule it to '
+        f'refuse the request.\n\n'
+        f'Reopen the request:\n{link}\n\n'
+        f'--\n{current_app.config["APP_NAME"]}'
+    )
+    return _send(subject, [reviewer.email], body)
+
+
+def notify_student_of_objection(request: PermissionRequest, student: User,
+                                classwork, raiser: User,
+                                base_url: str) -> bool:
+    """Tell the student their permission is suspended, and why."""
+    link = f'{base_url}/student/requests/{request.id}'
+    subject = f'Request #{request.id} suspended — classwork clashes'
+    body = (
+        f'Hello {student.name},\n\n'
+        f'Your permission request has been suspended by the department and is '
+        f'being looked at again. Please do not treat it as granted until you '
+        f'hear otherwise.\n\n'
+        f'Request ID   : #{request.id}\n'
+        f'For          : {request.reason}\n'
+        f'Dates        : {request.start_date} to {request.end_date}\n\n'
+        f'Reason       : classwork has been scheduled that clashes with these '
+        f'dates.\n'
+        f'Classwork    : {classwork.title}\n'
+        f'Date         : {classwork.date}\n'
+        f'Importance   : {classwork.importance_label}\n'
+        f'Scheduled by : {raiser.name}\n\n'
+        f'You will be notified of the outcome.\n\n'
+        f'View the request:\n{link}\n\n'
+        f'--\n{current_app.config["APP_NAME"]}'
+    )
+    return _send(subject, [student.email], body)
+
+
+def notify_student_of_objection_decision(request: PermissionRequest, student: User,
+                                         objection, reviewer: User,
+                                         outcome: str, remarks: str,
+                                         base_url: str) -> bool:
+    """The outcome of a disputed permission, in the words the student reads.
+
+    `outcome` is a plain word rather than a status enum so the wording here is
+    the only place that decides what restoring a permission is called to a
+    student.
+    """
+    link = f'{base_url}/student/requests/{request.id}'
+    subject = f'Request #{request.id} {outcome} after review'
+    body = (
+        f'Hello {student.name},\n\n'
+        f'The classwork raised against your request has been reviewed. Your '
+        f'permission has been {outcome}.\n\n'
+        f'Request ID   : #{request.id}\n'
+        f'For          : {request.reason}\n'
+        f'Dates        : {request.start_date} to {request.end_date}\n'
+        f'Objection    : {objection.status_label}\n'
+        f'Decided by   : {reviewer.name}\n'
+        f'Reason       : {remarks or "-"}\n\n'
+        f'View the request:\n{link}\n\n'
+        f'--\n{current_app.config["APP_NAME"]}'
+    )
+    return _send(subject, [student.email], body)

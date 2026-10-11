@@ -6,7 +6,10 @@ import sys
 import urllib.error
 import urllib.request
 
-BASE = 'http://localhost:5000'
+# 127.0.0.1 rather than localhost: on Windows `localhost` resolves to ::1
+# first, nothing listens there, and the fallback to IPv4 costs ~21s per
+# request -- slow enough that this script looks like it hangs.
+BASE = 'http://127.0.0.1:5000'
 failures, passes = [], []
 
 

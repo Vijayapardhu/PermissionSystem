@@ -1,0 +1,317 @@
+:root {
+  --ink: #16202f;
+  --muted: #5b6879;
+  --faint: #78849a;
+  --line: #e4e9f0;
+  --line-soft: #eef2f7;
+  --surface: #ffffff;
+  --panel: #f7f9fc;
+  --brand: #004e92;
+  --brand-dark: #003666;
+  --ok: #0b7a55;
+  --warn: #b45309;
+  --danger: #c02626;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 21.5rem;
+  margin: 0;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem .85rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.head__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 7px;
+  background: var(--brand);
+  color: #fff;
+  font-size: .82rem;
+  flex-shrink: 0;
+}
+
+.head h1 {
+  margin: 0;
+  font-size: .95rem;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+}
+
+/* ---- the collapsed setup ------------------------------------------------ */
+
+.setup { margin-left: auto; min-width: 0; }
+
+.setup__summary {
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  max-width: 9.5rem;
+  padding: .22rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: .74rem;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.setup__summary::-webkit-details-marker { display: none; }
+
+.setup__summary:hover { border-color: #c2cede; color: var(--ink); }
+
+.setup__host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup__chevron { font-size: .62rem; opacity: .7; }
+
+.setup[open] .setup__chevron { transform: rotate(180deg); }
+
+.setup__body {
+  padding: .6rem .85rem .7rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.label {
+  display: block;
+  font-size: .66rem;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: .3rem;
+}
+
+.row { display: flex; gap: .4rem; align-items: center; }
+.row-tight { margin-top: .4rem; }
+
+input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  padding: .38rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink);
+}
+
+input[type="url"]:focus-visible {
+  outline: 2px solid rgba(0, 78, 146, .35);
+  outline-offset: 1px;
+  border-color: var(--brand);
+}
+
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 500;
+  padding: .36rem .6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover { background: var(--line-soft); }
+.btn:focus-visible { outline: 2px solid rgba(0, 78, 146, .35); outline-offset: 1px; }
+.btn[disabled] { opacity: .55; cursor: default; }
+.btn-quiet { background: transparent; border-color: transparent; color: var(--brand); }
+.btn-quiet:hover { background: rgba(0, 78, 146, .07); border-color: transparent; }
+
+.hint { margin: .5rem 0 0; font-size: .74rem; color: var(--muted); }
+.hint.is-ok { color: var(--ok); }
+.hint.is-warn { color: var(--warn); }
+.hint.is-error { color: var(--danger); }
+
+/* ---- list -------------------------------------------------------------- */
+
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .6rem .85rem .4rem;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.list-head__actions { display: flex; gap: .15rem; }
+
+.mini {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: .85rem;
+  line-height: 1;
+  padding: .28rem .32rem;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.mini:hover { background: var(--line-soft); color: var(--brand); }
+.mini:focus-visible { outline: 2px solid rgba(0, 78, 146, .35); outline-offset: 1px; }
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0 .85rem .5rem;
+  /* A whole number of rows, so the list never ends halfway through one.
+     Rows are ~3.05rem; six of them is under 19rem. */
+  max-height: 18.3rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #cfd8e3 transparent;
+}
+
+.list::-webkit-scrollbar { width: 8px; }
+.list::-webkit-scrollbar-thumb {
+  background: #cfd8e3;
+  border-radius: 999px;
+  border: 2px solid #fff;
+}
+.list::-webkit-scrollbar-track { background: transparent; }
+
+.list li + li { border-top: 1px solid var(--line-soft); }
+
+.list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .7rem;
+  width: 100%;
+  padding: .5rem .35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.list button:hover { background: var(--panel); }
+.list button:focus-visible { outline: 2px solid rgba(0, 78, 146, .35); outline-offset: -2px; }
+
+.list .name {
+  display: block;
+  font-weight: 600;
+  font-size: .84rem;
+  letter-spacing: -.01em;
+}
+
+.list .meta {
+  display: block;
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: .05rem;
+}
+
+.list .count {
+  font-size: .78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.empty {
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  margin: 0;
+  padding: .3rem .85rem 1rem;
+  font-size: .78rem;
+  color: var(--muted);
+}
+
+.empty i { color: var(--faint); margin-top: .1rem; }
+
+/* ---- tools ------------------------------------------------------------- */
+
+/* The inspector works on any site, so it is separated from the class list by
+   a rule rather than sitting among the portal controls. */
+.tools {
+  padding: .55rem .85rem .7rem;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.tools__btn {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 550;
+  padding: .42rem .6rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tools__btn:hover { background: var(--line-soft); border-color: #c2cede; }
+.tools__btn:focus-visible { outline: 2px solid rgba(0, 78, 146, .35); outline-offset: 1px; }
+.tools__btn i { color: var(--brand); }
+
+.tools__hint {
+  margin: .4rem 0 0;
+  font-size: .7rem;
+  line-height: 1.35;
+  color: var(--faint);
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+.foot {
+  display: flex;
+  align-items: flex-start;
+  gap: .4rem;
+  padding: .55rem .85rem .7rem;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: .72rem;
+  color: var(--muted);
+}
+
+.foot i { opacity: .7; margin-top: .05rem; }
+.foot strong { color: var(--ink); }

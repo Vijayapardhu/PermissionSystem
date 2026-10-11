@@ -109,10 +109,79 @@ renders as `—` when the department has not recorded one.
 | Frontend  | HTML5, Bootstrap 5.3, Bootstrap Icons, Chart.js 4 |
 | Backend   | Python 3, Flask 3, Jinja2                     |
 | Auth      | Microsoft Entra ID (MSAL, authorization code) |
-| Data      | Cloud Firestore (`google-cloud-firestore`)   |
+| Data      | Cloud Firestore, or SQLite / PostgreSQL — see [the store](#the-data-store) |
 | Storage   | Cloudflare R2 (S3 API, boto3), private bucket, year/month keys |
 | Email     | Outlook SMTP via Flask-Mail                   |
 | Hosting   | Render (web service, gunicorn)                |
+
+## The data store
+
+Everything above `app/models/` talks to one object called `store` and never
+knows what is behind it. Two implementations satisfy that interface:
+
+| `DATABASE_BACKEND` | Backend | Used for |
+|---|---|---|
+| unset, or `firestore` | Cloud Firestore | the current deployment |
+| `sql` | SQLite (`SQLITE_PATH`), or PostgreSQL (`DATABASE_URL`) | local development, and Render's managed Postgres |
+
+Choosing one is a config change, not a code change. `app/models/firestore.py` and
+`app/models/sqlstore.py` both expose `documents`, `get`, `insert`, `update`,
+`delete`, `next_id` and `ping`, and both share the type mapping in
+`app/models/values.py`, so a record written through one reads back identically
+through the other.
+
+### Why the SQL store exists
+
+Firestore's free tier meters reads, and the leave workflow fans out across a
+collection on purpose — "who is free at 09:30 on Friday?" has to consider every
+lecturer's periods, who is on leave, and who has already taken a substitution.
+That is correct as a query and expensive as a bill: the availability search
+originally cost roughly 400 reads for one leave application and could exhaust a
+project's daily quota from a single page view. (It did, in development, and took
+the deployed service down with it until the quota reset.)
+
+SQLite removes the quota entirely and needs no installation — it is inside
+Python. The import of the whole college dataset takes about two seconds against
+it. PostgreSQL is the production target for the same reason SQLite is the local
+one: they are the same dialect, so the query that runs on your machine is the
+query that runs in production.
+
+### Why not MongoDB
+
+It would not fix the quota, because the cost is the fan-out, not the engine —
+you would still hand-join four queries and still have to memoise them. It would
+not match production either, since the department's other platform uses
+Firestore. And it is not SQL, so the transactional approval the leave workflow
+needs would be harder, not easier.
+
+### The Postgres host matters
+
+Do not point `DATABASE_URL` at Supabase. That is the host this app moved *off*:
+
+> *"The direct Supabase host is IPv6-only and Render has no IPv6 route to it, so
+> a Postgres deployment there cannot open a connection at all."*
+
+Use Render's own managed Postgres, whose internal URL is reachable from the web
+service.
+
+### What the SQL store does not change
+
+Documents are still stored one JSON row per document, with a side table indexing
+the fields that get filtered. The records are still read one collection at a
+time and joined in Python, because that is how the models were written. On SQLite
+that is free, so the fan-out stops mattering — but the availability search is
+still four queries rather than one.
+
+Moving the timetable and adjustments onto real tables would collapse that into a
+single indexed join, and is the natural next step if it ever needs to be. It is
+deliberately not done yet: it means migrating every model, and there is nothing
+pressing about it now that the reads are not billed per query.
+
+One thing SQL *does* add: real transactions. `store.transaction()` lets a
+multi-document write commit or roll back as a unit, which is how an approval can
+be made atomic. Approving a leave touches the leave, its adjustments and the
+balance, and a half-written approval would show a leave granted against
+adjustments that were never closed.
 
 ## Deploy to Render
 
@@ -492,17 +561,22 @@ Procfile               gunicorn start command for Render
 render.yaml            Render blueprint (env vars, start command, health check)
 app/__init__.py        Application factory, blueprints, /healthz, error handlers
 app/auth/              MSAL client and sign-in routes
-app/models/            Dataclasses, the Firestore store, model queries
+app/models/            Dataclasses, the store interface, and its two backends
+  values.py              How a Python value is stored and read back, shared by both
+  firestore.py           Firestore implementation, and the backend selector
+  sqlstore.py            SQL implementation (SQLite / PostgreSQL)
 app/permissions/       Validation and orchestration (service layer)
 app/student/           Student portal routes
-app/faculty/           Lecturer portal, classes, attendance, proof download
+app/faculty/           Lecturer portal, classes, attendance, leave, proof download
 app/hod/               Analytics, register, reports
 app/utils/             Security helpers, Cloudflare R2 proof storage, roster parsing, email, navigation, letter QR codes
 templates/             Jinja2 templates
 templates/student/letter.html    Formal A4 permission letter, one page, with its QR code
 templates/auth/verify.html        Public, account-free page a letter's QR code opens
 static/                CSS, Chart.js dashboard, Aditya logo assets
-migrations/seed_firestore.py  Idempotent seed of the staff and student accounts
+migrations/
+  seed_firestore.py       Idempotent seed of the staff and student accounts
+  import_college_data.py  Loads the college's faculty, sections, timetables, students
 verify.py              Unit harness, no database required
 workflow_test.py       End-to-end over HTTP
 class_features_test.py Classes, roster and attendance

@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, change_table with context %}
+{% block title %}Confirm changes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Confirm your changes</h1>
+    <p class="page-head__sub">
+      {{ changes | length }} field{{ '' if changes | length == 1 else 's' }} of this
+      application will change. Nothing has been saved yet.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.edit_leave', leave_id=leave.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil"></i> Back to editing
+    </a>
+  </div>
+</div>
+
+{% if leave.status != 'DRAFT' %}
+<div class="alert alert-warning">
+  <i class="bi bi-eye"></i>
+  Your HOD is already looking at this application. Saving records what changed
+  against your name and shows them both versions &mdash; it does not withdraw
+  the application.
+</div>
+{% endif %}
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-arrow-left-right"></i> What will change
+    </h2>
+  </div>
+  <div class="card-au__body">
+    {{ change_table(changes) }}
+  </div>
+</div>
+
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-send-check"></i> Save</h2>
+  </div>
+  <div class="card-au__body">
+    <p class="form-text">
+      {% if leave.status != 'DRAFT' %}
+      Moving the dates also removes any period already recorded outside the new
+      range.
+      {% else %}
+      Periods you have already confirmed are only removed if the dates move past
+      them.
+      {% endif %}
+    </p>
+
+    {# The values travel with the confirmation rather than being re-read from the
+       form, so the thing you are shown is the thing that gets written. #}
+    <form method="post" action="{{ url_for('faculty.apply_leave_edit', leave_id=leave.id) }}">
+      {{ csrf_field() }}
+      <input type="hidden" name="leave_type" value="{{ form.leave_type }}">
+      <input type="hidden" name="from_date" value="{{ form.from_date }}">
+      <input type="hidden" name="to_date" value="{{ form.to_date }}">
+      <input type="hidden" name="reason" value="{{ form.reason }}">
+
+      <div class="d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-check2"></i> Save {{ changes | length }} change{{ '' if changes | length == 1 else 's' }}
+        </button>
+        {# Exits without writing, and without losing the edit: back to the form
+            with everything still in it. #}
+        <a href="{{ url_for('faculty.edit_leave', leave_id=leave.id) }}"
+           class="btn btn-outline-secondary btn-pill">
+          <i class="bi bi-x-lg"></i> Exit without saving
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

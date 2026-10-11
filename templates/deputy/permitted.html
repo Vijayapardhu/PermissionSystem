@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import type_badge, date, time_range, roll, empty_state with context %}
+{% block title %}Permitted Today &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Who Holds a Permission</h1>
+    <p class="page-head__sub">
+      Students with an approved permission on the chosen day. This is the answer
+      to &ldquo;who can I expect in class today&rdquo;.
+    </p>
+  </div>
+</div>
+
+<form method="get" class="row g-2 align-items-end mb-3 no-print">
+  <div class="col-6 col-md-3">
+    <label class="form-label" for="v-date">Date</label>
+    <input type="date" class="form-control" id="v-date" name="date"
+           value="{{ view_date.isoformat() }}">
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label" for="v-status">Status</label>
+    <select class="form-select" id="v-status" name="status">
+      <option value="">All</option>
+      <option value="APPROVED" {{ 'selected' if status_filter and status_filter.value == 'APPROVED' }}>Approved</option>
+      <option value="AWAITING_HOD" {{ 'selected' if status_filter and status_filter.value == 'AWAITING_HOD' }}>Awaiting HOD</option>
+    </select>
+  </div>
+  <div class="col-12 col-md-auto">
+    <button type="submit" class="btn btn-primary btn-pill w-100">
+      <i class="bi bi-funnel"></i> Show
+    </button>
+  </div>
+  <div class="col-12 col-md text-end">
+    <a href="{{ url_for('deputy.dashboard') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Deputy panel
+    </a>
+  </div>
+</form>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-calendar3"></i> {{ view_date.strftime('%d %B %Y') }}
+    </h2>
+    <span class="form-text">{{ records | length }} student{{ '' if records|length == 1 else 's' }}</span>
+  </div>
+
+  {% if records %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>Time</th>
+          <th>Reason</th>
+          <th>Status</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in records %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td class="text-nowrap small">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap small">{{ time_range(record.start_time, record.end_time) }}</td>
+          <td class="small text-muted clamp-2" title="{{ record.reason }}">{{ record.reason }}</td>
+          <td class="small">{{ record.status.value.replace('_', ' ').title() }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('deputy.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-outline-secondary">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {{ empty_state('person-check', 'Nobody holds a permission on this date',
+                   'Change the date above, or clear the status filter.') }}
+  {% endif %}
+</div>
+{% endblock %}

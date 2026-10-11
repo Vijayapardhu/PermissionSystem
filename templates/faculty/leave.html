@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state, stat with context %}
+{% block title %}My Leave &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">My Leave</h1>
+    <p class="page-head__sub">
+      Apply for leave, arrange cover for the periods it affects, and follow the
+      application through approval.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.apply_leave') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-plus-circle"></i> Apply for Leave
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">{{ stat('Applications', counts.total, 'journal-text') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Arranging cover', counts.pending, 'arrow-left-right', 'warning') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('With the HOD', counts.awaiting_hod, 'hourglass-split') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Approved', counts.approved, 'check-circle', 'success') }}</div>
+</div>
+
+{% if upcoming %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-calendar-event"></i> Upcoming</h2>
+  </div>
+  <div class="card-au__body">
+    {% for leave in upcoming %}
+    <div class="d-flex flex-wrap align-items-center gap-2 py-2
+                {% if not loop.last %}border-bottom{% endif %}">
+      <i class="bi bi-calendar2-week text-secondary"></i>
+      <strong>{{ leave.from_date.strftime('%d %b %Y') }}</strong>
+      <span class="text-muted">&rarr;</span>
+      <strong>{{ leave.to_date.strftime('%d %b %Y') }}</strong>
+      <span class="badge-au badge-au--role">{{ leave.leave_type.value|replace('_', ' ') }}</span>
+      <span class="badge-au badge-au--{{ leave.status.value|lower }}">
+        {{ leave.status.value|replace('_', ' ') }}
+      </span>
+      {% if leave.affected_count %}
+        <span class="form-text">
+          {{ leave.accepted_count }}/{{ leave.affected_count }} class block{{ '' if leave.affected_count == 1 else 's' }} covered
+        </span>
+      {% endif %}
+      <a class="btn btn-sm btn-outline-secondary btn-pill ms-auto"
+         href="{{ url_for('faculty.my_leave_detail', leave_id=leave.id) }}">Open</a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> All applications</h2>
+    <span class="form-text">{{ leaves|length }}</span>
+  </div>
+  {% if leaves %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>From</th>
+          <th>To</th>
+          <th>Days</th>
+          <th>Type</th>
+          <th>Reason</th>
+          <th>Cover</th>
+          <th>Status</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave in leaves %}
+        <tr>
+          <td class="table-au__strong">{{ leave.from_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.to_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.days }}</td>
+          <td>{{ leave.leave_type.value|replace('_', ' ') }}</td>
+          <td class="text-truncate" style="max-width:22rem">{{ leave.reason }}</td>
+          <td>
+            {% if leave.affected_count %}
+              <span class="badge-au badge-au--{{ 'approved' if leave.adjustments_resolved else 'pending' }}">
+                {{ leave.accepted_count }}/{{ leave.affected_count }}
+              </span>
+              {% if leave.uncovered_count %}
+                <span class="badge-au badge-au--rejected" title="No cover found">
+                  {{ leave.uncovered_count }} uncovered
+                </span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge-au badge-au--{{ leave.status.value|lower }}">
+              {{ leave.status.value|replace('_', ' ') }}
+            </span>
+          </td>
+          <td class="table-au__actions">
+            <a class="btn btn-sm btn-outline-secondary btn-pill"
+               href="{{ url_for('faculty.my_leave_detail', leave_id=leave.id) }}">Open</a>
+            {% if leave.status in ('DRAFT', 'ADJUSTMENT_PENDING', 'ADJUSTMENT_COMPLETE') %}
+              <form method="post" class="d-inline"
+                    action="{{ url_for('faculty.cancel_leave', leave_id=leave.id) }}"
+                    onsubmit="return confirm('Withdraw this application?')">
+                {{ csrf_field() }}
+                <button class="btn btn-sm btn-outline-danger btn-pill">Withdraw</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {{ empty_state('calendar-plus', 'No leave applications yet',
+        'Apply for leave and the system will list the periods you are missing.') }}
+  {% endif %}
+</div>
+{% endblock %}

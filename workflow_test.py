@@ -12,7 +12,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = 'http://localhost:5000'
+# 127.0.0.1 rather than localhost: on Windows `localhost` resolves to ::1
+# first, nothing listens there, and the fallback to IPv4 costs ~21s per
+# request -- slow enough that this script looks like it hangs.
+BASE = 'http://127.0.0.1:5000'
 
 # Every seeded/created record that spans today must appear in today's report, so
 # the expectation is derived from the database rather than assumed to be empty.

@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Edit {{ event.name }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Edit this event</h1>
+    <p class="page-head__sub">
+      {{ event.name }}
+      &middot; {{ 'Sub-event' if parent_name else 'Main event' }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.event_detail', event_id=event.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to the event
+    </a>
+  </div>
+</div>
+
+<form method="post" id="event-edit-form" novalidate>
+  {{ csrf_field() }}
+  <div class="card-au">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-pencil-square"></i> Details</h2>
+      <span class="form-text">The value each field holds now is shown under it</span>
+    </div>
+    <div class="card-au__body">
+
+      <div class="mb-3">
+        <label class="form-label" for="event-name">Event name</label>
+        <input type="text" class="form-control" id="event-name" name="name"
+               required minlength="3"
+               value="{{ form.name if form else event.name }}">
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ event.name }}
+        </span>
+      </div>
+
+      <div class="mb-0">
+        <label class="form-label" for="event-coord">Coordinator</label>
+        <select class="form-select" id="event-coord" name="coordinator_id">
+          <option value="">Nobody assigned</option>
+          {% for person in faculty %}
+          <option value="{{ person.id }}"
+            {{ 'selected' if (form.coordinator_id if form else event.coordinator_id|string) == person.id|string }}>
+            {{ person.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ current_coordinator }}
+        </span>
+      </div>
+    </div>
+    <div class="card-au__foot">
+      <a href="{{ url_for('hod.event_detail', event_id=event.id) }}"
+         class="btn btn-outline-secondary btn-pill">
+        <i class="bi bi-x-lg"></i> Exit without saving
+      </a>
+      <button type="submit" class="btn btn-primary btn-pill ms-2">
+        <i class="bi bi-arrow-right"></i> Review changes
+      </button>
+    </div>
+  </div>
+</form>
+
+<div class="card-au mt-3">
+  <div class="card-au__body">
+    <p class="form-text mb-0">
+      Nothing is saved by <em>Review changes</em> &mdash; the next screen lists
+      every field that differs and you confirm there.
+      {% if event.parent_id %}
+      A sub-event keeps its parent. Moving it between events would rewrite what
+      the past requests that named it meant.
+      {% endif %}
+    </p>
+  </div>
+</div>
+{% endblock %}

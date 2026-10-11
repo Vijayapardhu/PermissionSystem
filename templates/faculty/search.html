@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state, search_form with context %}
 {% block title %}Search Students &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -18,28 +18,13 @@
   </div>
 </div>
 
-<div class="card-au mb-3">
-  <div class="card-au__body">
-    <form method="get" class="d-flex gap-2 flex-wrap">
-      <div class="flex-grow-1" style="min-width:240px">
-        <label for="q" class="form-label">Roll number or name</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="bi bi-search"></i></span>
-          <input type="search" class="form-control" id="q" name="q"
-                 value="{{ query }}" autofocus
-                 placeholder="e.g. 26B21CS058" minlength="2" maxlength="80">
-        </div>
-      </div>
-      <div class="d-flex align-items-end">
-        <button type="submit" class="btn btn-primary btn-pill">
-          <i class="bi bi-search"></i> Search
-        </button>
-      </div>
-    </form>
-    <p class="form-text mt-2 mb-0">
-      Partial matches work. Search results are limited to the {{ DEPARTMENT_NAME }}.
-    </p>
-  </div>
+<div class="card-au au-searchbar">
+  {{ search_form(value=query,
+                 placeholder='Roll number or name, e.g. 26B21CS058',
+                 label='Roll number or name', size='full', autofocus=true,
+                 minlength=2,
+                 hint='Partial matches work. Results are limited to the '
+                      ~ DEPARTMENT_NAME ~ '.') }}
 </div>
 
 {% if not query %}

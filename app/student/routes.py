@@ -5,7 +5,9 @@ from flask import (
 )
 
 from app.models import RequestStatus
-from app.models.classes import MemberModel
+from app.models.classes import (
+    ClassModel, MemberModel, ProctorModel, KIND_CLASS, KIND_PROCTOR,
+)
 from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
 )
@@ -13,7 +15,8 @@ from app.models.user import UserModel
 from app.faculty.routes import annotate_routes, annotate_events
 from app.permissions.pages import permission_required
 from app.permissions.service import (
-    DuplicateRequestError, ValidationError, cancel_request, resolve_members,
+    DuplicateRequestError, ValidationError, cancel_request,
+    find_proctor_for_student, resolve_members,
     student_can_view, submit_request,
 )
 from app.utils.qr import letter_qr
@@ -193,28 +196,88 @@ def request_detail(request_id: int):
 @student_bp.route('/classes')
 @permission_required('student.classes_for_student')
 def classes_for_student():
-    """Classes this student belongs to, and their permissions in each."""
+    """Classes this student is taught in, plus who their proctor is.
+
+    The two lists are kept apart here on purpose. Both live in `class_groups`,
+    so an unfiltered read returned the student's proctor list alongside their
+    subjects, and a proctor list rendered as a class looked like something with
+    a timetable and a subject they had to attend. A proctor list has
+    neither; it only decides whose queue their permission request lands in, so
+    it is presented as its own thing with its own explanation.
+    """
     from app.models.firestore import store
 
     user = current_user()
 
     MemberModel.relink_unresolved()
 
-    # Roster rows, then the classes they point at, then their lecturers. Three
+    # Roster rows, then the groups they point at, then their lecturers. Three
     # reads instead of one join, and each is a single-field lookup.
-    class_ids = {
-        row.get('class_id')
-        for row in store.documents('class_members', student_id=user.id)
-        if row.get('enrolled', True)
-    }
-    groups = [row for row in store.documents('class_groups')
-              if row.get('id') in class_ids]
-    faculty_names = {
-        row['id']: row.get('name') for row in store.documents('users')
-    }
-    for group in groups:
-        group['faculty_name'] = faculty_names.get(group.get('faculty_id'))
-    groups.sort(key=lambda g: g.get('name') or '')
+    memberships = [row for row in store.documents('class_members',
+                                                  student_id=user.id)
+                   if row.get('enrolled', True)]
+    class_ids = {row.get('class_id') for row in memberships}
+
+    faculty = {row['id']: row for row in store.documents('users')}
+
+    # Split by kind BEFORE anything is rendered. Filtering after the fact, in a
+    # template, is how the two got mixed in the first place -- the context
+    # carried both and every consumer had to remember to drop one.
+    taught, proctor_groups = [], []
+    for row in store.documents('class_groups'):
+        if row.get('id') not in class_ids:
+            continue
+        kind = row.get('kind') or KIND_CLASS
+        (proctor_groups if kind == KIND_PROCTOR else taught).append(row)
+
+    for group in taught:
+        owner = faculty.get(group.get('faculty_id'))
+        group['faculty_name'] = (owner or {}).get('name')
+        # The subject is what tells one of a student's classes from another --
+        # they take the same section several times over, once per subject, and
+        # the class name alone is a section label the student already knows.
+        group['subject_code'] = group.get('subject_code')
+        group['course_name'] = group.get('course_name')
+        group['faculty_code'] = (owner or {}).get('employee_code')
+    taught.sort(key=lambda g: ((g.get('section_code') or ''),
+                               (g.get('subject_code') or ''),
+                               (g.get('name') or '')))
+
+    # The proctor side: who reviews this student's requests, and who they share
+    # that proctor with. The classmates are the point -- a student can see at a
+    # glance that a request will be read by the lecturer who mentors their batch
+    # rather than by whoever happened to be least busy.
+    #
+    # The proctor comes from the routing service, NOT from
+    # `ProctorModel.group_for_student`. A student can be on more than one proctor
+    # list, and routing breaks that tie by whoever has the smaller open queue --
+    # so reading the first list's owner would name one proctor while their
+    # request was in fact decided by another. The card must not contradict what
+    # the request will actually do.
+    proctor_view = None
+    proctor = find_proctor_for_student(user)
+    if proctor is not None:
+        peer_ids = set()
+        for group in ProctorModel.groups_for_student(user.id):
+            if group.faculty_id == proctor.id:
+                peer_ids |= ProctorModel.student_ids_in_group(group.id)
+        peer_ids.discard(user.id)
+
+        peers = []
+        for peer_id in sorted(peer_ids):
+            peer = UserModel.find_by_id(peer_id)
+            if peer is not None:
+                peers.append({'id': peer.id, 'roll_number': peer.roll_number,
+                              'name': peer.name})
+        peers.sort(key=lambda p: p['roll_number'] or '')
+
+        proctor_group = next((g for g in ProctorModel.groups_for_student(user.id)
+                              if g.faculty_id == proctor.id), None)
+        proctor_view = {
+            'group_name': proctor_group.name if proctor_group else None,
+            'proctor': proctor,
+            'peers': peers,
+        }
 
     today = date.today()
     active = PermissionModel.get_today_approved()
@@ -223,7 +286,8 @@ def classes_for_student():
     return render_template(
         'student/classes.html',
         user=user,
-        classes=groups,
+        classes=taught,
+        proctor=proctor_view,
         active_today=mine,
         today=today,
     )

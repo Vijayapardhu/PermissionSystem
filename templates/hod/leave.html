@@ -1,0 +1,136 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state, stat with context %}
+{% block title %}Leave Approvals &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Leave Approvals</h1>
+    <p class="page-head__sub">
+      Faculty leave that has been arranged and submitted, with the class
+      adjustments behind it.
+    </p>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">{{ stat('Awaiting you', counts.awaiting, 'hourglass-split', 'warning') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('With uncovered classes', counts.uncovered, 'exclamation-triangle', 'danger') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Passed to the Dean', counts.with_dean, 'check-circle', 'success') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Rejected', counts.rejected, 'x-circle') }}</div>
+</div>
+
+{% if pending %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-inbox"></i> Awaiting your decision</h2>
+    <span class="form-text">{{ pending|length }}</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Faculty</th>
+          <th>From</th>
+          <th>To</th>
+          <th class="table-au__num">Days</th>
+          <th>Type</th>
+          <th>Reason</th>
+          <th>Class cover</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave in pending %}
+        <tr>
+          <td class="table-au__strong">{{ leave.faculty_name or '—' }}</td>
+          <td>{{ leave.from_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.to_date.strftime('%d-%m-%Y') }}</td>
+          <td class="table-au__num">{{ leave.days }}</td>
+          <td>{{ leave.leave_type.value|replace('_', ' ') }}</td>
+          <td class="text-truncate" style="max-width:20rem">{{ leave.reason }}</td>
+          <td>
+            {% if leave.affected_count %}
+              <span class="badge-au badge-au--{{ 'approved' if not leave.uncovered_count else 'pending' }}">
+                {{ leave.accepted_count }}/{{ leave.affected_count }} covered
+              </span>
+              {% if leave.uncovered_count %}
+                <span class="badge-au badge-au--rejected">
+                  {{ leave.uncovered_count }} uncovered
+                </span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">No classes affected</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <a class="btn btn-sm btn-primary btn-pill"
+               href="{{ url_for('hod.leave_detail', leave_id=leave.id) }}">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card-au mb-3">
+  {{ empty_state('check2-all', 'Nothing waiting on you',
+      'Faculty leave appears here once the applicant has arranged cover for '
+      'every period it affects and sent it for approval.') }}
+</div>
+{% endif %}
+
+{% if decided %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> Decided</h2>
+    <span class="form-text">{{ decided|length }}</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Faculty</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Type</th>
+          <th>Class cover</th>
+          <th>Status</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave in decided %}
+        <tr>
+          <td class="table-au__strong">{{ leave.faculty_name or '—' }}</td>
+          <td>{{ leave.from_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.to_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.leave_type.value|replace('_', ' ') }}</td>
+          <td>
+            {% if leave.affected_count %}
+              {{ leave.accepted_count }}/{{ leave.affected_count }}
+              {% if leave.uncovered_count %}
+                <span class="badge-au badge-au--rejected">{{ leave.uncovered_count }} uncovered</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge-au badge-au--{{ 'approved' if leave.status.value == 'DEAN_PENDING' else 'rejected' }}">
+              {{ leave.status.value|replace('_', ' ') }}
+            </span>
+          </td>
+          <td class="table-au__actions">
+            <a class="btn btn-sm btn-outline-secondary btn-pill"
+               href="{{ url_for('hod.leave_detail', leave_id=leave.id) }}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

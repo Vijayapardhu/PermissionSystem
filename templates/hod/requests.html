@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, date, roll, csrf_field, empty_state with context %}
+{% from '_macros.html' import status_badge, date, roll, csrf_field, empty_state, select with context %}
 {% block title %}All Requests &middot; {{ APP_NAME }}{% endblock %}
 
 {# One row of the register. A macro so the "needs your decision" section and
@@ -177,38 +177,52 @@
 </div>
 
 {# Sticky so the filters stay under the hand on a long register instead of
-   scrolling away with it. #}
-<div class="card-au mb-3 toolbar-sticky">
-  <form class="toolbar" method="get">
-    <div class="input-group input-group-sm" style="max-width:230px">
-      <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="search" class="form-control" name="q" value="{{ search }}"
-             placeholder="Roll no or name" aria-label="Search by roll number or name">
+   scrolling away with it. The search box inside is the same one every other
+   page uses; only its surroundings are frosted here. #}
+<div class="card-au toolbar-sticky toolbar-sticky--flush">
+  <form class="toolbar toolbar--standalone" method="get">
+    <div class="au-search au-search--bar" role="search">
+      <div class="au-search__box" data-au-search>
+        <i class="bi bi-search au-search__icon" aria-hidden="true"></i>
+        <input type="search" name="q" value="{{ search }}"
+               class="form-control au-search__input"
+               placeholder="Roll no or name" aria-label="Search by roll number or name"
+               autocomplete="off" spellcheck="false">
+        {% if search %}
+        <button type="button" class="au-search__clear"
+                title="Clear the search" aria-label="Clear the search">
+          <i class="bi bi-x-lg" aria-hidden="true"></i>
+        </button>
+        {% endif %}
+        <button type="submit" class="au-search__btn au-search__go">
+          <i class="bi bi-arrow-right" aria-hidden="true"></i><span>Search</span>
+        </button>
+      </div>
     </div>
 
-    <select class="form-select form-select-sm" name="status" style="width:auto"
-            onchange="this.form.submit()" aria-label="Filter by status">
-      <option value="">All statuses</option>
-      {% for status in ['AWAITING_HOD', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
-      <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title|replace('_', ' ') }}</option>
-      {% endfor %}
-    </select>
+    {{ select('status',
+              [('', 'All statuses'), ('AWAITING_HOD', 'Awaiting Hod'),
+               ('PENDING', 'Pending'), ('APPROVED', 'Approved'),
+               ('REJECTED', 'Rejected'), ('CANCELLED', 'Cancelled'),
+               ('EXPIRED', 'Expired')],
+              selected=status_filter.value if status_filter else '',
+              aria='Filter by status') }}
 
-    <select class="form-select form-select-sm" name="reviewer" style="width:auto;max-width:220px"
-            onchange="this.form.submit()" aria-label="Filter by reviewer">
-      <option value="">All reviewers</option>
-      {% for reviewer in reviewers %}
-      <option value="{{ reviewer.id }}" {{ 'selected' if reviewer_id == reviewer.id }}>{{ reviewer.name }}</option>
-      {% endfor %}
-    </select>
+    <div class="au-select">
+      <select class="form-select" name="reviewer"
+              aria-label="Filter by reviewer">
+        <option value="">All reviewers</option>
+        {% for reviewer in reviewers %}
+        <option value="{{ reviewer.id }}"
+                {{ 'selected' if reviewer_id == reviewer.id }}>{{ reviewer.name }}</option>
+        {% endfor %}
+      </select>
+      <i class="bi bi-chevron-down au-select__arrow" aria-hidden="true"></i>
+    </div>
 
-    <select class="form-select form-select-sm" name="type" style="width:auto"
-            onchange="this.form.submit()" aria-label="Filter by type">
-      <option value="">All types</option>
-      {% for kind in ['CLASSROOM'] %}
-      <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
-      {% endfor %}
-    </select>
+    {{ select('type', [('', 'All types'), ('CLASSROOM', 'Classroom')],
+              selected=type_filter.value if type_filter else '',
+              aria='Filter by type') }}
 
     <input type="date" class="form-control form-control-sm" name="from"
            value="{{ date_from or '' }}" style="width:auto"

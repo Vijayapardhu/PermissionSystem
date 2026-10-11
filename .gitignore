@@ -23,3 +23,10 @@ Thumbs.db
 *.pub
 id_rsa*
 id_ed25519*
+# Local SQL store. The database is built by migrations/import_college_data.py
+# and must never be committed -- it holds staff and student records.
+local-dev.db
+local-dev.db-wal
+local-dev.db-shm
+*.sqlite
+*.sqlite3

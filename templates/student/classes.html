@@ -52,6 +52,59 @@
 </div>
 {% endif %}
 
+{# Proctoring, shown as its own thing rather than as another class.
+   A proctor list has no timetable and no subject -- it is the college's
+   allocation of who reviews this student's permission requests. It used to be
+   rendered in the class table above, where it read like something the student
+   had to attend. #}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-check"></i> My Proctor</h2>
+    {% if proctor and proctor.peers %}
+      <span class="form-text">{{ proctor.peers | length + 1 }} students on this list</span>
+    {% endif %}
+  </div>
+  <div class="card-au__body">
+    {% if proctor and proctor.proctor %}
+      <dl class="definition mb-0">
+        <dt>Proctor</dt>
+        <dd class="fw-semibold">{{ proctor.proctor.name }}</dd>
+        {% if proctor.proctor.email %}
+        <dt>Email</dt>
+        <dd>{{ proctor.proctor.email }}</dd>
+        {% endif %}
+        {% if proctor.group_name %}
+        <dt>List</dt>
+        <dd>{{ proctor.group_name }}</dd>
+        {% endif %}
+      </dl>
+      <p class="form-text mt-2 mb-0">
+        <i class="bi bi-info-circle"></i>
+        Your permission requests go to your proctor first. They may pass one on
+        to the Head of Department if it needs a final decision.
+      </p>
+      {% if proctor.peers %}
+      <p class="mt-3 mb-1 small fw-semibold">Students sharing this proctor</p>
+      <div class="d-flex flex-wrap gap-1">
+        {% for peer in proctor.peers[:40] %}
+          <span class="badge text-bg-light">{{ peer.roll_number or peer.name }}</span>
+        {% endfor %}
+        {% if proctor.peers | length > 40 %}
+          <span class="badge text-bg-light">+{{ proctor.peers | length - 40 }} more</span>
+        {% endif %}
+      </div>
+      {% endif %}
+    {% else %}
+      <p class="text-muted mb-0">
+        <i class="bi bi-info-circle"></i>
+        No proctor has been allocated to you yet. Until the department assigns
+        one, your permission requests are reviewed by a lecturer the department
+        assigns automatically.
+      </p>
+    {% endif %}
+  </div>
+</div>
+
 <div class="card-au">
   <div class="card-au__head">
     <h2 class="card-au__title"><i class="bi bi-people"></i> Enrolled Classes</h2>
@@ -64,20 +117,33 @@
       <thead>
         <tr>
           <th class="table-au__idx">#</th>
-          <th>Class</th>
+          <th>Subject</th>
+          <th>Course</th>
           <th>Section</th>
-          <th>Year</th>
           <th>Lecturer</th>
+          <th>Year</th>
         </tr>
       </thead>
       <tbody>
         {% for group in classes %}
         <tr>
           <td class="table-au__idx">{{ loop.index }}</td>
-          <td class="table-au__strong">{{ group.name }}</td>
-          <td>{{ group.section_code or '—' }}</td>
+          <td class="table-au__strong">{{ group.subject_code or '—' }}</td>
+          <td>
+            {% if group.course_name %}
+              {{ group.course_name }}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-nowrap">{{ group.section_code or '—' }}</td>
+          <td class="text-nowrap">
+            {{ group.faculty_name or 'Unassigned' }}
+            {% if group.faculty_code %}
+            <div class="form-text">{{ group.faculty_code }}</div>
+            {% endif %}
+          </td>
           <td>{{ group.academic_year or '—' }}</td>
-          <td class="text-nowrap">{{ group.faculty_name or 'Unassigned' }}</td>
         </tr>
         {% endfor %}
       </tbody>

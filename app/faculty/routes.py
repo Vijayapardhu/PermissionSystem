@@ -1,5 +1,6 @@
 import io
 import mimetypes
+import re
 
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -9,6 +10,7 @@ from flask import (
     abort,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -17,18 +19,59 @@ from flask import (
 )
 
 from app.models import (
-    ApprovalAction, PermissionType, RequestStatus, UserRole,
+    ApprovalAction, LEAVE_TYPE_CHOICES, LeaveStatus, LeaveType, PermissionType,
+    RequestStatus, UserRole,
 )
 from app.models.classes import (
-    AttendanceModel, ClassModel, MemberModel, KIND_CLASS, KIND_PROCTOR,
+    ClassModel, MemberModel, ProctorModel,
+    KIND_CLASS, KIND_PROCTOR,
+)
+from app.models.classwork import (
+    ClassworkModel, ObjectionModel, attach_classwork_context,
+)
+from app.models.leave import (
+    AdjustmentModel, LeaveModel, LeaveSummary, TimetableModel,
 )
 from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
     classify_route,
 )
 from app.models.user import UserModel
+from app.permissions.leave_service import (
+    LeaveError, MAX_LEAVE_DAYS,
+    apply_leave_edit as apply_leave_edit_service,
+    preview_leave_edit,
+    # The four below are aliased because the route that calls each one has the
+    # same name. Without the alias the name inside the view body resolved to the
+    # view itself, not the imported service function, and every one of those
+    # buttons raised TypeError and returned a 500. Only reachable by posting the
+    # form, which is why the unit tests missed it and an HTTP walk caught it.
+    cancel_leave as cancel_leave_service,
+    candidate_periods_for,
+    confirm_affected,
+    create_leave,
+    letter_context,
+    mark_uncovered as mark_uncovered_service,
+    request_substitution as request_substitution_service,
+    respond_to_substitution,
+    submit_to_hod,
+    suggest_faculty,
+    withdraw_substitution as withdraw_substitution_service,
+)
+from app.permissions.classwork_service import (
+    # Aliased for the same reason as the leave service above: the routes below
+    # are called `create_classwork` and `respond_to_objection`, so importing
+    # the service under its own name would rebind it to the view at import time.
+    classwork_for_request,
+    create_classwork as create_classwork_service,
+    fast_reply_presets,
+    importance_choices,
+    respond_to_objection as respond_to_objection_service,
+    timetable_options,
+)
 from app.permissions.pages import permission_required
 from app.permissions.service import ValidationError, act_on_request, student_can_view
+from app.utils.changes import diff_fields, summarise
 from app.utils.files import UploadError, fetch_proof
 from app.utils.qr import letter_qr
 from app.utils.roster import RosterError, parse_roster
@@ -92,7 +135,31 @@ def dashboard():
     pending = PermissionModel.find_pending_for_faculty(user.id)
     attach_members(pending)
     annotate_routes(pending)
-    history = PermissionModel.find_all_for_hod(limit=50)
+
+    # Why is each request here at all?
+    #
+    # Routing sends a request to the student's proctor, but only if the college
+    # has actually loaded the proctor lists -- and when it has not, the request
+    # falls through to the least-loaded lecturer in the department. From inside
+    # the queue those two look identical: the same list, the same buttons. A
+    # lecturer cannot tell which students are theirs to mentor and which landed
+    # on them by arithmetic, and that difference decides whether they are the
+    # right person to be answering.
+    #
+    # So each entry is tagged rather than filtered. Hiding the fallback requests
+    # would be worse: an HOD who named a lecturer as the hackathon coordinator
+    # would find that lecturer unable to see the hackathon requests.
+    proctored = ProctorModel.student_ids_for_faculty(user.id)
+    for record in pending:
+        record.from_proctor_list = bool(proctored & set(record.members))
+    proctor_queue = sum(1 for r in pending if r.from_proctor_list)
+
+    # Their OWN decided requests, not the department's. This used to be
+    # `find_all_for_hod(limit=50)`, which is every request in the department --
+    # so every lecturer could read every other student's roll number, reason and
+    # outcome on what is meant to be their own queue, while being unable to see
+    # the requests they had personally signed.
+    history = PermissionModel.find_touching_faculty(user.id, limit=50)
     annotate_routes(history)
 
     return render_template(
@@ -101,6 +168,7 @@ def dashboard():
         pending=pending,
         recent=history,
         pending_count=len(pending),
+        proctor_queue=proctor_queue,
     )
 
 
@@ -124,6 +192,20 @@ def request_detail(request_id: int):
     proofs = ProofModel.find_by_request(request_id)
     history = ApprovalModel.find_by_request(request_id)
 
+    # What the section has scheduled across the dates this request covers, worst
+    # first. This is the whole reason the module exists: the reviewer decides
+    # with the classwork in front of them rather than from memory. Guarded
+    # because a failure here must not hide the request itself -- losing the
+    # ability to approve is worse than approving without the panel.
+    try:
+        scheduled = classwork_for_request(record)
+    except Exception:
+        current_app.logger.exception(
+            'Classwork panel failed for request %s', request_id)
+        scheduled = []
+
+    objections = ObjectionModel.find_by_request(request_id)
+
     return render_template(
         'faculty/request_detail.html',
         user=user,
@@ -131,6 +213,9 @@ def request_detail(request_id: int):
         student=student,
         proofs=proofs,
         history=history,
+        classwork=scheduled,
+        objections=objections,
+        fast_replies=fast_reply_presets(),
     )
 
 
@@ -276,7 +361,12 @@ def _search_students(viewer, query: str) -> list:
 
 
 def _class_rolls_for(viewer, roll_number: str) -> list:
-    """Classes of the viewing lecturer that contain this roll number."""
+    """Classes of the viewing lecturer that contain this roll number.
+
+    Taught classes only. The proctor relationship is not a class the student
+    attends, and listing it here as one put a row on the search results reading
+    like a subject the student is enrolled in.
+    """
     from app.models.firestore import store
 
     if not roll_number:
@@ -290,6 +380,7 @@ def _class_rolls_for(viewer, roll_number: str) -> list:
         {'id': row['id'], 'name': row.get('name')}
         for row in store.documents('class_groups', faculty_id=viewer.id)
         if row['id'] in class_ids
+        and (row.get('kind') or KIND_CLASS) == KIND_CLASS
     ]
 
 
@@ -337,6 +428,95 @@ def create_class():
     return redirect(url_for('faculty.class_detail', class_id=group.id))
 
 
+@faculty_bp.route('/classes/<int:class_id>/edit', methods=['GET', 'POST'])
+@permission_required('faculty.edit_class')
+def edit_class(class_id: int):
+    """Rename a class group, or correct its section and year.
+
+    Same two steps as every other edit: the form shows what each field holds now,
+    and the POST previews the differences rather than applying them. The owner is
+    not editable here -- see `ClassModel.update_details`.
+    """
+    user = current_user()
+    group = _owned_class(user, class_id)
+
+    if request.method == 'GET':
+        return render_template('faculty/class_edit.html', user=user,
+                               group=group)
+
+    changes, error = _class_changes(group, request.form)
+    if error:
+        flash(error, 'danger')
+        return render_template('faculty/class_edit.html', user=user,
+                               group=group, form=request.form)
+
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+    return render_template('faculty/class_edit_confirm.html', user=user,
+                           group=group, changes=changes, form=request.form)
+
+
+@faculty_bp.route('/classes/<int:class_id>/edit/apply', methods=['POST'])
+@permission_required('faculty.edit_class')
+def apply_class_edit(class_id: int):
+    """Write a confirmed class edit."""
+    user = current_user()
+    _owned_class(user, class_id)
+
+    group = ClassModel.find_by_id(class_id)
+    changes, error = _class_changes(group, request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('faculty.edit_class', class_id=class_id))
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+    # Re-checked here rather than trusting the preview: between the two, another
+    # tab could have renamed a different class to this one.
+    clash = ClassModel.find_by_name(request.form.get('name', ''),
+                                    exclude_id=class_id)
+    if clash is not None:
+        flash(f'Another class is already called "{clash.name}".', 'danger')
+        return redirect(url_for('faculty.edit_class', class_id=class_id))
+
+    ClassModel.update_details(
+        class_id,
+        request.form.get('name', ''),
+        request.form.get('section_code', ''),
+        request.form.get('academic_year', ''),
+    )
+    flash(f'{summarise(changes)} Saved.', 'success')
+    return redirect(url_for('faculty.class_detail', class_id=class_id))
+
+
+CLASS_EDIT_LABELS = {
+    'name': 'Class name',
+    'section_code': 'Section',
+    'academic_year': 'Year',
+}
+
+
+def _class_changes(group, form):
+    """(changes, error) for a proposed class edit."""
+    name = (form.get('name') or '').strip()
+    if len(name) < 3:
+        return [], 'Give the class a name of at least 3 characters.'
+    clash = ClassModel.find_by_name(name, exclude_id=group.id)
+    if clash is not None:
+        return [], f'Another class is already called "{clash.name}".'
+    return diff_fields(
+        {'name': group.name, 'section_code': group.section_code,
+         'academic_year': group.academic_year},
+        {'name': name,
+         'section_code': (form.get('section_code') or '').strip(),
+         'academic_year': (form.get('academic_year') or '').strip()},
+        CLASS_EDIT_LABELS,
+    ), None
+
+
 @faculty_bp.route('/classes/<int:class_id>')
 @permission_required('faculty.class_detail')
 def class_detail(class_id: int):
@@ -350,20 +530,14 @@ def class_detail(class_id: int):
     permissions_by_student, on_permission = _permissions_for_date(
         members, view_date
     )
-    attendance = AttendanceModel.find_by_class_date(class_id, view_date)
 
     rows = []
     for member in members:
-        if member.student_id:
-            status = attendance.get(member.student_id)
-        else:
-            status = None
         records = permissions_by_student.get(member.student_id, [])
         rows.append({
             'member': member,
             'permissions': records,
             'has_permission': bool(records),
-            'attendance': status,
         })
 
     summary = {
@@ -371,16 +545,28 @@ def class_detail(class_id: int):
         'linked': sum(1 for m in members if m.is_linked),
         'unlinked': sum(1 for m in members if not m.is_linked),
         'on_permission': sum(1 for r in rows if r['has_permission']),
-        'present': sum(1 for r in rows if r['attendance'] == 'PRESENT'),
-        'absent': sum(1 for r in rows if r['attendance'] == 'ABSENT'),
     }
+
+    # The page opens on the students who have permission and hides the rest.
+    #
+    # A lecturer opening a section asks "who is missing today", and scrolling a
+    # 68-row roster to find the four who are away is work repeated daily.
+    # The full roster stays one click away, because "who am I teaching" is the
+    # other half of the question and hiding it entirely would be its own wrong
+    # answer.
+    #
+    # A link rather than a form: this is a view preference, not state, and it
+    # belongs in the URL so the browser's back button undoes it.
+    show_all = request.args.get('view') == 'all'
+    visible_rows = rows if show_all else [r for r in rows if r['has_permission']]
 
     return render_template(
         'faculty/class_detail.html',
         user=user,
         class_group=group,
         members=members,
-        rows=rows,
+        rows=visible_rows,
+        show_all=show_all,
         view_date=view_date,
         summary=summary,
     )
@@ -446,65 +632,6 @@ def delete_class(class_id: int):
     return redirect(url_for('faculty.classes'))
 
 
-@faculty_bp.route('/classes/<int:class_id>/attendance', methods=['GET', 'POST'])
-@permission_required('faculty.attendance')
-def attendance(class_id: int):
-    """Mark attendance for the class on a given date."""
-    user = current_user()
-    _owned_class(user, class_id)
-
-    view_date = _parse_date(request.args.get('date'), date.today())
-    members = MemberModel.find_by_class(class_id)
-
-    if request.method == 'POST':
-        view_date = _parse_date(request.form.get('date'), view_date)
-        if view_date > date.today():
-            flash('Attendance cannot be marked for a future date.', 'danger')
-            return redirect(url_for('faculty.attendance', class_id=class_id,
-                                    date=view_date))
-
-        # Pre-mark students excused by an approved permission covering that day.
-        _, on_permission = _permissions_for_date(members, view_date)
-
-        records = []
-        for member in members:
-            if not member.is_linked:
-                continue
-            chosen = (request.form.get(f'att_{member.id}') or 'PRESENT').upper()
-            if chosen not in ('PRESENT', 'ABSENT', 'ON_PERMISSION'):
-                chosen = 'PRESENT'
-            if member.id in on_permission and chosen == 'PRESENT':
-                chosen = 'ON_PERMISSION'
-            records.append((member.student_id, chosen))
-
-        if records:
-            saved = AttendanceModel.save(class_id, records, user.id, view_date)
-            flash(f'Attendance saved for {saved} student'
-                  f'{"" if saved == 1 else "s"} on '
-                  f'{view_date.strftime("%d %B %Y")}.', 'success')
-        else:
-            flash('No students with a linked account to mark.', 'warning')
-
-        return redirect(url_for('faculty.attendance', class_id=class_id,
-                                date=view_date))
-
-    existing = AttendanceModel.find_by_class_date(class_id, view_date)
-    _, on_permission = _permissions_for_date(members, view_date)
-
-    summary = AttendanceModel.summary_by_date(class_id, view_date)
-
-    return render_template(
-        'faculty/attendance.html',
-        user=user,
-        class_group=_owned_class(user, class_id),
-        members=members,
-        existing=existing,
-        on_permission=on_permission,
-        view_date=view_date,
-        summary=summary,
-    )
-
-
 # ---------- helpers ----------
 
 def _owned_class(user, class_id: int):
@@ -534,8 +661,8 @@ def _owned_group(user, group_id: int, kind: str = None):
 def proctor_students():
     """The lecturer's proctor lists: rolls whose requests they review.
 
-    Separate from the classes they teach. A class has attendance and
-    timetables; a proctor list only decides whose permission requests land in
+    Separate from the classes they teach. A class has a timetable and a
+    subject; a proctor list only decides whose permission requests land in
     this queue.
     """
     user = current_user()
@@ -592,13 +719,87 @@ def proctor_group_detail(group_id: int):
         'unlinked': sum(1 for m in members if not m.is_linked),
     }
 
+    # Who among the students already on this list also proctors others, and who
+    # the list's own pending requests are -- so the page answers "is this list
+    # doing anything" rather than only "how many names are on it".
+    proctored_ids = ProctorModel.student_ids_in_group(group_id)
+    pending = [r for r in PermissionModel.find_pending_for_faculty(user.id)
+               if proctored_ids & set(r.members)]
+
     return render_template(
         'faculty/proctor_detail.html',
         user=user,
         group=group,
         members=members,
         summary=summary,
+        pending_count=len(pending),
     )
+
+
+@faculty_bp.route('/proctor/<int:group_id>/search')
+@permission_required('faculty.proctor_group_detail')
+def proctor_student_search(group_id: int):
+    """Find students to add to a proctor list, by roll number or name.
+
+    A JSON endpoint rather than a full page reload, because the thing a proctor
+    does most is correct a list one name at a time, and re-rendering the whole
+    page per keystroke would make that unusable. Only students who are already
+    on some roster in this department come back, so a proctor cannot add an
+    arbitrary person from the directory by typing part of a name.
+    """
+    user = current_user()
+    _owned_group(user, group_id, KIND_PROCTOR)
+
+    query = (request.args.get('q') or '').strip()
+    results = ProctorModel.search_students(query) if len(query) >= 2 else []
+    already = {m.roll_number for m in MemberModel.find_by_class(group_id)
+               if m.roll_number}
+    for row in results:
+        row['already'] = row['roll_number'] in already
+
+    return jsonify({'results': results})
+
+
+@faculty_bp.route('/proctor/<int:group_id>/add', methods=['POST'])
+@permission_required('faculty.upload_proctor_roster')
+def add_proctor_student(group_id: int):
+    """Put one student on a proctor list.
+
+    Spreadsheet upload already covers a whole batch, but the case that comes up
+    daily is different: one student is allocated to this proctor after the list
+    was uploaded, and making them edit the spreadsheet and re-upload everything
+    to add a single name is how proctor lists end up quietly out of date.
+    """
+    user = current_user()
+    _owned_group(user, group_id, KIND_PROCTOR)
+
+    raw = (request.form.get('roll') or '').strip().upper()
+    back = url_for('faculty.proctor_group_detail', group_id=group_id)
+
+    if not raw:
+        flash('Enter a roll number.', 'danger')
+        return redirect(back)
+
+    if not re.match(r'^[0-9]{2}[A-Z0-9]{6,12}$', raw):
+        flash(f'"{raw}" is not a roll number in the college format.', 'danger')
+        return redirect(back)
+
+    student = UserModel.find_by_roll_number(raw)
+    if student is None or not student.is_active:
+        flash(f'No student is registered with roll number {raw}.', 'danger')
+        return redirect(back)
+
+    if student.role != UserRole.STUDENT:
+        flash(f'{raw} is not a student.', 'danger')
+        return redirect(back)
+
+    result = ProctorModel.add_students(group_id, [raw])
+    if result.get('added'):
+        flash(f'{raw} added to the proctor list. Their permission requests '
+              f'will now come to you.', 'success')
+    else:
+        flash(f'{raw} is already on this proctor list.', 'info')
+    return redirect(back)
 
 
 @faculty_bp.route('/proctor/<int:group_id>/roster', methods=['POST'])
@@ -703,7 +904,17 @@ def _permissions_for_date(members, on_date: date):
 @faculty_bp.route('/requests')
 @permission_required('faculty.requests_browser')
 def requests_browser():
-    """Browse every request in the department with filters."""
+    """Every request this lecturer is answerable for, with filters.
+
+    Scoped to them, deliberately. The browser used to read the whole department
+    through `_filtered_requests` with no owner filter, so any lecturer could page
+    through up to 300 requests belonging to other students -- roll numbers,
+    reasons and outcomes included -- which is not a queue, it is a register the
+    department publishes to everyone in it.
+
+    `include_decided` keeps their own signed-off work visible after it has left
+    their queue, which is the other half of what a lecturer needs from this page.
+    """
     user = current_user()
 
     status_filter = _status_filter(request.args.get('status'))
@@ -713,7 +924,8 @@ def requests_browser():
     search = (request.args.get('q') or '').strip()
 
     records = _filtered_requests(status_filter, type_filter,
-                                 date_from, date_to, search, limit=300)
+                                 date_from, date_to, search, limit=300,
+                                 faculty_id=user.id, include_decided=True)
 
     return render_template(
         'faculty/requests.html',
@@ -724,33 +936,6 @@ def requests_browser():
         date_from=date_from,
         date_to=date_to,
         search=search,
-    )
-
-
-@faculty_bp.route('/attendance')
-@permission_required('faculty.attendance_overview')
-def attendance_overview():
-    """Pick a class and a date to mark attendance for it."""
-    user = current_user()
-    classes = ClassModel.find_for_faculty(user.id)
-
-    selected = None
-    class_id = request.args.get('class_id', type=int)
-    if class_id:
-        try:
-            selected = _owned_class(user, class_id)
-        except Exception:
-            selected = None
-
-    if selected is not None:
-        return redirect(url_for('faculty.attendance', class_id=selected.id,
-                                date=request.args.get('date')))
-
-    return render_template(
-        'faculty/attendance_overview.html',
-        user=user,
-        classes=classes,
-        now_date=date.today(),
     )
 
 
@@ -766,6 +951,440 @@ def reports():
         user=user,
         stats=stats,
     )
+
+
+# --------------------------------------------------------------------------
+# Faculty leave and class adjustment
+#
+# A separate block from the student permission flow above, and deliberately so:
+# different entities, a different approval chain and a different set of people
+# involved. What they share is the shell, the navigation and the store.
+# --------------------------------------------------------------------------
+
+@faculty_bp.route('/leave')
+@permission_required('faculty.my_leave')
+def my_leave():
+    """The signed-in lecturer's own applications, newest first."""
+    user = current_user()
+
+    leaves = LeaveModel.find_for_faculty(user.id)
+    for record in leaves:
+        LeaveSummary.attach(record, AdjustmentModel.find_by_leave(record.id))
+
+    upcoming = [l for l in leaves
+                if l.status not in (LeaveStatus.REJECTED, LeaveStatus.CANCELLED)
+                and l.to_date >= date.today()]
+    counts = {
+        'total': len(leaves),
+        'pending': sum(1 for l in leaves if l.status in (
+            LeaveStatus.DRAFT, LeaveStatus.ADJUSTMENT_PENDING,
+            LeaveStatus.ADJUSTMENT_COMPLETE)),
+        'awaiting_hod': sum(1 for l in leaves
+                            if l.status == LeaveStatus.HOD_PENDING),
+        'approved': sum(1 for l in leaves
+                        if l.status in (LeaveStatus.DEAN_PENDING,
+                                        LeaveStatus.FINAL_APPROVED)),
+        'rejected': sum(1 for l in leaves if l.status == LeaveStatus.REJECTED),
+    }
+
+    return render_template(
+        'faculty/leave.html',
+        user=user,
+        leaves=leaves,
+        upcoming=upcoming,
+        counts=counts,
+    )
+
+
+@faculty_bp.route('/leave/new', methods=['GET', 'POST'])
+@permission_required('faculty.apply_leave')
+def apply_leave():
+    """Step 1: the leave itself, before any period is chosen.
+
+    Kept separate from the period picker so a partially filled application
+    survives a stray click -- the dates and reason are already stored as a DRAFT
+    by the time anyone reaches step 2.
+    """
+    user = current_user()
+
+    if request.method == 'GET':
+        return render_template(
+            'faculty/leave_new.html',
+            user=user,
+            leave_types=LEAVE_TYPE_CHOICES,
+            max_days=MAX_LEAVE_DAYS,
+        )
+
+    try:
+        leave = create_leave(
+            faculty=user,
+            leave_type=request.form.get('leave_type', ''),
+            from_date_raw=request.form.get('from_date', ''),
+            to_date_raw=request.form.get('to_date', ''),
+            reason=request.form.get('reason', ''),
+        )
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return render_template(
+            'faculty/leave_new.html',
+            user=user,
+            leave_types=LEAVE_TYPE_CHOICES,
+            max_days=MAX_LEAVE_DAYS,
+            form=request.form,
+        )
+
+    return redirect(url_for('faculty.my_leave_detail', leave_id=leave.id))
+
+
+@faculty_bp.route('/leave/<int:leave_id>')
+@permission_required('faculty.my_leave_detail')
+def my_leave_detail(leave_id: int):
+    """The affected periods, who is covering each, and the shortlist for the rest."""
+    user = current_user()
+    leave = _own_leave(user, leave_id)
+
+    adjustments = AdjustmentModel.find_by_leave(leave_id)
+    LeaveSummary.attach(leave, adjustments)
+    slots = TimetableModel.slots_by_section(leave_section(adjustments))
+
+    coverage = TimetableModel.allocation_coverage()
+    open_now = leave.status in (LeaveStatus.DRAFT,
+                               LeaveStatus.ADJUSTMENT_PENDING)
+
+    # What the applicant may tick, with the ones already recorded pre-ticked.
+    # Rebuilt on every visit rather than stored, so the list reflects the current
+    # timetable: a course dropped since they last looked should not still be
+    # waiting there, ticked.
+    already = {(a.date, p) for a in adjustments for p in a.period_list}
+    candidate_periods = candidate_periods_for(user.id, leave) if open_now else []
+    for entry in candidate_periods:
+        entry['checked'] = (entry['date'], entry['period']) in already
+
+    # One shortlist per unarranged period. Built here rather than on demand so the
+    # page is a single render, and skipped entirely once the leave is with the HOD
+    # -- after that the set of people who could help has changed anyway.
+    shortlists = {}
+    if open_now:
+        for adjustment in adjustments:
+            if adjustment.needs_action and not adjustment.assigned_faculty_id:
+                shortlists[adjustment.id] = suggest_faculty(adjustment, user)
+
+    attach_faculty_names(adjustments)
+
+    return render_template(
+        'faculty/leave_detail.html',
+        user=user,
+        leave=leave,
+        adjustments=adjustments,
+        candidate_periods=candidate_periods,
+        slots=slots,
+        coverage=coverage,
+        shortlists=shortlists,
+        open_now=open_now,
+        # Empty for a draft, which has nothing to amend: there is nothing before
+        # it to differ from.
+        amendments=LeaveModel.amendments(leave_id),
+    )
+
+
+@faculty_bp.route('/leave/<int:leave_id>/letter')
+@permission_required('faculty.leave_letter')
+def leave_letter(leave_id: int):
+    """The applicant's own approval letter.
+
+    Available only once the Dean has signed, which is the moment the leave is
+    actually granted and there is something to certify. Before that the detail
+    page shows the application as still in a queue, and this returns to it.
+    """
+    user = current_user()
+    leave = _own_leave(user, leave_id)
+
+    try:
+        context = letter_context(leave)
+    except LeaveError as exc:
+        flash(str(exc), 'warning')
+        return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+    return render_template('faculty/leave_letter.html', user=user, **context)
+
+
+@faculty_bp.route('/leave/<int:leave_id>/periods', methods=['POST'])
+@permission_required('faculty.confirm_periods')
+def confirm_periods(leave_id: int):
+    """Step 2: the applicant confirms which periods they are actually missing."""
+    user = current_user()
+    leave = _own_leave(user, leave_id)
+
+    if leave.status not in (LeaveStatus.DRAFT, LeaveStatus.ADJUSTMENT_PENDING):
+        flash('This application is past the stage where periods can be changed.',
+              'warning')
+        return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+    try:
+        confirm_affected(leave, user, request.form.getlist('period'))
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+    flash('Periods recorded. Arrange a substitute for each one below.', 'success')
+    return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+
+@faculty_bp.route('/leave/periods/<adjustment_id>/request', methods=['POST'])
+@permission_required('faculty.request_substitution')
+def request_substitution(adjustment_id: str):
+    """Offer one period to one colleague."""
+    user = current_user()
+    faculty_id = request.form.get('faculty_id', type=int)
+    if not faculty_id:
+        flash('Choose a lecturer first.', 'danger')
+        return redirect(url_for('faculty.my_adjustments'))
+
+    try:
+        request_substitution_service(adjustment_id, user, faculty_id)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+    else:
+        flash('Request sent. They will see it in their adjustment inbox.', 'success')
+    return redirect(url_for('faculty.my_adjustments'))
+
+
+@faculty_bp.route('/leave/periods/<adjustment_id>/withdraw', methods=['POST'])
+@permission_required('faculty.withdraw_substitution')
+def withdraw_substitution(adjustment_id: str):
+    user = current_user()
+    try:
+        withdraw_substitution_service(adjustment_id, user)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+    else:
+        flash('Request withdrawn.', 'success')
+    return redirect(url_for('faculty.my_leave'))
+
+
+@faculty_bp.route('/leave/periods/<adjustment_id>/uncovered', methods=['POST'])
+@permission_required('faculty.mark_uncovered')
+def mark_uncovered(adjustment_id: str):
+    """Flag a period the applicant cannot staff, for the HOD to decide on."""
+    user = current_user()
+    try:
+        mark_uncovered_service(adjustment_id, applicant=user)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.my_leave'))
+
+    flash('Marked as uncovered. Your HOD will see it and can approve over it.',
+          'warning')
+    return redirect(url_for('faculty.my_leave'))
+
+
+@faculty_bp.route('/leave/<int:leave_id>/submit', methods=['POST'])
+@permission_required('faculty.submit_leave')
+def submit_leave(leave_id: int):
+    user = current_user()
+    try:
+        submit_to_hod(leave_id, user)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+    else:
+        flash('Sent to the HOD for approval.', 'success')
+    return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+
+@faculty_bp.route('/leave/<int:leave_id>/edit', methods=['GET', 'POST'])
+@permission_required('faculty.edit_leave')
+def edit_leave(leave_id: int):
+    """Amend the four fields the applicant owns.
+
+    Two steps on purpose. The form shows what each field holds right now beside
+    the input, so you can see what you are about to replace; the POST does not
+    write, it renders a confirmation listing every field that differs. Only the
+    confirmation writes.
+
+    Editing is allowed once the application is with the HOD. It stays with the
+    HOD, and the amendment is written to the record's history so the decision is
+    taken on something the HOD can see the change to.
+    """
+    user = current_user()
+    leave = _own_leave(user, leave_id)
+
+    if request.method == 'GET':
+        return render_template(
+            'faculty/leave_edit.html',
+            user=user,
+            leave=leave,
+            leave_types=list(LeaveType),
+            today=date.today(),
+        )
+
+    try:
+        proposed = preview_leave_edit(
+            leave_id, user,
+            request.form.get('leave_type', ''),
+            request.form.get('from_date', ''),
+            request.form.get('to_date', ''),
+            request.form.get('reason', ''),
+        )
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return render_template(
+            'faculty/leave_edit.html',
+            user=user,
+            leave=leave,
+            leave_types=list(LeaveType),
+            today=date.today(),
+            form=request.form,
+        )
+
+    if not proposed['changes']:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+    return render_template(
+        'faculty/leave_edit_confirm.html',
+        user=user,
+        leave=leave,
+        changes=proposed['changes'],
+        form=request.form,
+    )
+
+
+@faculty_bp.route('/leave/<int:leave_id>/edit/apply', methods=['POST'])
+@permission_required('faculty.edit_leave')
+def apply_leave_edit(leave_id: int):
+    """Write a confirmed amendment and record what it changed."""
+    user = current_user()
+    _own_leave(user, leave_id)
+
+    try:
+        result = apply_leave_edit_service(
+            leave_id, user,
+            request.form.get('leave_type', ''),
+            request.form.get('from_date', ''),
+            request.form.get('to_date', ''),
+            request.form.get('reason', ''),
+        )
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.edit_leave', leave_id=leave_id))
+
+    changes = result['changes']
+    if not changes:
+        flash('Nothing was changed.', 'info')
+    elif result.get('recorded'):
+        flash(
+            f'Changes saved. {len(changes)} field'
+            f'{"s" if len(changes) != 1 else ""} amended and recorded; your HOD '
+            f'can see what changed.', 'success')
+    else:
+        flash(f'{summarise(changes)} Saved.', 'success')
+
+    return redirect(url_for('faculty.my_leave_detail', leave_id=leave_id))
+
+
+@faculty_bp.route('/leave/<int:leave_id>/cancel', methods=['POST'])
+@permission_required('faculty.cancel_leave')
+def cancel_leave(leave_id: int):
+    user = current_user()
+    try:
+        cancel_leave_service(leave_id, user)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+    else:
+        flash('Application withdrawn.', 'success')
+    return redirect(url_for('faculty.my_leave'))
+
+
+@faculty_bp.route('/adjustments')
+@permission_required('faculty.my_adjustments')
+def my_adjustments():
+    """Substitution requests sent to the signed-in lecturer.
+
+    The mirror of the applicant's page: they chase, this answers. One list, one
+    accept or decline each, and the reason has to be given when declining so the
+    applicant can pick somebody else instead of waiting.
+    """
+    user = current_user()
+
+    pending = AdjustmentModel.find_pending_for(user.id)
+    attach_requester_names(pending)
+    accepted = AdjustmentModel.find_accepted_for(user.id)
+    attach_requester_names(accepted)
+
+    return render_template(
+        'faculty/adjustments.html',
+        user=user,
+        pending=pending,
+        accepted=accepted,
+    )
+
+
+@faculty_bp.route('/adjustments/<adjustment_id>/respond', methods=['POST'])
+@permission_required('faculty.respond_adjustment')
+def respond_adjustment(adjustment_id: str):
+    user = current_user()
+    accept = request.form.get('decision') == 'accept'
+    remarks = request.form.get('remarks') or ''
+
+    try:
+        respond_to_substitution(adjustment_id, user, accept, remarks)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+    else:
+        flash('Thank you -- the period is yours.' if accept
+              else 'Declined. They have been told.', 'success')
+    return redirect(url_for('faculty.my_adjustments'))
+
+
+# ---------- leave helpers ----------
+
+def _own_leave(user, leave_id: int):
+    """A leave the viewer may act on: their own, or any for the HOD.
+
+    A lecturer is refused somebody else's application rather than shown a
+    read-only version, because there is nothing on such a page they could do with
+    it, and a 403 is clearer than an empty screen.
+    """
+    leave = LeaveModel.find_by_id(leave_id)
+    if leave is None:
+        abort(404)
+    if leave.faculty_id != user.id and not user.is_hod:
+        abort(403)
+    return leave
+
+
+def leave_section(adjustments) -> str:
+    """The section these adjustments belong to, for the clock-time lookup."""
+    for adjustment in adjustments:
+        if adjustment.section:
+            return adjustment.section
+    return ''
+
+
+def attach_faculty_names(adjustments) -> None:
+    """Name the substitutes, with one read for the whole page."""
+    ids = {a.assigned_faculty_id for a in adjustments if a.assigned_faculty_id}
+    if not ids:
+        return
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for adjustment in adjustments:
+        adjustment.assigned_name = names.get(adjustment.assigned_faculty_id)
+
+
+def attach_requester_names(adjustments) -> None:
+    """Name the applicant on each request in the inbox."""
+    ids = {a.original_faculty_id for a in adjustments if a.original_faculty_id}
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for adjustment in adjustments:
+        adjustment.requester_name = names.get(adjustment.original_faculty_id)
 
 
 # ---------- aggregate helpers ----------
@@ -863,8 +1482,16 @@ def _type_filter(value):
 
 
 def _filtered_requests(status_filter, type_filter, date_from, date_to,
-                      search, limit=200, faculty_id=None):
-    """Shared filter query used by the faculty browser and HOD request list."""
+                       search, limit=200, faculty_id=None,
+                       include_decided=False):
+    """Shared filter query used by the faculty browser and HOD request list.
+
+    `faculty_id` narrows to the requests assigned to that lecturer.
+    `include_decided` additionally brings in the ones they have already
+    signed which have since moved on: a lecturer's browser is their own
+    record, not the department's, and an approval they gave last week is
+    still their work even after it left their queue.
+    """
     from app.models.firestore import store
     from app.models.permission import attach_students
 
@@ -877,8 +1504,20 @@ def _filtered_requests(status_filter, type_filter, date_from, date_to,
     if faculty_id:
         filters['assigned_faculty_id'] = faculty_id
 
-    requests = [PermissionModel._to_request(row)
-                for row in store.documents('permission_requests', **filters)]
+    rows = list(store.documents('permission_requests', **filters))
+
+    if faculty_id and include_decided:
+        seen = {row['id'] for row in rows}
+        for entry in store.documents('approval_history', faculty_id=faculty_id):
+            request_id = entry.get('request_id')
+            if not request_id or request_id in seen:
+                continue
+            original = store.get('permission_requests', request_id)
+            if original is not None:
+                seen.add(request_id)
+                rows.append(original)
+
+    requests = [PermissionModel._to_request(row) for row in rows]
 
     if type_filter:
         requests = [r for r in requests if r.permission_type == type_filter]
@@ -1012,3 +1651,150 @@ def download_proof(proof_id: int):
     # after_request hook has already put DENY on this response.
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     return response
+
+
+# --- Classwork -------------------------------------------------------------
+#
+# A lecturer records what their section has scheduled, and the reviewer's queue
+# shows it. Recording work that clashes with a permission that was already
+# granted suspends that permission and raises an objection, which is the part of
+# this that has to be right: the grant is not overwritten, it is withdrawn back
+# into the queue with the reason attached.
+
+
+@faculty_bp.route('/classwork')
+@permission_required('faculty.classwork')
+def classwork():
+    """The lecturer's own classwork, and the form to add one.
+
+    One page rather than a list and a separate form. The lecturer's reason for
+    being here is almost always "I am about to put something on a date", and
+    making that two navigations deep is how the feature goes unused.
+    """
+    user = current_user()
+    classes = ClassModel.find_for_faculty(user.id, kind=KIND_CLASS)
+
+    entries = ClassworkModel.find_for_faculty(user.id)
+    attach_classwork_context(entries)
+
+    # Slot options are per class *and* per date, so they are fetched for the
+    # class and date currently chosen on the form rather than for all of them.
+    # Every combination up front is a full timetable scan per class per day.
+    slots = []
+    chosen_class = request.args.get('class_id', type=int)
+    chosen_date = _parse_date(request.args.get('date'), date.today())
+    if chosen_class:
+        group = next((c for c in classes if c.id == chosen_class), None)
+        if group is not None:
+            slots = timetable_options(group, chosen_date)
+
+    return render_template(
+        'faculty/classwork.html',
+        user=user,
+        classes=classes,
+        entries=entries,
+        slots=slots,
+        importance_choices=importance_choices(),
+        chosen_class=chosen_class,
+        chosen_date=chosen_date,
+    )
+
+
+@faculty_bp.route('/classwork/create', methods=['POST'])
+@permission_required('faculty.create_classwork')
+def create_classwork():
+    """Record the classwork, and suspend whatever it clashes with."""
+    user = current_user()
+    try:
+        entry, objections = create_classwork_service(
+            faculty=user,
+            class_id=request.form.get('class_id', type=int),
+            title=request.form.get('title', ''),
+            date_raw=request.form.get('date', ''),
+            importance_raw=request.form.get('importance', ''),
+            period_raw=request.form.get('period'),
+            session_raw=request.form.get('session'),
+            notes=request.form.get('notes', ''),
+            base_url=APP_ROOT,
+        )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.classwork'))
+
+    # The count is the fact the lecturer needs right now. "Saved" alone would
+    # let them close the tab believing nothing was affected, and only discover
+    # later that three students had lost a permission they were told was granted.
+    if objections:
+        flash(
+            f'Classwork recorded. {len(objections)} granted '
+            f'{"permission was" if len(objections) == 1 else "permissions were"} '
+            f'suspended and sent back to the reviewer.',
+            'warning',
+        )
+    else:
+        flash('Classwork recorded.', 'success')
+
+    return redirect(url_for('faculty.classwork'))
+
+
+@faculty_bp.route('/objections')
+@permission_required('faculty.objections')
+def objections():
+    """Open objections on permissions this person granted."""
+    user = current_user()
+    pending = ObjectionModel.find_pending_for_faculty(user.id)
+    return render_template(
+        'faculty/objections.html',
+        user=user,
+        objections=pending,
+    )
+
+
+@faculty_bp.route('/objections/<int:objection_id>/respond', methods=['POST'])
+@permission_required('faculty.respond_objection')
+def respond_objection(objection_id: int):
+    """Uphold or overrule an objection.
+
+    `uphold` restores the permission: the objection was well-founded, so the
+    original grant stands and the letter the student holds is valid again.
+    `overrule` ends it -- the lecturer who raised it has been overruled by the
+    person who granted the permission in the first place.
+    """
+    user = current_user()
+    objection = ObjectionModel.find_by_id(objection_id)
+    if objection is None:
+        abort(404)
+
+    # Only the reviewer the objection was addressed to may answer it. Checked
+    # here rather than in the service because the service is also reachable from
+    # a handover path that has its own idea of who the reviewer is.
+    if objection.assigned_faculty_id and objection.assigned_faculty_id != user.id:
+        abort(403)
+
+    decision = (request.form.get('decision') or '').strip().lower()
+    if decision not in ('uphold', 'overrule'):
+        flash('Choose whether to uphold or overrule the objection.', 'danger')
+        return redirect(url_for('faculty.request_detail',
+                                request_id=objection.request_id))
+
+    remarks = (request.form.get('remarks') or '').strip()
+
+    try:
+        _, record, final = respond_to_objection_service(
+            objection_id=objection_id,
+            reviewer=user,
+            accept=(decision == 'uphold'),
+            remarks=remarks,
+            base_url=APP_ROOT,
+        )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('faculty.request_detail',
+                                request_id=objection.request_id))
+
+    if final == RequestStatus.APPROVED:
+        flash(f'Objection upheld. Request #{record.id} is approved again.', 'success')
+    else:
+        flash(f'Objection overruled. Request #{record.id} is refused.', 'success')
+
+    return redirect(url_for('faculty.request_detail', request_id=record.id))

@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Class Adjustments &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Class Adjustments</h1>
+    <p class="page-head__sub">
+      Colleagues who need you to take a period while they are on leave.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.my_leave') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-calendar2-check"></i> My Leave
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-inbox"></i> Waiting for your answer</h2>
+    <span class="form-text">{{ pending|length }}</span>
+  </div>
+  {% if pending %}
+    {% for adjustment in pending %}
+    <div class="card-au__body border-bottom">
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <i class="bi bi-calendar-event text-secondary"></i>
+        <strong>{{ adjustment.date.strftime('%d %b %Y') }}</strong>
+        <span class="text-muted">
+          {{ adjustment.day }} &middot;
+          {% if adjustment.period_count > 1 %}
+            Periods {{ adjustment.span_label }}
+          {% else %}
+            Period {{ adjustment.span_label }}
+          {% endif %}
+        </span>
+        <span class="badge-au badge-au--role">{{ adjustment.section }}</span>
+        {% if adjustment.subject_code %}
+          <span class="badge-au badge-au--classroom">{{ adjustment.subject_code }}</span>
+        {% endif %}
+      </div>
+      <p class="mb-3">
+        <strong>{{ adjustment.requester_name }}</strong> has applied for leave on
+        that date and asked you to take this class{% if adjustment.period_count > 1 %},
+        {{ adjustment.period_count }} periods of it{% endif %} &mdash; one
+        request for the whole block.
+      </p>
+
+      <form method="post"
+            action="{{ url_for('faculty.respond_adjustment', adjustment_id=adjustment.id) }}">
+        {{ csrf_field() }}
+        <div class="mb-2">
+          <label class="form-label" for="remarks_{{ adjustment.id }}">
+            Note <span class="text-muted">(required only if you decline)</span>
+          </label>
+          <input class="form-control" type="text" maxlength="200"
+                 id="remarks_{{ adjustment.id }}" name="remarks"
+                 placeholder="Unavailable / clash with my own class / happy to take it">
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-success btn-pill" name="decision" value="accept">
+            <i class="bi bi-check-lg"></i> Accept
+          </button>
+          <button class="btn btn-outline-danger btn-pill" name="decision" value="decline">
+            <i class="bi bi-x-lg"></i> Decline
+          </button>
+        </div>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    {{ empty_state('check2-circle', 'Nothing waiting on you',
+        'When a colleague applies for leave and names you for one of their '
+        'periods, the request appears here.') }}
+  {% endif %}
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Cover you have taken</h2>
+    <span class="form-text">{{ accepted|length }}</span>
+  </div>
+  {% if accepted %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Day</th>
+          <th class="table-au__num">Periods</th>
+          <th>Section</th>
+          <th>Subject</th>
+          <th>For</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for adjustment in accepted %}
+        <tr>
+          <td class="table-au__strong">{{ adjustment.date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ adjustment.day }}</td>
+          <td class="table-au__num">{{ adjustment.span_label }}</td>
+          <td>{{ adjustment.section }}</td>
+          <td>{{ adjustment.subject_code or '—' }}</td>
+          <td>{{ adjustment.requester_name or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {{ empty_state('calendar-check', 'No cover taken yet',
+        'Periods you accept are listed here so you can see your teaching load '
+        'at a glance.') }}
+  {% endif %}
+</div>
+{% endblock %}

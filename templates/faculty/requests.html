@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state with context %}
+{% from '_macros.html' import status_badge, type_badge, date, roll, empty_state, select with context %}
 {% block title %}All Requests &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -15,29 +15,38 @@
   </div>
 </div>
 
-<div class="card-au mb-3">
+<div class="card-au au-searchbar mb-3">
   <form class="toolbar" method="get">
-    <div class="input-group input-group-sm" style="max-width:220px">
-      <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="search" class="form-control" name="q" value="{{ search }}"
-             placeholder="Roll no or name" aria-label="Search by roll number or name">
+    <div class="au-search au-search--bar" role="search">
+      <div class="au-search__box" data-au-search>
+        <i class="bi bi-search au-search__icon" aria-hidden="true"></i>
+        <input type="search" name="q" value="{{ search }}"
+               class="form-control au-search__input"
+               placeholder="Roll no or name" aria-label="Search by roll number or name"
+               autocomplete="off" spellcheck="false">
+        {% if search %}
+        <button type="button" class="au-search__clear"
+                title="Clear the search" aria-label="Clear the search">
+          <i class="bi bi-x-lg" aria-hidden="true"></i>
+        </button>
+        {% endif %}
+        <button type="submit" class="au-search__btn au-search__go">
+          <i class="bi bi-arrow-right" aria-hidden="true"></i><span>Search</span>
+        </button>
+      </div>
     </div>
 
-    <select class="form-select form-select-sm" name="status" style="width:auto"
-            onchange="this.form.submit()" aria-label="Filter by status">
-      <option value="">All statuses</option>
-      {% for status in ['PENDING', 'AWAITING_HOD', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'] %}
-      <option value="{{ status }}" {{ 'selected' if status_filter and status_filter.value == status }}>{{ status|title }}</option>
-      {% endfor %}
-    </select>
+    {{ select('status',
+              [('', 'All statuses'), ('PENDING', 'Pending'),
+               ('AWAITING_HOD', 'Awaiting Hod'), ('APPROVED', 'Approved'),
+               ('REJECTED', 'Rejected'), ('CANCELLED', 'Cancelled'),
+               ('EXPIRED', 'Expired')],
+              selected=status_filter.value if status_filter else '',
+              aria='Filter by status') }}
 
-    <select class="form-select form-select-sm" name="type" style="width:auto"
-            onchange="this.form.submit()" aria-label="Filter by type">
-      <option value="">All types</option>
-      {% for kind in ['CLASSROOM'] %}
-      <option value="{{ kind }}" {{ 'selected' if type_filter and type_filter.value == kind }}>{{ kind|title }}</option>
-      {% endfor %}
-    </select>
+    {{ select('type', [('', 'All types'), ('CLASSROOM', 'Classroom')],
+              selected=type_filter.value if type_filter else '',
+              aria='Filter by type') }}
 
     <input type="date" class="form-control form-control-sm" name="from"
            value="{{ date_from or '' }}" style="width:auto"

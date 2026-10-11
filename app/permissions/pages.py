@@ -32,9 +32,11 @@ from app.utils.security import current_user, login_required
 STUDENT = UserRole.STUDENT
 LECTURER = UserRole.LECTURER
 HOD = UserRole.HOD
+DEPUTY_HOD = UserRole.DEPUTY_HOD
+DEAN = UserRole.DEAN
 
-ALL_ROLES = (STUDENT, LECTURER, HOD)
-STAFF = (LECTURER, HOD)
+ALL_ROLES = (STUDENT, LECTURER, HOD, DEPUTY_HOD, DEAN)
+STAFF = (LECTURER, HOD, DEPUTY_HOD)
 
 # Endpoints reachable without a page grant, by name.
 #
@@ -49,6 +51,7 @@ PUBLIC_ENDPOINTS = frozenset({
     'auth.microsoft_login',
     'auth.callback',
     'auth.dev_login',
+    'auth.demo_logins',
     'auth.logout',
     'auth.logout_all',
     'auth.verify_letter',
@@ -83,11 +86,13 @@ PAGE_PERMISSIONS = {
     'faculty.classes': STAFF,
     'faculty.create_class': STAFF,
     'faculty.class_detail': STAFF,
+    # Renaming a class. The confirmed write is the same page key family; both are
+    # gated on the class being the lecturer's own, which the route enforces.
+    'faculty.edit_class': STAFF,
+    'faculty.apply_class_edit': STAFF,
     'faculty.upload_roster': STAFF,
     'faculty.delete_member': STAFF,
     'faculty.delete_class': STAFF,
-    'faculty.attendance': STAFF,
-    'faculty.attendance_overview': STAFF,
     'faculty.reports': STAFF,
 
     # One faculty may only action and letter a request assigned to them, which is
@@ -101,10 +106,66 @@ PAGE_PERMISSIONS = {
     # they teach. Same ownership rule as classes -- the view checks the owner.
     'faculty.proctor_students': STAFF,
     'faculty.create_proctor_group': STAFF,
+    # Adding one student to a proctor list by hand, beside the spreadsheet
+    # upload. Split from `upload_proctor_roster` because the two differ in how
+    # much they can change: the upload rewrites the list in bulk, this names one
+    # student, and granting them the same key would widen the bulk write.
+    'faculty.add_proctor_student': STAFF,
+    # The search that box uses. Its own key so a lecturer can be given the
+    # lookup without the write.
+    'faculty.proctor_student_search': STAFF,
     'faculty.proctor_group_detail': STAFF,
     'faculty.upload_proctor_roster': STAFF,
     'faculty.delete_proctor_member': STAFF,
     'faculty.delete_proctor_group': STAFF,
+
+    # Faculty leave and class adjustment. Staff only -- a student has no leave to
+    # apply for and no class to adjust.
+    #
+    # The detail page carries the per-record check: a lecturer may only open and
+    # act on their own application, and the view refuses somebody else's with a
+    # 403. These grants are the role gate only, as with the classes above.
+    'faculty.my_leave': STAFF,
+    'faculty.apply_leave': STAFF,
+    'faculty.my_leave_detail': STAFF,
+    # Amending a leave is the applicant's own record, so the same gate as
+    # viewing it. The HOD has their own approval screen and is not given this.
+    # Two endpoints: the form, and the confirmed write.
+    'faculty.edit_leave': STAFF,
+    'faculty.apply_leave_edit': STAFF,
+    'faculty.confirm_periods': STAFF,
+    'faculty.request_substitution': STAFF,
+    'faculty.withdraw_substitution': STAFF,
+    'faculty.mark_uncovered': STAFF,
+    'faculty.submit_leave': STAFF,
+    'faculty.cancel_leave': STAFF,
+    # The applicant's own approval letter. Its own key, separate from the HOD's
+    # and the Dean's copies of the same document: the gate on each is different
+    # (own record vs. any record vs. any record), and sharing one would mean
+    # widening the applicant's grant to reach everybody's letters.
+    'faculty.leave_letter': STAFF,
+    # Answering somebody else's request is the one write here that touches a row
+    # the signed-in person did not create, so it is granted separately and the
+    # service checks the request was actually addressed to them.
+    'faculty.my_adjustments': STAFF,
+    'faculty.respond_adjustment': STAFF,
+
+    # Classwork, and the objections it raises against permissions this lecturer
+    # granted. STAFF because an HOD teaches as well as administering, and their
+    # sidebar carries the teaching panel too.
+    #
+    # `faculty.objections` is a queue of other people's disputes about decisions
+    # the signed-in person made, so it is granted to teaching staff but the view
+    # only ever returns the entries addressed to them -- being able to open the
+    # page does not mean being able to read someone else's, and the grant is the
+    # role gate only.
+    'faculty.classwork': STAFF,
+    'faculty.create_classwork': STAFF,
+    'faculty.objections': STAFF,
+    # The write that decides a disputed permission, granted separately for the
+    # same reason as `faculty.action` above: it changes the status of a request
+    # the signed-in person did not create.
+    'faculty.respond_objection': STAFF,
 
     # ---- HOD ----
     'hod.dashboard': (HOD,),
@@ -114,22 +175,87 @@ PAGE_PERMISSIONS = {
     'hod.request_action': (HOD,),
     'hod.students': (HOD,),
     'hod.search': (HOD,),
-    'hod.import_students': (HOD,),
     # Where the per-member decision is actually made.
     'hod.request_detail': (HOD,),
     'hod.faculty_workload': (HOD,),
     'hod.import_faculty': (HOD,),
     'hod.add_faculty': (HOD,),
+    # Making a lecturer a Deputy HOD, and taking it back. HOD only, and not
+    # shared with anything else: this is the one write that changes what another
+    # person is allowed to do, so it gets its own key rather than riding on a
+    # general faculty-administration grant.
+    'hod.set_deputy': (HOD,),
     'hod.routing': (HOD,),
+    # The confirmed write for the routing settings, same gate as the form.
+    'hod.apply_routing': (HOD,),
+    # Review desks: adding, editing and removing a named route. Three separate
+    # keys rather than one, so a future grant that can create a desk does not
+    # silently also carry the ability to delete one.
+    'hod.route_create': (HOD,),
+    'hod.route_save': (HOD,),
+    'hod.route_delete': (HOD,),
+    # The HOD deciding a request that is still in somebody else's queue, because
+    # the assigned reviewer is unavailable. Same grant as `hod.request_action`
+    # deliberately: both write the status of a request, and splitting them would
+    # only create a distinction nobody can act on.
+    'hod.decide_request_directly': (HOD,),
     'hod.classes': (HOD,),
     'hod.class_detail': (HOD,),
     # Department events and their coordinators, managed by the HOD.
     'hod.events': (HOD,),
+    'hod.event_detail': (HOD,),
+    'hod.edit_event': (HOD,),
+    'hod.apply_event_edit': (HOD,),
     'hod.save_event': (HOD,),
     'hod.delete_event': (HOD,),
+    # Faculty leave approvals. Separate from `faculty.leave`, which is a
+    # lecturer's own applications: this is the queue of other people's, and the
+    # two must not share a grant or a lecturer would see their own list through
+    # the approver's key.
+    'hod.leave_queue': (HOD,),
+    'hod.leave_detail': (HOD,),
+    # The decision that approves a faculty leave.
+    'hod.leave_action': (HOD,),
+    # The HOD's copy of the approval letter. Same document as the applicant's and
+    # the Dean's, but reachable under the HOD's own key.
+    'hod.leave_letter': (HOD,),
     'hod.print_report': (HOD,),
     'hod.reports': (HOD,),
     'faculty.reassign': (HOD,),
+
+    # ---- Deputy HOD ----
+    #
+    # Two powers and no more: decide a request without waiting for its reviewer,
+    # and read who currently holds a permission.
+    #
+    # Deliberately NOT in STAFF for the administrative panels. A deputy who could
+    # open the faculty register, reconfigure routing or create events would be a
+    # second HOD, and two people who both think they own the process is how a
+    # department ends up with nobody accountable for it. What a deputy cannot
+    # reach is the point as much as what they can.
+    'deputy.dashboard': (DEPUTY_HOD,),
+    'deputy.permitted': (DEPUTY_HOD,),
+    'deputy.request_detail': (DEPUTY_HOD,),
+    # The grant itself. Shares its service with `hod.request_action`, and the
+    # self-approval refusal in that service applies here unchanged. Named after
+    # the endpoint rather than after a description: the page table is keyed by
+    # endpoint name, and the boot-time check is what catches a mismatch here
+    # rather than leaving the route quietly open.
+    'deputy.decide': (DEPUTY_HOD,),
+
+    # ---- Dean ----
+    #
+    # The last signature on a faculty leave. Deliberately not in STAFF: a Dean
+    # decides leave and does not administer a department here, so the queue is the
+    # whole panel.
+    'dean.dashboard': (DEAN,),
+    'dean.leave_queue': (DEAN,),
+    'dean.leave_detail': (DEAN,),
+    # The grant itself. FINAL_APPROVED is the only state that makes a leave take
+    # the applicant out of teaching and the only one a letter may be printed from,
+    # so this is the endpoint the whole workflow exists to reach.
+    'dean.leave_action': (DEAN,),
+    'dean.leave_letter': (DEAN,),
 
     # ---- Shared by student, lecturer and HOD ----
     #

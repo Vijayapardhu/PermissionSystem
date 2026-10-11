@@ -91,7 +91,129 @@
       </div>
     </div>
 
-    {% if request.status.value == 'PENDING' and user.is_lecturer %}
+    {# An open objection outranks the normal decision form. The permission was
+       granted, then disputed, and the reviewer has to answer the dispute before
+       the ordinary approve/reject buttons make sense again -- both would apply
+       to a request that is already decided. #}
+    {% set live_objections = objections | selectattr('is_pending') | list %}
+    {% if live_objections %}
+    <div class="card-au mb-3" style="border-left:3px solid var(--au-danger, #dc3545)">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-exclamation-diamond"></i> Classwork Objection</h2>
+        <span class="badge text-bg-danger">Awaiting decision</span>
+      </div>
+      <div class="card-au__body">
+        <p class="small mb-3">
+          <i class="bi bi-info-circle"></i>
+          This permission was granted and has since been
+          <strong>suspended</strong>. It is <em>not</em> valid while this is open.
+        </p>
+
+        {% for objection in live_objections %}
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div>
+              <div class="fw-semibold">
+                {{ objection.classwork.title if objection.classwork else 'Classwork removed' }}
+              </div>
+              <div class="form-text">
+                {% if objection.classwork %}
+                  {{ objection.classwork.class_name or '' }}
+                  {% if objection.classwork.date %} &middot; {{ objection.classwork.date }}{% endif %}
+                  &middot; {{ objection.classwork.session_label }}
+                {% endif %}
+              </div>
+            </div>
+            {% if objection.classwork %}
+            <span class="badge {{ objection.classwork.severity_class }}">
+              {{ objection.classwork.importance_label }}
+            </span>
+            {% endif %}
+          </div>
+
+          {% if objection.affected_member_ids %}
+          <div class="small mb-2">
+            <span class="fw-semibold">Affects:</span>
+            {% for member in request.member_details or [] %}
+              {% if member.id in objection.affected_member_ids %}
+                <span class="badge text-bg-light">{{ member.roll_number or member.name }}</span>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if objection.reason %}
+            <div class="small mb-2"><span class="fw-semibold">Reason:</span> {{ objection.reason }}</div>
+          {% endif %}
+          <div class="form-text">Raised by {{ objection.raised_by_name or 'a lecturer' }}</div>
+        </div>
+        {% endfor %}
+
+        <form method="post" action="{{ url_for('faculty.respond_objection', objection_id=live_objections[0].id) }}">
+          {{ csrf_field() }}
+          <label for="obj-remarks" class="form-label">Remarks</label>
+          <textarea class="form-control mb-3" id="obj-remarks" name="remarks" rows="2"
+                    placeholder="Optional — recorded against the permission."></textarea>
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" name="decision" value="uphold"
+                    class="btn btn-success btn-pill px-4"
+                    onclick="return confirm('Uphold the objection? The permission REQ-{{ '%04d' % request.id }} will be approved again and the student may act on it.');">
+              <i class="bi bi-arrow-counterclockwise"></i> Uphold — restore permission
+            </button>
+            <button type="submit" name="decision" value="overrule"
+                    class="btn btn-danger btn-pill px-4"
+                    onclick="return confirm('Overrule the objection? REQ-{{ '%04d' % request.id }} will be refused and the student cannot use it.');">
+              <i class="bi bi-x-circle"></i> Overrule — refuse request
+            </button>
+          </div>
+          <div class="form-text mt-2">
+            Upholding accepts that the classwork genuinely clashed and puts the
+            original grant back. Overruling ends the request.
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if classwork %}
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-journal-check"></i> Classwork Scheduled</h2>
+        <span class="form-text">most serious first</span>
+      </div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for entry in classwork %}
+          <li class="border-bottom pb-2 mb-2">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <span class="fw-semibold">{{ entry.title }}</span>
+                <div class="form-text">
+                  {% if entry.class_name %}{{ entry.class_name }}{% endif %}
+                  &middot; {{ entry.date }} &middot; {{ entry.session_label }}
+                </div>
+              </div>
+              <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+            </div>
+            {% if entry.caught_member_ids %}
+            <div class="small mt-1">
+              <span class="fw-semibold">Affects:</span>
+              {% for member in request.member_details or [] %}
+                {% if member.id in entry.caught_member_ids %}
+                  <span class="badge text-bg-light">{{ member.roll_number or member.name }}</span>
+                {% endif %}
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% if entry.notes %}<div class="small mt-1 text-muted">{{ entry.notes }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if request.status.value == 'PENDING' and user.is_lecturer and not live_objections %}
     <div class="card-au" style="border-left:3px solid var(--au-primary)">
       <div class="card-au__head">
         <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your Decision</h2>
@@ -117,6 +239,29 @@
           </label>
           <textarea class="form-control mb-3" id="remarks" name="remarks" rows="3"
                     placeholder="Add a note for the student and the HOD."></textarea>
+
+          {# Presets fill the box; they never decide. A one-click rejection
+               would put a student on record as refused for a sentence they never
+               got to read, so the status is still changed by an explicit button
+               below. `fast_replies` is a list of (text, title) pairs -- the text
+               goes in, the title is the tooltip. #}
+          {% if fast_replies %}
+          <div class="mb-3">
+            <div class="form-label mb-1">
+              Quick replies
+              <span class="text-muted fw-normal">(click to fill the box)</span>
+            </div>
+            <div class="d-flex flex-wrap gap-1">
+              {% for text, title in fast_replies %}
+              <button type="button" class="btn btn-sm btn-outline-secondary btn-pill"
+                      title="{{ title }}" data-preset="{{ text }}"
+                      onclick="document.getElementById('remarks').value = this.dataset.preset;">
+                {{ text.split('—')[0].strip() }}
+              </button>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
 
           <div class="d-flex gap-2 flex-wrap">
             <button type="submit" name="decision" value="approve"

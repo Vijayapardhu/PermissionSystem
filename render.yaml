@@ -3,7 +3,7 @@
 #
 # Neither the data nor the proof storage is defined here. Both live outside
 # Render:
-#   data    -> Cloud Firestore
+#   data    -> Cloud Firestore, or Render's own Postgres (see DATABASE_BACKEND)
 #   storage -> Cloudflare R2, a private bucket
 # Because the credentials are a prompt rather than a generated value, they are
 # never written into this file.
@@ -30,8 +30,26 @@ services:
         value: "1"
       - key: SECRET_KEY
         generateValue: true
-      # Cloud Firestore holds every record: users, requests, classes, rosters
-      # and attendance.
+      # Which store to read and write through. Unset means Firestore, which is
+      # what the current deployment runs on and the default below.
+      #
+      # Set it to `sql` together with DATABASE_URL to move to Render's managed
+      # Postgres -- the SQL store (app/models/sqlstore.py) implements the same
+      # interface, so no model, route or service changes with it. Do not point it
+      # at Supabase: that host is IPv6-only and Render has no IPv6 route to it,
+      # which is why this service ran on Firestore in the first place.
+      #
+      # Local development should use `sql` with an empty DATABASE_URL, which
+      # selects SQLite: no server to install and no read quota to exhaust.
+      - key: DATABASE_BACKEND
+        value: firestore
+      # Render -> Postgres -> Internal Database URL. Only read when
+      # DATABASE_BACKEND=sql. It contains the password, so it is a prompt rather
+      # than a value here.
+      - key: DATABASE_URL
+        sync: false
+      # Cloud Firestore holds every record when DATABASE_BACKEND is firestore:
+      # users, requests, classes, rosters and attendance.
       #
       # The service account's private key bypasses Firestore security rules, so
       # it is a server-side secret and is never rendered into a template. Missing

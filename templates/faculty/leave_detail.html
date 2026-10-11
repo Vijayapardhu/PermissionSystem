@@ -1,0 +1,532 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state, amendment_history with context %}
+{% block title %}Leave Application &middot; {{ APP_NAME }}{% endblock %}
+
+{# The result of sending an application matters enough to be looked for -- it is
+   the answer to "did it go?" -- so on this page it arrives as a toast rather
+   than a banner at the top of a long document you have to scroll back up to
+   read. The messages are still drained here exactly as the base template drains
+   them, so they cannot resurface on the next page. #}
+{% block flashes %}
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  <div class="toast-container position-fixed bottom-0 end-0 p-3 au-toast-stack">
+    {% for category, message in messages %}
+    {% set kind = 'danger' if category == 'error' else category %}
+    <div class="toast au-toast au-toast--{{ kind }}" role="alert"
+         aria-live="{{ 'assertive' if kind == 'danger' else 'polite' }}"
+         aria-atomic="true">
+      <div class="au-toast__icon">
+        <i class="bi bi-{% if kind == 'success' %}check-circle-fill{% elif kind == 'danger' %}exclamation-octagon-fill{% elif kind == 'warning' %}exclamation-triangle-fill{% else %}info-circle-fill{% endif %}"></i>
+      </div>
+      <div class="au-toast__body">{{ message }}</div>
+      <button type="button" class="au-toast__close" data-bs-dismiss="toast"
+              aria-label="Dismiss">&times;</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endwith %}
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">
+      {{ leave.leave_type.value|replace('_', ' ') }}
+    </h1>
+    <p class="page-head__sub">
+      {{ leave.from_date.strftime('%d %b %Y') }} &rarr; {{ leave.to_date.strftime('%d %b %Y') }}
+      &middot; {{ leave.days }} day{{ '' if leave.days == 1 else 's' }}
+      &middot; {{ leave.status.value|replace('_', ' ') }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {# The letter only exists once the Dean has signed, because before that
+       nothing has been granted. It is the applicant's own copy. #}
+    {% if leave.is_final %}
+      <a href="{{ url_for('faculty.leave_letter', leave_id=leave.id) }}"
+         class="btn btn-primary btn-pill">
+        <i class="bi bi-file-earmark-text"></i> Approval letter
+      </a>
+    {% endif %}
+    {# This page is the record's view; the edit page shows the stored value of
+       every field beside its input and then previews what will change. #}
+    <a href="{{ url_for('faculty.edit_leave', leave_id=leave.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil-square"></i> Edit
+    </a>
+    <a href="{{ url_for('faculty.my_leave') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All applications
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__body">
+    <p class="mb-1"><strong>Reason:</strong> {{ leave.reason }}</p>
+    {% if leave.hod_remarks %}
+      <p class="mb-0"><strong>HOD:</strong> {{ leave.hod_remarks }}</p>
+    {% endif %}
+    {% if leave.dean_remarks %}
+      <p class="mb-0"><strong>Dean:</strong> {{ leave.dean_remarks }}</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if coverage.missing %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle"></i>
+  <strong>{{ coverage.missing }} of {{ coverage.total }} periods have no lecturer
+  recorded against them.</strong>
+  Availability below is a shortlist to try, not a list of who is definitely free
+  &mdash; a colleague may already be teaching that slot without it being recorded
+  yet. Confirm with them before relying on it.
+</div>
+{% endif %}
+
+{# ---------- step 2: confirm which periods are affected ---------- #}
+{% if open_now or leave.status == 'DRAFT' %}
+<form method="post" action="{{ url_for('faculty.confirm_periods', leave_id=leave.id) }}">
+  {{ csrf_field() }}
+  <div class="card-au mb-3">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-calendar2-week"></i> Periods you will miss</h2>
+      <div class="period-picker">
+        <span class="form-text period-picker__count" id="period-count"
+              aria-live="polite">0 selected</span>
+        {# type=button, so pressing it can never submit the form behind it. #}
+        <button type="button" class="btn btn-sm btn-outline-secondary btn-pill"
+                id="toggle-all" aria-pressed="false">
+          <i class="bi bi-check2-square" id="toggle-all-icon"></i>
+          <span id="toggle-all-label">Select all</span>
+        </button>
+      </div>
+    </div>
+
+    {% set offered = candidate_periods %}
+    {% if offered %}
+    <div class="card-au__body">
+      <p class="text-muted small mb-3">
+        These are the periods in the courses you are listed to teach, across the
+        dates of this leave. Untick anything you are covering yourself or that is
+        already free.
+      </p>
+      <div class="au-table-wrap">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th style="width:3rem"></th>
+              <th>Date</th>
+              <th>Day</th>
+              <th class="table-au__num">Period</th>
+              <th>Time</th>
+              <th>Section</th>
+              <th>Subject</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in offered %}
+            <tr>
+              <td>
+                <input class="form-check-input" type="checkbox" name="period"
+                       value="{{ entry.date.isoformat() }}|{{ entry.period }}"
+                       data-section="{{ entry.section }}"
+                       {% if entry.checked %}checked{% endif %}>
+              </td>
+              <td class="table-au__strong">{{ entry.date.strftime('%d-%m-%Y') }}</td>
+              <td>{{ entry.day }}</td>
+              <td class="table-au__num">{{ entry.period }}</td>
+              <td>{{ entry.slot_label or '—' }}</td>
+              <td>{{ entry.section }}</td>
+              <td>{{ entry.subject_code or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-au__foot">
+      <button class="btn btn-primary btn-pill">
+        <i class="bi bi-check2"></i> Confirm these periods
+      </button>
+      <span class="form-text ms-2">Saving replaces your earlier selection.</span>
+    </div>
+    {% else %}
+      {{ empty_state('calendar-x', 'No periods found for these dates',
+          'You are not listed to teach any course that meets inside this leave '
+          'window, so there is nothing to arrange. Continue to send it for approval.') }}
+      <div class="card-au__foot">
+        <button class="btn btn-outline-secondary btn-pill" disabled>No periods to confirm</button>
+      </div>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+
+{# ---------- step 3: arrange cover ---------- #}
+{% if adjustments %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-arrow-left-right"></i> Class adjustments</h2>
+    <span class="form-text">
+      {{ leave.accepted_count }} of {{ leave.affected_count }} covered
+    </span>
+  </div>
+
+  {% for adjustment in adjustments %}
+  <div class="card-au__body border-bottom">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+      <i class="bi bi-calendar-event text-secondary"></i>
+      <strong>{{ adjustment.date.strftime('%d %b %Y') }}</strong>
+      <span class="text-muted">
+        {{ adjustment.day }} &middot;
+        {% if adjustment.period_count > 1 %}
+          Periods {{ adjustment.span_label }}
+        {% else %}
+          Period {{ adjustment.span_label }}
+        {% endif %}
+      </span>
+      {% set first_slot = slots.get(adjustment.period) %}
+      {% set last_slot = slots.get(adjustment.period_list[-1]) %}
+      {% if first_slot %}
+        <span class="form-text">
+          {{ first_slot.start }}
+          {%- if last_slot and last_slot is not sameas first_slot %} &ndash; {{ last_slot.end }}
+          {%- else %} &ndash; {{ first_slot.end }}{% endif %}
+        </span>
+      {% endif %}
+      <span class="badge-au badge-au--role">{{ adjustment.section }}</span>
+      {% if adjustment.subject_code %}
+        <span class="badge-au badge-au--classroom">{{ adjustment.subject_code }}</span>
+      {% endif %}
+      <span class="badge-au badge-au--{{ 'approved' if adjustment.status.value == 'ACCEPTED'
+                                          else 'rejected' if adjustment.status.value in ('REJECTED','UNCOVERED')
+                                          else 'pending' }}">
+        {{ adjustment.status.value|replace('_', ' ') }}
+      </span>
+      {% if adjustment.assigned_name %}
+        <span class="text-muted">Covered by <strong>{{ adjustment.assigned_name }}</strong></span>
+      {% endif %}
+    </div>
+
+    {% if adjustment.remarks %}
+      <p class="form-text mb-2"><em>{{ adjustment.remarks }}</em></p>
+    {% endif %}
+
+    {% set list = shortlists.get(adjustment.id) %}
+    {% if list and adjustment.needs_action and not adjustment.assigned_faculty_id and open_now %}
+      {% if list.candidates %}
+      <p class="form-text mb-2">
+        Suggested cover, best fit first &mdash; ranked on availability, whether
+        they teach this course, department and how much cover they are already
+        carrying.
+      </p>
+      <div class="d-flex flex-column gap-2">
+        {% for person in list.candidates %}
+        <div class="d-flex flex-wrap align-items-center gap-2 border rounded p-2">
+          <div>
+            <strong>{{ person.name }}</strong>
+            <span class="form-text ms-1">
+              {{ person.employee_code }}{% if person.designation %} &middot; {{ person.designation }}{% endif %}
+            </span>
+            <div class="form-text">
+              {% for reason in person.reasons %}<span class="badge-au badge-au--role me-1">{{ reason }}</span>{% endfor %}
+            </div>
+          </div>
+          <form method="post" class="ms-auto"
+                action="{{ url_for('faculty.request_substitution', adjustment_id=adjustment.id) }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="faculty_id" value="{{ person.faculty_id }}">
+            <button class="btn btn-sm btn-primary btn-pill">
+              <i class="bi bi-send"></i> Request
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% if list.total_candidates > list.candidates|length %}
+        <p class="form-text mt-2 mb-0">
+          {{ list.total_candidates - list.candidates|length }} more
+          lecturer{{ '' if list.total_candidates - list.candidates|length == 1 else 's' }}
+          could also take this period.
+        </p>
+      {% endif %}
+
+      {% if open_now %}
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        {% if adjustment.assigned_faculty_id %}
+          <form method="post"
+                action="{{ url_for('faculty.withdraw_substitution', adjustment_id=adjustment.id) }}">
+            {{ csrf_field() }}
+            <button class="btn btn-sm btn-outline-secondary btn-pill">
+              Withdraw request
+            </button>
+          </form>
+        {% endif %}
+        <form method="post"
+              action="{{ url_for('faculty.mark_uncovered', adjustment_id=adjustment.id) }}">
+          {{ csrf_field() }}
+          <button class="btn btn-sm btn-outline-warning btn-pill">
+            <i class="bi bi-flag"></i> Nobody available
+          </button>
+        </form>
+      </div>
+      {% endif %}
+      {% else %}
+        <div class="alert alert-warning mb-0">
+          <i class="bi bi-exclamation-triangle"></i>
+          Nobody is recorded as free for this period. Mark it uncovered and your
+          HOD can decide whether to approve anyway.
+        </div>
+        {% if open_now %}
+        <form method="post" class="mt-2"
+              action="{{ url_for('faculty.mark_uncovered', adjustment_id=adjustment.id) }}">
+          {{ csrf_field() }}
+          <button class="btn btn-sm btn-outline-warning btn-pill">
+            <i class="bi bi-flag"></i> Mark uncovered
+          </button>
+        </form>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if open_now %}
+  <div class="card-au__foot">
+    <form method="post" action="{{ url_for('faculty.submit_leave', leave_id=leave.id) }}">
+      {{ csrf_field() }}
+      <button class="btn btn-primary btn-pill">
+        <i class="bi bi-send-check"></i> Send to HOD for approval
+      </button>
+      <span class="form-text ms-2">
+        Blocked while a request is unanswered, or until uncovered periods are
+        flagged.
+      </span>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# A leave that touches no class has no adjustments block above, and so no way
+   forward without this. Kept as its own block rather than inside the `if` so
+   the applicant of a faculty member who teaches nothing is not stuck on a DRAFT
+   they cannot submit. #}
+{% if open_now and not adjustments %}
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-send-check"></i> Ready for approval</h2>
+  </div>
+  <div class="card-au__body">
+    <p class="text-muted">
+      There are no classes to arrange for these dates, so this can go straight to
+      the HOD.
+    </p>
+    <form method="post" action="{{ url_for('faculty.submit_leave', leave_id=leave.id) }}">
+      {{ csrf_field() }}
+      <button class="btn btn-primary btn-pill">
+        <i class="bi bi-send"></i> Send to HOD for approval
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if leave.status in ('HOD_PENDING', 'DEAN_PENDING', 'FINAL_APPROVED', 'REJECTED') %}
+<div class="alert alert-secondary">
+  <i class="bi bi-hourglass-split"></i>
+  This application is <strong>{{ leave.status.value|replace('_', ' ') }}</strong>
+  {% if leave.hod_at %} &middot; decided {{ leave.hod_at.strftime('%d %b %Y, %H:%M') }}{% endif %}
+  {% if leave.uncovered_count %}
+    &middot; {{ leave.uncovered_count }} class block{{ '' if leave.uncovered_count == 1 else 's' }}
+    had no cover arranged.
+  {% endif %}
+</div>
+{% endif %}
+
+{# ---------- confirmation before sending ----------
+
+   Sending hands the application to the HOD and closes the applicant's part of
+   the workflow, so it asks first. The dialog restates what is about to be sent
+   rather than just asking "are you sure" -- the number of periods is the thing
+   worth a second look, since "select all" makes it easy to send far more of the
+   week than you meant to.
+
+   Progressive enhancement: with scripting off this markup is still rendered but
+   inert, and the button posts exactly as it always did. #}
+{% if open_now %}
+<div class="modal fade" id="sendConfirm" tabindex="-1"
+     aria-labelledby="sendConfirmTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="sendConfirmTitle">
+          <i class="bi bi-send-check me-1"></i> Send this application?
+        </h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"
+                aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">
+          {{ leave.leave_type.value|replace('_', ' ') }} from
+          <strong>{{ leave.from_date.strftime('%d %b %Y') }}</strong> to
+          <strong>{{ leave.to_date.strftime('%d %b %Y') }}</strong>
+          ({{ leave.days }} day{{ '' if leave.days == 1 else 's' }})
+          will go to your HOD for approval.
+        </p>
+        <ul class="list-unstyled mb-0" id="sendSummary"></ul>
+        <p class="form-text mt-3 mb-0">
+          You can still cancel it while it is waiting.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-pill"
+                data-bs-dismiss="modal">Keep editing</button>
+        <button type="button" class="btn btn-primary btn-pill" id="sendConfirmYes">
+          <i class="bi bi-send"></i> Yes, send it
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# Everything changed after this went to the HOD, so the decision on it can be
+   taken knowing what moved and who moved it. #}
+{{ amendment_history(amendments) }}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Two behaviours on this page, both additive: the form still posts without
+// either of them, so a failed script leaves the workflow working exactly as
+// before rather than silently blocking the applicant.
+(function () {
+  // ---- Status toasts ----------------------------------------------------
+  // The messages are rendered server-side, so they are already in the markup
+  // and already read out by anything scanning the page. They are marked
+  // `aria-live`, and this only has to make them visible and self-dismissing.
+  var toasts = document.querySelectorAll('.au-toast');
+  if (toasts.length && window.bootstrap && bootstrap.Toast) {
+    Array.prototype.forEach.call(toasts, function (el) {
+      // A refusal is the message somebody actually needs to read, so it is
+      // given twice the life of a confirmation and is not dismissed by a
+      // stray click elsewhere on the page.
+      var danger = el.classList.contains('au-toast--danger');
+      new bootstrap.Toast(el, {
+        delay: danger ? 14000 : 7000,
+        autohide: !danger
+      }).show();
+    });
+  }
+
+  // ---- Select all / clear all -------------------------------------------
+  var boxes = Array.prototype.slice.call(
+    document.querySelectorAll('input[type="checkbox"][name="period"]'));
+  var toggle = document.getElementById('toggle-all');
+  var toggleLabel = document.getElementById('toggle-all-label');
+  var toggleIcon = document.getElementById('toggle-all-icon');
+  var count = document.getElementById('period-count');
+
+  function plural(n) { return n + ' selected'; }
+
+  var lastCount = null;
+
+  function refresh() {
+    var checked = boxes.filter(function (b) { return b.checked; }).length;
+    if (count) {
+      count.textContent = plural(checked);
+      // Restart the pulse on every change. Removing and re-adding the class is
+      // what makes it replay; setting it alone would do nothing on the second
+      // click.
+      if (lastCount !== null && lastCount !== checked) {
+        count.classList.remove('is-changing');
+        void count.offsetWidth;
+        count.classList.add('is-changing');
+      }
+    }
+    lastCount = checked;
+    // "Select all" only when something is left to select. Once everything is
+    // ticked the useful action is the opposite one, and offering "select all"
+    // again would just be a button that appears to do nothing.
+    var all = boxes.length > 0 && checked === boxes.length;
+    if (toggleLabel) toggleLabel.textContent = all ? 'Clear all' : 'Select all';
+    if (toggleIcon) {
+      toggleIcon.className = all ? 'bi bi-square' : 'bi bi-check2-square';
+    }
+    if (toggle) toggle.setAttribute('aria-pressed', all ? 'true' : 'false');
+    return checked;
+  }
+
+  if (boxes.length && toggle) {
+    toggle.addEventListener('click', function () {
+      var all = boxes.length > 0
+        && boxes.every(function (b) { return b.checked; });
+      boxes.forEach(function (b) { b.checked = !all; });
+      refresh();
+    });
+    boxes.forEach(function (b) { b.addEventListener('change', refresh); });
+    refresh();
+  }
+
+  // ---- Confirmation before sending -------------------------------------
+  var modalEl = document.getElementById('sendConfirm');
+  var summary = document.getElementById('sendSummary');
+  if (!modalEl || !summary || !window.bootstrap) return;
+
+  var modal = new bootstrap.Modal(modalEl);
+  var pending = null;
+
+  function line(text, strong) {
+    var li = document.createElement('li');
+    li.className = 'd-flex justify-content-between gap-3 py-1 border-bottom';
+    var label = document.createElement('span');
+    label.textContent = text;
+    var value = document.createElement('span');
+    value.textContent = strong;
+    if (!strong) value.className = 'text-muted';
+    li.appendChild(label);
+    li.appendChild(value);
+    return li;
+  }
+
+  // Every form that sends this application to the HOD.
+  var sendForms = Array.prototype.slice.call(
+    document.querySelectorAll('form[action*="/submit"]'));
+
+  sendForms.forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      pending = form;
+      summary.innerHTML = '';
+
+      var selected = document.querySelectorAll(
+        'input[type="checkbox"][name="period"]:checked').length;
+      var uncovered = document.querySelectorAll('.table-danger').length;
+      var outstanding = document.querySelectorAll(
+        'form[action*="/periods/"] select').length;
+
+      summary.appendChild(line(
+        'Periods recorded',
+        selected ? selected + ' of ' + boxes.length : 'none ticked'));
+      if (uncovered) {
+        summary.appendChild(line('With no cover arranged', String(uncovered)));
+      }
+      if (outstanding) {
+        summary.appendChild(line(
+          'Substitution requests not yet answered', String(outstanding)));
+      }
+
+      modal.show();
+    });
+  });
+
+  document.getElementById('sendConfirmYes').addEventListener('click', function () {
+    modal.hide();
+    if (pending) pending.submit();
+  });
+}());
+</script>
+{% endblock %}

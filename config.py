@@ -28,6 +28,31 @@ class Config:
     FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON') or ''
     FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH') or ''
 
+    # Data backend, when the store should be SQL rather than Firestore.
+    #
+    # `sql` reads the same collections from a SQL database through the same store
+    # interface, so no model, route or service changes. It exists because
+    # Firestore's free tier meters reads, and the leave workflow fans out across a
+    # collection by design -- see the note on suggest_faculty in
+    # app/permissions/leave_service.py.
+    #
+    # SQLite for development and Render's managed Postgres for deployment, which
+    # is the pairing the data was chosen for: both are SQL, so the query that runs
+    # locally is the query that runs in production. The managed host matters --
+    # the reason this is not Supabase again is that its IPv6-only hostname is
+    # unroutable from Render.
+    #
+    #   DATABASE_BACKEND=sql   -> SQL store (below)
+    #   DATABASE_BACKEND=      -> Firestore (the default, and production)
+    #
+    # DATABASE_URL decides the dialect: a postgres:// URL selects Postgres, and
+    # its absence selects SQLite at SQLITE_PATH.
+    DATABASE_BACKEND = (os.environ.get('DATABASE_BACKEND') or '').strip().lower()
+    DATABASE_URL = os.environ.get('DATABASE_URL') or ''
+    # Relative paths resolve against the working directory, so a checkout can be
+    # moved without editing anything.
+    SQLITE_PATH = os.environ.get('SQLITE_PATH') or 'local-dev.db'
+
     # Point at the Firestore emulator to develop offline, e.g. 127.0.0.1:8080.
     # The emulator ignores credentials entirely.
     FIRESTORE_EMULATOR_HOST = os.environ.get('FIRESTORE_EMULATOR_HOST') or ''
@@ -58,6 +83,21 @@ class Config:
     TENANT_ID = os.environ.get('TENANT_ID')
     AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}" if TENANT_ID else None
     REDIRECT_URI = os.environ.get('REDIRECT_URI') or 'http://localhost:5000/auth/callback'
+    # The origin printed on letters and encoded in their verification codes.
+    #
+    # Separate from REDIRECT_URI on purpose. That value has to be whatever Entra
+    # has registered -- `http://localhost:5000/auth/callback` locally -- which is
+    # a callback endpoint for this machine and not an address anyone else can open.
+    # Reusing it minted every QR at localhost, so a letter printed on a laptop and
+    # scanned by a phone led nowhere.
+    #
+    # Leave it empty and the origin is taken from the request instead: the host
+    # the page was served on, unless the configured origin is loopback, in which
+    # case the served host wins because the reader is demonstrably not on this
+    # machine. Set it to pin the address explicitly -- worth doing when printing
+    # letters other people will scan, so the code does not depend on which
+    # network happened to be connected at the time.
+    PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL') or ''
     # Identity only. MSAL appends offline_access, openid and profile itself; those
     # are reserved and must not be listed here. User.Read is deliberately absent:
     # it is a Microsoft Graph permission requiring tenant admin consent, and this

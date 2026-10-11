@@ -123,7 +123,11 @@
   /* Text */
   --au-text: #16202f;
   --au-text-muted: #5b6879;
-  --au-text-faint: #8b96a5;
+  /* The lightest text still in use. It is deliberately still below --au-text-muted
+     so the hierarchy survives, but it was #8b96a5, which measured 3.0:1 on the
+     light surface -- under the 4.5:1 text needs, and it carries the row numbers,
+     the page footer and the sign-in notes. Raised until it clears the bar. */
+  --au-text-faint: #6b7789;
 
   /* Lines + state */
   --au-border: #e2e8f0;
@@ -161,6 +165,29 @@
   --au-shadow: 0 4px 12px rgba(16, 24, 40, .08);
   --au-shadow-lg: 0 16px 40px rgba(16, 24, 40, .16);
 
+  /* ---------- Frosted filter-bar palette (light theme) ----------
+
+     Kept beside the other tokens rather than declared on the bar, so dark mode
+     has one place to restate it. In light mode this is a deep navy glass: over
+     a white page it reads unmistakably as a different plane, and the table
+     scrolling underneath stays legible as blurred context.
+
+     --glass-muted is the small print inside the bar. It is deliberately not a
+     low-alpha white: at .68 it lands near 4:1 against the blended background,
+     below the 4.5:1 small text needs, and the complaint that started all this
+     was that the bar was hard to read. */
+  --glass-bg: rgba(10, 24, 46, .74);
+  --glass-line: rgba(255, 255, 255, .14);
+  --glass-text: #f4f8fe;
+  --glass-muted: rgba(238, 244, 253, .84);
+  --glass-field: rgba(255, 255, 255, .11);
+  --glass-field-line: rgba(255, 255, 255, .26);
+  --glass-field-hover: rgba(255, 255, 255, .18);
+  --glass-focus-ring: rgba(255, 255, 255, .5);
+  --glass-shadow: 0 16px 36px -16px rgba(2, 8, 20, .7);
+  /* The wash that fades the content out below the bar. */
+  --glass-fade: rgba(10, 24, 46, .55);
+
   --au-font: 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
   --au-mono: 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Consolas, monospace;
@@ -181,7 +208,7 @@
   --au-primary-soft: #16283f;
   --au-text: #e8edf5;
   --au-text-muted: #a3b0c2;
-  --au-text-faint: #77869b;
+  --au-text-faint: #8492a6;
   --au-border: #2a3446;
   --au-border-strong: #3a4659;
   --au-success: #34d399;   --au-success-soft: #0d3b2e; --au-success-text: #6ee7b7;
@@ -199,6 +226,26 @@
   --au-shadow-sm: 0 1px 3px rgba(0, 0, 0, .4);
   --au-shadow: 0 4px 12px rgba(0, 0, 0, .45);
   --au-shadow-lg: 0 16px 40px rgba(0, 0, 0, .6);
+
+  /* Frosted bar, dark theme.
+
+     The light-theme navy is nearly the same value as --au-page-bg here, so on a
+     dark page the bar would have flattened into the background with no visible
+     edge and nothing for the blur to read against. This is a lighter, cooler
+     slate instead, and light enough to clear the page by a clear margin --
+     measured at 1.5:1 against --au-page-bg, where a darker glass came out at
+     1.3:1 and read as part of the page rather than as a bar over it. The
+     border and shadow carry the rest. */
+  --glass-bg: rgba(48, 64, 92, .78);
+  --glass-line: rgba(255, 255, 255, .18);
+  --glass-text: #f2f7ff;
+  --glass-muted: rgba(226, 235, 248, .84);
+  --glass-field: rgba(255, 255, 255, .12);
+  --glass-field-line: rgba(255, 255, 255, .26);
+  --glass-field-hover: rgba(255, 255, 255, .18);
+  --glass-focus-ring: rgba(255, 255, 255, .55);
+  --glass-shadow: 0 18px 40px -18px rgba(0, 0, 0, .9);
+  --glass-fade: rgba(12, 18, 32, .62);
 }
 
 html { scroll-behavior: smooth; }
@@ -387,13 +434,49 @@ a:hover { text-decoration: underline; }
   filter: brightness(0) invert(1);
 }
 
-.au-sidebar-wrap .offcanvas-body { display: flex; min-height: 100%; }
+.au-sidebar-wrap .offcanvas-body {
+  display: flex;
+  /* `height`, not `min-height`, for the same reason as .au-side below: the
+     column is 100vh with overflow hidden, so a min-height lets the contents
+     grow past the viewport where they are clipped rather than scrolled. */
+  height: 100%;
+  min-height: 0;
+}
+
+/* Bounded to the column so a long navigation scrolls *inside* the sidebar
+   instead of overflowing it. This is not cosmetic: at lg+ the column is
+   `height: 100vh; overflow: hidden`, so a sidebar taller than the window was
+   simply cut off with no way to reach the items below the fold -- and an HOD's
+   sidebar, which now carries the administrative panel and the teaching panel,
+   is exactly the height where that happens. */
+.au-app--sidebar .au-side { height: 100%; }
 
 .au-side__nav {
   flex: 1;
+  /* A flex item defaults to min-height:auto, which refuses to shrink below its
+     content and so silently disables overflow-y. Without this the scrolling
+     below never engages however tall the viewport is. */
+  min-height: 0;
   padding: 1rem .7rem .6rem;
   overflow-y: auto;
-  scrollbar-width: thin;
+  /* Keeps a scroll gesture inside the sidebar: without it, reaching the end of
+     the list hands the page over and the whole document jumps. */
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  /* The scrollbar is hidden but the scrolling is not. It is a permanent strip
+     down the edge of a fixed column, and a permanently visible track there reads
+     as a second scrollbar for the page rather than for the navigation. Anyone
+     using a pointer rather than a wheel still scrolls; keyboard and screen
+     reader scrolling is unaffected. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.au-side__nav::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .au-side__grouphead {
@@ -801,6 +884,187 @@ a:hover { text-decoration: underline; }
   z-index: 5;
 }
 
+/* ---------- Frosted filter bar ---------------------------------------------
+
+   The bar is dark, translucent and blurred rather than an opaque panel. Rows
+   scrolling underneath stay visible through it -- dimmed and out of focus --
+   so the list still reads as a continuing context behind the controls, which is
+   what makes the bar feel like it is floating over the table instead of
+   cutting the page in half.
+
+   Colours come from the --glass-* tokens in :root and the dark-theme block, so
+   both themes are one declaration each rather than a pile of overrides here. */
+.toolbar-sticky {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+}
+
+/* Full-bleed against the content below.
+
+   The bar used to be a rounded card with a margin under it, and that gap was
+   the problem: a strip of unblurred table ran between the bar and the first
+   row, so the effect broke exactly where it was supposed to read. Sunk to the
+   content, with the wash fading out beneath it, there is no seam for the eye
+   to catch.
+
+   The fade is a gradient rather than more blur because a backdrop-filter cannot
+   fade -- its edge is a hard cut wherever the element stops. */
+.toolbar-sticky--flush {
+  /* No `position` here. `position: sticky` is set on .toolbar-sticky, and a
+     modifier that restated it as `relative` would win on source order at equal
+     specificity and silently stop the bar sticking -- which is the one thing
+     this bar exists to do. Sticky already establishes a containing block for
+     the absolutely positioned ::after below, so nothing is lost by leaving it
+     alone. */
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: var(--au-radius-lg) var(--au-radius-lg) 0 0;
+}
+
+.toolbar-sticky--flush::after {
+  content: '';
+  position: absolute;
+  inset: 100% 0 auto;
+  height: 1.75rem;
+  background: linear-gradient(to bottom, var(--glass-fade),
+              transparent 85%);
+  pointer-events: none;
+}
+
+/* The content that used to sit in the margin now provides its own breathing
+   room, so removing the bar's margin does not crowd the table against it. */
+.toolbar-sticky--flush + * { margin-top: 1.1rem; }
+
+/* Without backdrop-filter the blur does not happen, and at .74 the bar would
+   sit over the table as a wash of grey with the text fighting whatever showed
+   through. Near-opaque is the honest fallback: it loses the effect, not the
+   legibility. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .toolbar-sticky {
+    --glass-bg: rgba(10, 24, 46, .97);
+    --glass-field: rgba(255, 255, 255, .13);
+    --glass-field-line: rgba(255, 255, 255, .3);
+  }
+
+  [data-bs-theme='dark'] .toolbar-sticky {
+    --glass-bg: rgba(24, 34, 52, .98);
+  }
+}
+
+/* The card's own surface is what the glass replaces; the toolbar inside it must
+   not paint over the blur. */
+.toolbar-sticky .toolbar,
+.toolbar-sticky .toolbar--standalone {
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.toolbar-sticky .toolbar,
+.toolbar-sticky .filterbar__label,
+.toolbar-sticky .toolbar__label,
+.toolbar-sticky .filterchips__label,
+.toolbar-sticky .filterbar__count {
+  color: var(--glass-muted);
+}
+
+.toolbar-sticky .filterbar__count strong { color: var(--glass-text); }
+.toolbar-sticky .filter-divider { background: var(--glass-field-line); }
+.toolbar-sticky .filter-search__icon { color: var(--glass-muted); }
+
+/* Fields inside the bar.
+
+   These have to outrank `.form-control, .form-select` further down this file,
+   which sets `background: var(--au-surface)` -- white in the light theme. That
+   rule was written expecting to win, and it did win here, because it comes
+   later at equal specificity.
+
+   The result was a white field with near-black text sitting on the deep navy
+   bar in light mode: unreadable, and invisible in dark mode only because
+   `--au-surface` happens to be dark there. So the bug looked like a dark-theme
+   accident and was invisible until the light theme was checked properly.
+
+   `:where()` cannot fix this -- it contributes zero specificity, which is the
+   whole reason the rule lost. The inner selectors are written out instead, so
+   `.toolbar-sticky .form-select` is two classes and beats the one-class rule
+   wherever either of them ends up in this file. */
+.toolbar-sticky .form-control,
+.toolbar-sticky .form-select {
+  background: var(--glass-field);
+  border-color: var(--glass-field-line);
+  color: var(--glass-text);
+}
+
+.toolbar-sticky .form-control::placeholder,
+.toolbar-sticky .form-select::placeholder {
+  color: var(--glass-muted);
+  opacity: 1;
+}
+
+.toolbar-sticky .form-control:hover,
+.toolbar-sticky .form-select:hover {
+  background: var(--glass-field-hover);
+}
+
+.toolbar-sticky .form-control:focus,
+.toolbar-sticky .form-select:focus {
+  background: var(--glass-field-hover);
+  border-color: var(--glass-focus-ring);
+  color: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .12);
+}
+
+/* A native select paints its option list with the system widget, not with the
+   control's own background, so the options have to be given the dark fill
+   separately or the menu opens as a white sheet over a dark bar. */
+.toolbar-sticky .form-select option {
+  background: #0b1a33;
+  color: var(--glass-text);
+}
+
+/* The search field carries the composite control's own padding rules, which are
+   more specific and set later in search.css -- so the left inset that keeps the
+   text clear of the magnifier is restated here rather than left to the load
+   order of two files. */
+.toolbar-sticky .au-search__input { padding-left: .35rem; }
+
+.toolbar-sticky .filter-search__clear {
+  background: var(--glass-field-line);
+  color: var(--glass-bg);
+}
+
+.toolbar-sticky .filter-search__clear:hover {
+  background: var(--glass-focus-ring);
+  color: var(--glass-bg);
+}
+
+.toolbar-sticky .filterchip {
+  background: var(--glass-field);
+  border-color: var(--glass-field-line);
+  color: var(--glass-text);
+}
+
+.toolbar-sticky .filterchip__key { color: var(--glass-muted); }
+
+.toolbar-sticky .filterchip:hover {
+  background: var(--glass-field-hover);
+  border-color: var(--glass-focus-ring);
+  color: #fff;
+}
+
+/* The secondary button is the one control whose light-on-light colours the rest
+   of the app gave it are wrong for a dark bar. */
+.toolbar-sticky :where(.btn-outline-secondary) {
+  --bs-btn-color: var(--glass-text);
+  --bs-btn-border-color: var(--glass-field-line);
+  --bs-btn-hover-bg: var(--glass-field-hover);
+  --bs-btn-hover-border-color: var(--glass-focus-ring);
+  --bs-btn-hover-color: #fff;
+}
+
 .table-foot {
   display: flex;
   flex-wrap: wrap;
@@ -837,6 +1101,263 @@ a:hover { text-decoration: underline; }
   color: var(--au-text-faint);
   margin-right: .15rem;
 }
+
+/* A filter bar standing on its own rather than sitting on top of a table.
+   The .toolbar skin is drawn as a table header -- a bottom rule and square
+   bottom corners -- which reads as a cut-off card when the card ends there. */
+.toolbar--standalone {
+  border-bottom: 0;
+  border-radius: var(--au-radius-lg);
+  box-shadow: var(--au-shadow-sm);
+}
+
+/* Filter controls, one fitted row.
+
+   Every control is the same height and sits on one baseline, so the bar reads
+   as a single instrument rather than a row of mismatched boxes.
+
+   Widths are flex shares with min-widths, not fixed widths. Fixed widths were
+   sized to each control's longest value and added up to more than the content
+   column, so the bar broke after the third dropdown and dropped the last one
+   onto a row of its own -- an accident that looked like a mistake. Shares with
+   a floor let the row always fit, widening the controls as space allows and
+   wrapping only when the floors genuinely do not fit. */
+.filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  width: 100%;
+}
+
+/* A plain search box: one control, its own border, an icon and a clear button.
+
+   This is the shape most filter bars want, and it is what the demo-login page
+   still uses. The composite below is a different thing and has its own class
+   rather than redefining this one -- changing the shared class to fit one page
+   is how the other page quietly loses its border. */
+.filter-search {
+  position: relative;
+  flex: 1 1 15rem;
+  min-width: 13rem;
+  max-width: 27rem;
+  display: flex;
+}
+
+.filter-search__icon {
+  position: absolute;
+  left: .6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--au-text-faint);
+  font-size: .85rem;
+  pointer-events: none;
+}
+
+/* Selector is `.filterbar .filter-search .form-control` rather than a single
+   class on purpose. The app's own `.form-control` rule sets `padding` as a
+   shorthand later in this file, and at equal specificity the later rule wins --
+   which quietly reset the left padding to .75rem and put the placeholder text
+   underneath the icon. Three classes cannot be overridden by accident. */
+.filterbar .filter-search .form-control {
+  width: 100%;
+  padding-left: 2rem;
+  /* Room for the clear button, so the text never runs under it either. */
+  padding-right: 2rem;
+}
+
+/* The search box and its scope dropdown, as one control.
+
+   Separated by the bar's .5rem gap, the scope dropdown read as a fifth filter
+   rather than part of the search: you had to already know that it chose what
+   the box matched against. Sharing one border and one set of rounded corners,
+   with a hairline between the halves, says "search, matching Class name"
+   without spending a label row on it. */
+.filter-combo {
+  display: flex;
+  align-items: stretch;
+  flex: 3 1 15rem;
+  min-width: 15rem;
+  max-width: 31rem;
+  border-radius: var(--au-radius-sm, .5rem);
+  /* The halves have to clip to the shared rounding, so the clipping is done
+     here rather than left to each half's own border-radius. */
+  overflow: hidden;
+}
+
+/* Inside the composite, the search box stops being a box of its own. */
+.filter-combo .filter-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.filter-combo__scope {
+  flex: 0 0 auto;
+  width: 10.5rem;
+  border-radius: 0;
+  /* The hairline between the halves, drawn on the scope's own left edge so it
+     cannot drift out of line with the rounded corners above and below it. */
+  border-left: 1px solid var(--au-border-strong);
+}
+
+/* Each half draws no border of its own: the container's single border is the
+   border, and two would show as a doubled line. */
+.filter-combo :where(.form-control, .form-select) {
+  height: 2.3rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.filter-combo :where(.form-control, .form-select):hover,
+.filter-combo :where(.form-control, .form-select):focus {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Focus is drawn on the half that has focus, not as a ring around the whole
+   box -- a ring around both would imply the pair is a single tab stop. */
+.filter-combo :where(.form-control, .form-select):focus-visible {
+  outline: 2px solid var(--au-focus, rgba(0, 78, 146, .35));
+  outline-offset: -2px;
+}
+
+.filter-search__input::-webkit-search-cancel-button { display: none; }
+
+.filter-search__clear {
+  position: absolute;
+  right: .45rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  background: var(--au-border-strong);
+  color: var(--au-surface);
+  font-size: .6rem;
+  text-decoration: none;
+  line-height: 1;
+}
+
+.filter-search__clear:hover {
+  background: var(--au-text-muted);
+  color: var(--au-surface);
+}
+
+.filterbar .form-control,
+.filterbar .form-select { height: 2.3rem; padding-top: .3rem; padding-bottom: .3rem; }
+
+/* A hairline between the search pair and the dropdown filters, so the row
+   reads as two groups rather than five unrelated controls. Collapses away when
+   the bar wraps, where a stray divider would float on its own line. */
+.filter-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: .1rem .35rem;
+  background: var(--au-border-strong);
+}
+
+.filter-select { flex: 1 1 0; min-width: 6.5rem; padding-right: 1.9rem; }
+/* The lecturer list is the one whose longest value (a full name and an employee
+   code) is worth the extra width, so it takes a larger share of the row. */
+.filter-select--lecturer { flex-grow: 1.6; min-width: 9rem; max-width: 17rem; }
+
+/* The three narrowing dropdowns travel as one group, so the bar breaks between
+   "search" and "narrow by" rather than between two of the three. */
+.filterbar__narrow {
+  display: flex;
+  flex: 0 1 auto;
+  gap: .5rem;
+  min-width: 0;
+}
+
+.filterbar__actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-left: auto;
+}
+
+.filterbar__count {
+  font-size: .78rem;
+  color: var(--au-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-right: .25rem;
+}
+
+.filterbar__count strong { color: var(--au-text); font-weight: 700; }
+
+/* Only present before the page script runs, which removes it. See the template
+   comment: without JS it is the only way to apply a filter, with JS it is a
+   dead button at the loudest end of the bar. */
+.filterbar__apply[hidden] { display: none; }
+
+/* Chips naming the filters in force, each removable on its own. */
+.filterchips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem;
+  width: 100%;
+  padding-top: .1rem;
+}
+
+.filterchips__label {
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--au-text-faint);
+}
+
+.filterchip {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .18rem .5rem .18rem .55rem;
+  border: 1px solid var(--au-border-strong);
+  border-radius: 999px;
+  background: var(--au-surface-panel);
+  color: var(--au-text);
+  font-size: .76rem;
+  line-height: 1.35;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.filterchip:hover {
+  border-color: var(--au-primary);
+  background: var(--au-primary-soft);
+  color: var(--au-primary-dark);
+  text-decoration: none;
+}
+
+.filterchip__key {
+  font-weight: 700;
+  color: var(--au-text-muted);
+}
+
+.filterchip__key::after { content: ':'; margin-right: .1rem; }
+
+.filterchip__value {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterchip__drop {
+  font-size: .95rem;
+  line-height: 1;
+  opacity: .6;
+}
+
+.filterchip:hover .filterchip__drop { opacity: 1; }
 
 .chip {
   display: inline-flex;
@@ -990,7 +1511,209 @@ a:hover { text-decoration: underline; }
 
 .form-control.is-invalid, .form-select.is-invalid { border-color: var(--au-danger); }
 
-.form-text { color: var(--au-text-faint); font-size: .78rem; }
+/* A select has to look like a menu.
+
+   Bootstrap paints the arrow with a `background-image`, and the `background`
+   shorthand in the rule above resets background-image to none -- so every
+   <select> in the app has been rendering as a plain rounded box with nothing to
+   say it opens a list.
+
+   The arrow itself is NOT painted here. It used to be a `background-image`, which
+   only worked as long as `background-repeat: no-repeat` won over the `background`
+   shorthand in `.form-control, .form-select` above -- an ordering dependency,
+   and losing it tiles the arrow across the control instead of drawing one.
+   Selects are now wrapped in `.au-select` (static/css/search.css), which draws
+   the arrow as an element. `appearance: none` here is the safety net for any
+   select not yet wrapped: a bare box is far better than a row of chevrons. */
+.form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: none;
+  padding-right: 2rem;
+}
+
+.au-select .form-select { padding-right: 2.1rem; }
+
+/* Secondary text, not decorative text. It was --au-text-faint, which is about
+   3:1 on the light surface -- under the 4.5:1 that small text needs, and it is
+   used for the hints people actually read (an employee number under a lecturer's
+   name, a count beside a heading). --au-text-muted clears 5.9:1 on light and
+   about 8:1 on dark, and still reads as secondary next to --au-text. */
+.form-text { color: var(--au-text-muted); font-size: .78rem; }
+
+/* ---------- Editing: the change preview and the amendment trail ---------- */
+
+/* Old value struck through, new value in the accent colour. Struck-through is
+   doing the work here: a column headed "Now" has to be read deliberately, while
+   a struck value is recognised without reading it at all. */
+.change-table td { vertical-align: top; }
+
+.change-before {
+  color: var(--au-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--au-danger);
+  text-decoration-thickness: 1px;
+}
+
+.change-after {
+  color: var(--au-text);
+  font-weight: 600;
+  background: var(--au-success-soft);
+  padding: .05rem .3rem;
+  border-radius: var(--au-radius-sm);
+}
+
+.change-after--clear {
+  color: var(--au-danger-text);
+  background: var(--au-danger-soft);
+  font-weight: 500;
+}
+
+/* Each saved amendment, newest last. The rule between them is the only thing
+   separating entries, so it is inset to line up with the text rather than
+   running the full width of the card. */
+.amendment {
+  padding: .75rem 0;
+  border-top: 1px solid var(--au-border);
+}
+
+.amendment:first-child { border-top: 0; padding-top: 0; }
+
+.amendment__head {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  flex-wrap: wrap;
+  margin-bottom: .35rem;
+}
+
+.amendment__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: .25rem;
+}
+
+.amendment__list li {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  flex-wrap: wrap;
+  font-size: .85rem;
+}
+
+.amendment__label {
+  min-width: 9rem;
+  color: var(--au-text-muted);
+}
+
+.amendment__arrow { color: var(--au-text-faint); font-size: .8rem; }
+
+/* The value each field holds right now, shown beside the input on an edit
+   form. Not a placeholder -- a placeholder disappears the moment you type,
+   which is exactly when you want to check what you are replacing. */
+.field-current {
+  display: block;
+  margin-top: .3rem;
+  font-size: .76rem;
+  color: var(--au-text-muted);
+}
+
+.field-current__label {
+  color: var(--au-text-faint);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-size: .68rem;
+  font-weight: 700;
+}
+
+/* ---------- Leave application: period picker and status toasts ---------- */
+
+/* The select-all control and the live count sit together on the right of the
+   card head. `margin-left: auto` pushes them past the title regardless of how
+   long the title is. */
+.period-picker {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-left: auto;
+}
+
+.period-picker__count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The count is the only thing that changes as boxes are ticked, so it gets a
+   brief highlight -- otherwise the number changes silently and the button's
+   own label is the only feedback. */
+.period-picker__count.is-changing {
+  animation: au-count-pulse .45s ease;
+}
+
+@keyframes au-count-pulse {
+  from { color: var(--au-primary); }
+  to   { color: var(--au-text-muted); }
+}
+
+/* Status toasts, bottom-right so they sit clear of the sticky filter bars and
+   of the send button that produced them. */
+.au-toast-stack {
+  z-index: 1090;   /* above the sticky bars, below the modals */
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+}
+
+.au-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: .65rem;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: .8rem .9rem;
+  border: 1px solid var(--au-border-strong);
+  border-left: 4px solid var(--au-info);
+  border-radius: var(--au-radius-md);
+  background: var(--au-surface);
+  color: var(--au-text);
+  box-shadow: var(--au-shadow-lg);
+}
+
+.au-toast--success { border-left-color: var(--au-success); }
+.au-toast--danger  { border-left-color: var(--au-danger); }
+.au-toast--warning { border-left-color: var(--au-warning); }
+.au-toast--info    { border-left-color: var(--au-info); }
+
+.au-toast__icon {
+  font-size: 1.05rem;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+
+.au-toast--success .au-toast__icon { color: var(--au-success-text); }
+.au-toast--danger  .au-toast__icon { color: var(--au-danger-text); }
+.au-toast--warning .au-toast__icon { color: var(--au-warning-text); }
+.au-toast--info    .au-toast__icon { color: var(--au-info); }
+
+.au-toast__body {
+  flex: 1;
+  font-size: .88rem;
+  line-height: 1.45;
+}
+
+.au-toast__close {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--au-text-faint);
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0 .15rem;
+  cursor: pointer;
+}
+
+.au-toast__close:hover { color: var(--au-text); }
 
 .form-section { display: grid; gap: .3rem; }
 

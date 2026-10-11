@@ -1,0 +1,260 @@
+/* The attendance panel.
+   Everything is scoped under #au-assistant-panel. Injected into the portal's own
+   pages, so an unscoped rule here could restyle the attendance table it sits
+   above. */
+
+#au-assistant-panel {
+  --au-line: #dbe3ec;
+  --au-ink: #16202f;
+  --au-muted: #5b6879;
+  --au-faint: #78849a;
+  --au-brand: #004e92;
+  --au-brand-dark: #003666;
+  --au-warn: #b45309;
+  --au-warn-soft: #fdf1dc;
+  --au-ok: #0b7a55;
+  --au-panel: #f6f9fc;
+
+  margin: 0 0 1.1rem;
+  border: 1px solid var(--au-line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--au-ink);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05),
+    0 6px 18px -8px rgba(16, 24, 40, .14);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+#au-assistant-panel .au-a__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .35rem 1rem;
+  padding: .6rem .95rem;
+  border-bottom: 1px solid var(--au-line);
+  background: var(--au-panel);
+}
+
+#au-assistant-panel .au-a__title {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-weight: 650;
+  font-size: .92rem;
+  letter-spacing: -.01em;
+}
+
+#au-assistant-panel .au-a__title i {
+  color: var(--au-brand);
+  font-size: .85rem;
+}
+
+#au-assistant-panel .au-a__meta {
+  font-size: .78rem;
+  color: var(--au-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- the two columns --------------------------------------------------- */
+
+/* The facts on the left, the controls on the right. The buttons sat in a
+   corner of a very wide empty box before, which made a three-choice decision
+   look like a footnote. */
+#au-assistant-panel .au-a__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .9rem 1.5rem;
+  align-items: center;
+  padding: .85rem .95rem;
+}
+
+@media (max-width: 700px) {
+  #au-assistant-panel .au-a__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+#au-assistant-panel .au-a__facts { min-width: 0; }
+
+#au-assistant-panel .au-a__lede {
+  margin: 0;
+  font-size: .87rem;
+  color: var(--au-ink);
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  flex-wrap: wrap;
+}
+
+/* The number of permission holders is the one fact worth seeing first, so it is
+   a chip rather than a number buried in a sentence. */
+#au-assistant-panel .au-a__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.65rem;
+  height: 1.65rem;
+  padding: 0 .45rem;
+  border-radius: 999px;
+  font-size: .84rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+#au-assistant-panel .au-a__pill--warn {
+  background: var(--au-warn-soft);
+  color: var(--au-warn);
+  box-shadow: inset 0 0 0 1px rgba(180, 83, 9, .22);
+}
+
+#au-assistant-panel .au-a__pill--quiet {
+  background: #eef2f7;
+  color: var(--au-faint);
+  box-shadow: inset 0 0 0 1px var(--au-line);
+}
+
+/* What Fill is about to do, said before it does it. */
+#au-assistant-panel .au-a__outcome {
+  margin: .35rem 0 0;
+  font-size: .8rem;
+  color: var(--au-muted);
+}
+
+#au-assistant-panel .au-a__outcome strong {
+  color: var(--au-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+#au-assistant-panel .au-a__outcome.is-done { color: var(--au-ok); }
+#au-assistant-panel .au-a__outcome.is-done strong { color: var(--au-ok); }
+
+/* ---- buttons ----------------------------------------------------------- */
+
+#au-assistant-panel .au-a__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  justify-content: flex-end;
+}
+
+@media (max-width: 700px) {
+  #au-assistant-panel .au-a__actions { justify-content: flex-start; }
+}
+
+#au-assistant-panel .au-a__btn {
+  appearance: none;
+  border: 1px solid var(--au-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--au-ink);
+  font: inherit;
+  font-size: .83rem;
+  font-weight: 500;
+  line-height: 1.25;
+  padding: .45rem .8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .12s ease, border-color .12s ease,
+    color .12s ease;
+}
+
+#au-assistant-panel .au-a__btn:hover {
+  background: var(--au-panel);
+  border-color: #c2cede;
+}
+
+#au-assistant-panel .au-a__btn:focus-visible {
+  outline: 3px solid rgba(0, 78, 146, .3);
+  outline-offset: 2px;
+}
+
+#au-assistant-panel .au-a__btn--primary {
+  background: var(--au-brand);
+  border-color: var(--au-brand);
+  color: #fff;
+  font-weight: 600;
+  /* A little larger than the base button. There is only one, and it does the
+     one thing the extension exists to do. */
+  padding: .5rem .95rem;
+  font-size: .85rem;
+}
+
+#au-assistant-panel .au-a__btn--primary:hover:not(:disabled) {
+  background: var(--au-brand-dark);
+  border-color: var(--au-brand-dark);
+}
+
+/* Once used, the button stops being an offer and reads as done. */
+#au-assistant-panel .au-a__btn--primary:disabled {
+  background: var(--au-ok);
+  border-color: var(--au-ok);
+  color: #fff;
+  cursor: default;
+}
+
+/* ---- footnote ---------------------------------------------------------- */
+
+#au-assistant-panel .au-a__foot {
+  margin: 0;
+  padding: .55rem .95rem;
+  border-top: 1px solid var(--au-line);
+  background: var(--au-panel);
+  font-size: .76rem;
+  color: var(--au-muted);
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+
+#au-assistant-panel .au-a__foot i { opacity: .75; }
+#au-assistant-panel .au-a__foot strong { color: var(--au-ink); }
+
+/* ---- dark theme -------------------------------------------------------- */
+
+[data-bs-theme='dark'] #au-assistant-panel {
+  --au-line: #2c3648;
+  --au-ink: #e8edf5;
+  --au-muted: #a3b0c2;
+  --au-faint: #8492a6;
+  --au-brand: #4a9fe0;
+  --au-brand-dark: #6fb0ea;
+  --au-warn: #fbbf24;
+  --au-warn-soft: #3b2f14;
+  --au-ok: #6ee7b7;
+  --au-panel: #161e2d;
+
+  background: #121927;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .4),
+    0 8px 22px -10px rgba(0, 0, 0, .7);
+}
+
+[data-bs-theme='dark'] #au-assistant-panel .au-a__btn {
+  background: #1b2434;
+  border-color: #34405466;
+}
+
+[data-bs-theme='dark'] #au-assistant-panel .au-a__btn:hover {
+  background: #232e42;
+  border-color: #46536b;
+}
+
+[data-bs-theme='dark'] #au-assistant-panel .au-a__btn--primary {
+  background: var(--au-brand);
+  border-color: var(--au-brand);
+  color: #08121f;
+}
+
+[data-bs-theme='dark'] #au-assistant-panel .au-a__btn--primary:disabled {
+  background: #14503c;
+  border-color: #1c6b51;
+  color: var(--au-ok);
+}
+
+[data-bs-theme='dark'] #au-assistant-panel .au-a__pill--quiet {
+  background: #1e2838;
+  box-shadow: inset 0 0 0 1px var(--au-line);
+}

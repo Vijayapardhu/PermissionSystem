@@ -1,0 +1,335 @@
+/* The universal search control.
+
+   One control, used on every page that searches: the student directory, the
+   request register, the class register, the demo account list and both "find a
+   student" pages. They were five different shapes -- two with a label and a big
+   Search button, two with a bare icon group, one joined to a scope dropdown --
+   and none of them matched the page they sat on. A control that looks the same
+   everywhere is learnable once.
+
+   Two things here are worth reading before changing anything.
+
+   ---- The two surfaces -----------------------------------------------------
+
+   The control sits in one of two places, and they are not interchangeable:
+
+     .toolbar-sticky  the filter bar -- frosted, deep navy, with other filters
+     .au-searchbar    a search bar standing alone above a long list
+
+   Both are deep navy in *both* themes. That is a deliberate design decision, not
+   the dark palette: the bar reads as a different plane over a white page, and
+   the list scrolling under it stays legible as blurred context.
+
+   The consequence is that a control inside either must take its ink from the
+   --glass-* tokens, never from --au-text. In light mode --au-text is near-black
+   and vanishes against navy. That is not hypothetical: the first version of
+   this file did exactly that and the field was unreadable on the demo-login
+   page. Every colour below is therefore stated twice, or scoped through
+   :is(.toolbar-sticky, .au-searchbar).
+
+   ---- The dropdown arrow ---------------------------------------------------
+
+   The arrow is an element, not a background image. Painted as a background it
+   produced a single glyph only for as long as `background-repeat: no-repeat`
+   kept winning over an earlier `background` shorthand; when it lost, the arrow
+   tiled across the whole control and every dropdown grew a row of chevrons. An
+   element cannot tile. */
+
+/* The frosted surfaces, named once.
+
+   Only the class is needed -- an earlier version also required a marker class
+   alongside it, and a template that emitted the marker-less form got an opaque
+   white bar and looked like the styling was simply broken. */
+:is(.toolbar-sticky, .au-searchbar) {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+}
+
+/* A standalone search bar that pins under the top bar.
+
+   The offset clears the fixed top bar, and it is the same 64px the register's
+   filter bar uses -- two sticky things at different offsets look broken the
+   moment a page has both. Below lg the sidebar is a drawer and the top bar is
+   the only fixed thing, so the same offset still holds. */
+.au-searchbar {
+  position: sticky;
+  top: 64px;
+  z-index: 5;
+  margin-bottom: 1.1rem;
+  padding: .55rem .9rem;
+  border-radius: var(--au-radius-lg);
+}
+
+.au-searchbar__hint {
+  margin: .4rem 0 0;
+  font-size: .74rem;
+  color: var(--glass-muted);
+}
+
+/* On a standalone bar the control is the whole point of the bar, so it takes the
+   full width. A 26rem pill floating in a full-width navy strip leaves most of
+   the strip empty and reads as a control that failed to fill. */
+.au-searchbar .au-search { max-width: none; }
+
+/* ---------- the control ---------- */
+
+.au-search {
+  display: block;
+  width: 100%;
+}
+
+.au-search__box {
+  display: flex;
+  align-items: center;
+  gap: .15rem;
+  padding: 0 .3rem 0 .7rem;
+  background: var(--au-surface);
+  border: 1px solid var(--au-border-strong);
+  border-radius: var(--au-radius-pill);
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+.au-search__box:hover { border-color: var(--au-primary); }
+
+/* On a frosted bar the control must not draw its own fill or outline. The bar is
+   already the surface; a second ellipse round a text field reads as unfinished,
+   and an opaque white pill is exactly the seam the blur is there to avoid. */
+:is(.toolbar-sticky, .au-searchbar) .au-search__box {
+  background: transparent;
+  border-color: transparent;
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__box:hover {
+  border-color: transparent;
+}
+
+.au-search__box:focus-within {
+  border-color: var(--au-primary);
+  /* The ring is on the box, not the input, so it traces the whole control --
+     icon, field and buttons together -- rather than a loose oval round the text. */
+  box-shadow: 0 0 0 3px rgba(0, 78, 146, .18);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__box:focus-within {
+  border-color: transparent;
+  box-shadow: 0 0 0 2px var(--glass-focus-ring, rgba(255, 255, 255, .5));
+}
+
+.au-search__icon {
+  flex: 0 0 auto;
+  color: var(--au-text-faint);
+  font-size: .92rem;
+  pointer-events: none;
+}
+
+.au-search__box:focus-within .au-search__icon { color: var(--au-primary); }
+
+.au-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: .5rem .35rem;
+  font: inherit;
+  font-size: .875rem;
+  color: var(--au-text);
+  box-shadow: none;
+}
+
+/* The app's own `.form-control` sets padding as a shorthand later in
+   style.css, and at equal specificity the later rule wins -- which silently put
+   the text back under the icon. Two classes cannot be overridden by accident. */
+.au-search .au-search__input { padding-left: .35rem; }
+
+.au-search__input:focus {
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.au-search__input::placeholder { color: var(--au-text-faint); }
+
+.au-search__input:disabled { color: var(--au-text-faint); cursor: progress; }
+
+/* Chrome draws its own clear button on a type=search; two of them stacked in one
+   control is one too many. */
+.au-search__input::-webkit-search-cancel-button,
+.au-search__input::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+/* ---------- the frosted-surface restatement ---------- */
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__input {
+  color: var(--glass-text);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__input::placeholder {
+  color: var(--glass-muted);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__icon {
+  color: var(--glass-muted);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__box:focus-within .au-search__icon,
+:is(.toolbar-sticky, .au-searchbar) .au-search__input:focus + .au-search__icon {
+  color: #fff;
+}
+
+/* ---------- buttons ---------- */
+
+.au-search__btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  border: 0;
+  border-radius: var(--au-radius-pill);
+  background: transparent;
+  color: var(--au-text-muted);
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 550;
+  line-height: 1;
+  padding: .34rem .5rem;
+  cursor: pointer;
+}
+
+.au-search__btn:hover {
+  background: var(--au-surface-alt);
+  color: var(--au-text);
+}
+
+.au-search__btn:focus-visible {
+  outline: 2px solid var(--au-primary);
+  outline-offset: 1px;
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__btn {
+  color: var(--glass-muted);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__btn:hover {
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__btn:focus-visible {
+  outline-color: var(--glass-focus-ring, rgba(255, 255, 255, .5));
+}
+
+/* Clear: an icon only, because it is a small action and its meaning is the one
+   every close button in every application has. */
+.au-search__clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--au-surface-alt);
+  color: var(--au-text-muted);
+  font-size: .72rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.au-search__clear:hover {
+  background: var(--au-danger-soft);
+  color: var(--au-danger-text);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__clear {
+  background: rgba(255, 255, 255, .16);
+  color: var(--glass-text);
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-search__clear:hover {
+  background: rgba(255, 255, 255, .28);
+  color: #fff;
+}
+
+/* Go: only for the no-JS case, and `search.js` removes it. The bar submits
+   itself while scripting is available, so leaving a filled button at the end of
+   every search field would offer the same action twice and make the wrong one
+   look primary. */
+.au-search__go[hidden] { display: none; }
+
+/* ---------- dropdowns ---------- */
+
+.au-select {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.au-select .form-select {
+  /* The native arrow is suppressed so the element below replaces it rather than
+     sitting beside it. */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: none;
+  padding-right: 2.1rem;
+  cursor: pointer;
+}
+
+.au-select__arrow {
+  position: absolute;
+  right: .65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: .7rem;
+  color: var(--au-text-muted);
+  line-height: 1;
+}
+
+/* The arrow leans into focus, matching the search icon, so the two read as one
+   family rather than two borrowed widgets. */
+.au-select .form-select:hover + .au-select__arrow,
+.au-select .form-select:focus + .au-select__arrow { color: var(--au-primary); }
+
+:is(.toolbar-sticky, .au-searchbar) .au-select .form-select {
+  background-image: none;
+}
+
+:is(.toolbar-sticky, .au-searchbar) .au-select__arrow { color: var(--glass-muted); }
+
+:is(.toolbar-sticky, .au-searchbar) .au-select .form-select:hover + .au-select__arrow,
+:is(.toolbar-sticky, .au-searchbar) .au-select .form-select:focus + .au-select__arrow {
+  color: #fff;
+}
+
+/* ---------- the hint ---------- */
+
+.au-search__hint {
+  margin: .45rem 0 0;
+  font-size: .74rem;
+  color: var(--au-text-muted);
+}
+
+/* ---------- sizes ---------- */
+
+.au-search--wide { max-width: 34rem; }
+.au-search--bar  { max-width: 26rem; }
+.au-search--full { max-width: none; }
+
+/* ---------- inside the class register's composite ---------- */
+
+/* The scope dropdown is joined to the field, so it keeps the shared border
+   treatment and takes only the arrow from here. */
+.filter-combo .au-select { display: flex; }
+
+.filter-combo .au-select .form-select {
+  border: 0;
+  background: transparent;
+  padding-right: 2.1rem;
+}

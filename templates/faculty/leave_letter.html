@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leave Approval {{ qr.reference if qr else 'LVR-%04d' % leave.id }} &middot; {{ UNIVERSITY_NAME }}</title>
+  <link rel="icon" href="{{ asset('images/aditya-crest.png') }}">
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Georgia:serif&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{{ asset('css/style.css') }}" rel="stylesheet">
+  <style>
+    /* The faculty leave approval letter.
+
+       Built as its own document rather than by extending the app shell: a letter
+       is printed, emailed or handed over, and what leaves this page has to stand
+       on its own without the sidebar, the theme script or anything else the
+       portal needs.
+
+       One A4 sheet at @page margin 10mm, which leaves 190 x 277mm of printable
+       area. Sizes are in mm where a mark has to survive the trip to paper
+       unchanged, and in rem for type, so the on-screen sheet and the printed
+       sheet are the same document rather than two layouts that happen to look
+       alike. */
+
+    :root {
+      --lt-gold: #b5730f;
+      --lt-gold-bright: #c67c12;
+      --lt-cream: #fbf6ee;
+      --lt-cream-deep: #f9f3e8;
+      --lt-pill: #f8e9d0;
+      --lt-ink: #101c33;
+      --lt-body: #3d4a5c;
+      --lt-muted: #6b7688;
+      --lt-line: #e2e2e6;
+      --lt-blue-wash: #f3f8fe;
+      --lt-blue: #2976c3;
+      --lt-ok: #0b7a55;
+
+      --lt-sans: 'Google Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --lt-serif: Georgia, 'Times New Roman', serif;
+    }
+
+    .letter-sheet {
+      width: 100%;
+      max-width: 210mm;
+      margin-inline: auto;
+      background: #fff;
+      padding: 10mm 10mm 8mm;
+      box-shadow: 0 16px 40px rgba(16, 24, 40, .16);
+      font-family: var(--lt-sans);
+      color: var(--lt-body);
+    }
+
+    /* ---------- Letterhead ---------- */
+
+    .letter-head {
+      display: flex;
+      align-items: center;
+      gap: 4mm;
+      padding-bottom: 4mm;
+      border-bottom: 2px solid var(--lt-gold);
+    }
+
+    .letter-head img { width: 15mm; height: 15mm; object-fit: contain; }
+
+    .letter-head__text { flex: 1; min-width: 0; }
+
+    .letter-head h1 {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 700;
+      color: var(--lt-ink);
+      letter-spacing: -.01em;
+    }
+
+    .letter-head p {
+      margin: .1rem 0 0;
+      font-size: .68rem;
+      color: var(--lt-muted);
+    }
+
+    .letter-head__ref {
+      text-align: right;
+      font-size: .66rem;
+      color: var(--lt-muted);
+      white-space: nowrap;
+    }
+
+    .letter-head__ref strong {
+      display: block;
+      font-size: .86rem;
+      color: var(--lt-gold);
+      letter-spacing: .04em;
+    }
+
+    /* ---------- Title ---------- */
+
+    .letter-title {
+      margin: 7mm 0 5mm;
+      text-align: center;
+    }
+
+    .letter-title h2 {
+      margin: 0;
+      font-family: var(--lt-serif);
+      font-size: 1.12rem;
+      font-weight: 400;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--lt-ink);
+    }
+
+    .letter-title p {
+      margin: .3rem 0 0;
+      font-size: .66rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--lt-gold);
+    }
+
+    /* ---------- Body ---------- */
+
+    .letter-body p {
+      margin: 0 0 3.5mm;
+      font-size: .78rem;
+      line-height: 1.65;
+      text-align: justify;
+    }
+
+    /* The grant itself, stated before anything else can dilute it. */
+    .letter-granted {
+      margin: 0 0 5mm;
+      padding: 4mm 5mm;
+      background: var(--lt-cream);
+      border-left: 3px solid var(--lt-gold);
+      font-size: .82rem;
+      line-height: 1.6;
+      color: var(--lt-ink);
+    }
+
+    .letter-granted strong { color: var(--lt-gold); }
+
+    /* ---------- Facts ---------- */
+
+    .letter-facts {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 5mm;
+      font-size: .76rem;
+    }
+
+    .letter-facts th,
+    .letter-facts td {
+      border: 1px solid var(--lt-line);
+      padding: 2.4mm 3mm;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .letter-facts th {
+      width: 32mm;
+      background: var(--lt-cream-deep);
+      font-weight: 600;
+      color: var(--lt-ink);
+      white-space: nowrap;
+    }
+
+    /* ---------- Cover ---------- */
+
+    .letter-cover {
+      margin: 0 0 5mm;
+      padding: 3.5mm 4mm;
+      background: var(--lt-blue-wash);
+      border: 1px solid #d8e6f7;
+      font-size: .74rem;
+      line-height: 1.6;
+    }
+
+    .letter-cover h3 {
+      margin: 0 0 1.5mm;
+      font-size: .68rem;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+      color: var(--lt-blue);
+    }
+
+    .letter-cover p { margin: 0 0 1mm; text-align: left; }
+    .letter-cover p:last-child { margin-bottom: 0; }
+
+    /* ---------- Signatures ---------- */
+
+    .letter-signatures {
+      display: flex;
+      gap: 8mm;
+      margin-top: 8mm;
+    }
+
+    .letter-sig {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+    }
+
+    .letter-sig__line {
+      margin-top: 14mm;
+      padding-top: 1.6mm;
+      border-top: 1px solid var(--lt-ink);
+      font-size: .72rem;
+      color: var(--lt-ink);
+    }
+
+    .letter-sig__role {
+      font-size: .62rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--lt-muted);
+      margin-top: .6mm;
+    }
+
+    /* A signature block with nobody in it is worse than one omitted: it reads
+       as a signature nobody gave. */
+    .letter-sig--none .letter-sig__line {
+      border-top-style: dashed;
+      border-top-color: var(--lt-line);
+      color: var(--lt-muted);
+    }
+
+    /* ---------- Footer ---------- */
+
+    .letter-foot {
+      margin-top: 8mm;
+      padding-top: 3mm;
+      border-top: 1px solid var(--lt-line);
+      display: flex;
+      align-items: center;
+      gap: 4mm;
+    }
+
+    .letter-foot__note { flex: 1; font-size: .62rem; line-height: 1.55; color: var(--lt-muted); }
+
+    .letter-qr { flex: 0 0 auto; text-align: center; }
+
+    .letter-qr img {
+      width: 22mm;
+      height: 22mm;
+      display: block;
+    }
+
+    .letter-qr__ref {
+      margin-top: .8mm;
+      font-size: .58rem;
+      letter-spacing: .06em;
+      color: var(--lt-muted);
+    }
+
+    .letter-qr__url {
+      font-size: .5rem;
+      color: #98a2b3;
+      word-break: break-all;
+      max-width: 52mm;
+      margin-top: .4mm;
+    }
+
+    .letter-colophon {
+      margin: 3mm 0 0;
+      font-size: .58rem;
+      line-height: 1.5;
+      color: #98a2b3;
+    }
+
+    .letter-colophon a { color: inherit; text-decoration: none; word-break: break-all; }
+    .letter-colophon a:hover { text-decoration: underline; }
+
+    @media print {
+      .letter-tools { display: none !important; }
+
+      /* The design is carried mostly by background fills: the granted panel, the
+         cream header band and the blue cover notice. A print pipeline drops
+         background graphics unless the document insists, and every browser
+         leaves "Background graphics" unchecked by default -- so without this the
+         printed sheet keeps all the text and loses every panel. `exact` is
+         inherited, so setting it on the sheet covers everything inside it. */
+      .letter-sheet {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .letter-shell {
+        background: #fff !important;
+        padding: 0 !important;
+        /* The inline min-height:100vh on the body is not reset by the rules
+           above, and 100vh in paged media is taller than the sheet -- which is
+           what produces a second, blank page. */
+        min-height: 0 !important;
+      }
+
+      .letter-sheet {
+        box-shadow: none;
+        max-width: none;
+        width: auto;
+        padding: 0;
+        break-after: page;
+      }
+
+      .letter-sheet > :last-child { break-after: avoid; margin-bottom: 0; }
+
+      @page { size: A4 portrait; margin: 10mm; }
+    }
+  </style>
+</head>
+<body class="letter-shell" style="background:#eef1f5;padding:2rem 1rem;min-height:100vh">
+
+  {# Three roles print this one letter -- the applicant, the HOD and the Dean --
+     and they come back to three different lists, so the way back is chosen from
+     who is looking rather than guessed. #}
+  {% set is_dean = user and user.is_dean %}
+  {% set is_hod = user and user.is_hod %}
+  {% set back_url = url_for('dean.leave_detail', leave_id=leave.id) if is_dean
+                    else url_for('hod.leave_detail', leave_id=leave.id) if is_hod
+                    else url_for('faculty.my_leave_detail', leave_id=leave.id) %}
+
+  <div class="letter-tools" style="max-width:210mm;margin:0 auto 1rem;display:flex;gap:.5rem;flex-wrap:wrap">
+    <button class="btn btn-primary btn-pill" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print / Save as PDF
+    </button>
+    <a href="{{ back_url }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to the application
+    </a>
+  </div>
+
+  <article class="letter-sheet">
+    <header class="letter-head">
+      <img src="{{ asset('images/aditya-crest.png') }}" alt="">
+      <div class="letter-head__text">
+        <h1>{{ UNIVERSITY_NAME }}</h1>
+        <p>{{ DEPARTMENT_NAME or 'Department of Computer Science &amp; Engineering' }}
+           &middot; Faculty Leave</p>
+      </div>
+      <div class="letter-head__ref">
+        Reference
+        <strong>{{ qr.reference if qr else 'LVR-%04d' % leave.id }}</strong>
+      </div>
+    </header>
+
+    <div class="letter-title">
+      <h2>Leave Approval</h2>
+      <p>To whom it may concern</p>
+    </div>
+
+    <div class="letter-granted">
+      This is to certify that the leave of the faculty member named below has been
+      <strong>approved</strong> by the Dean of the
+      {{ DEPARTMENT_NAME or 'Department of Computer Science &amp; Engineering' }},
+      following the recommendation of the Head of the Department. The leave is
+      granted for the dates stated.
+    </div>
+
+    <table class="letter-facts">
+      <tbody>
+        <tr>
+          <th>Name</th>
+          <td>
+            {{ applicant.name if applicant else '—' }}
+            {% if applicant and applicant.employee_code %}
+              <span style="color:var(--lt-muted)">&middot; {{ applicant.employee_code }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Designation</th>
+          <td>{{ applicant.designation if applicant and applicant.designation else '—' }}</td>
+        </tr>
+        <tr>
+          <th>Department</th>
+          <td>{{ (applicant.department if applicant else None) or DEPARTMENT_NAME or 'Computer Science &amp; Engineering' }}</td>
+        </tr>
+        <tr>
+          <th>Type of leave</th>
+          <td>{{ leave.leave_type.value|replace('_', ' ')|title }}</td>
+        </tr>
+        <tr>
+          <th>From</th>
+          <td>{{ leave.from_date.strftime('%d %B %Y') }}</td>
+        </tr>
+        <tr>
+          <th>To</th>
+          <td>{{ leave.to_date.strftime('%d %B %Y') }}</td>
+        </tr>
+        <tr>
+          <th>Duration</th>
+          <td>{{ leave.days }} day{{ '' if leave.days == 1 else 's' }}, both dates inclusive</td>
+        </tr>
+      </tbody>
+    </table>
+
+    {# The arrangements, not the reason. A leave letter is handed to a gatekeeper,
+       a class rep or a colleague, and the stated reason is very often a medical
+       one that those readers have no need to hold. The arrangements are what a
+       reader actually acts on. #}
+    <div class="letter-cover">
+      <h3>Arrangements during this leave</h3>
+      {% if adjustments %}
+        {# `adjustments` is a list of teaching blocks, not of periods -- a
+           subject running four periods in a row is one of them. So the letter
+           counts blocks, and separately counts the periods inside them, because
+           "affects 14 periods" is what a reader takes away from this. #}
+        {% set period_total = adjustments | sum(attribute='period_count') %}
+        <p>
+          This leave affects <strong>{{ period_total }}</strong>
+          scheduled period{{ '' if period_total == 1 else 's' }},
+          in {{ adjustments|length }} class block{{ '' if adjustments|length == 1 else 's' }}.
+          {% set uncovered = leave.uncovered_count %}
+          {% if uncovered %}
+            <strong style="color:#a33">{{ uncovered }} of these could not be
+            covered and the class{{ '' if uncovered == 1 else 'es' }} will be
+            handled as directed by the department.</strong>
+          {% else %}
+            Every affected period has an accepted substitute and the timetable is
+            unchanged.
+          {% endif %}
+        </p>
+        {% if not uncovered %}
+          <p>
+            {% set names = [] %}
+            {% for adjustment in adjustments %}
+              {% set who = substitutes.get(adjustment.assigned_faculty_id) %}
+              {% if who and who not in names %}{% set _ = names.append(who) %}{% endif %}
+            {% endfor %}
+            {% if names %}
+              Cover arranged with: {{ names|join(', ') }}.
+            {% endif %}
+          </p>
+        {% endif %}
+      {% else %}
+        <p>
+          This faculty member has no scheduled classes during these dates, so
+          the department timetable is unaffected.
+        </p>
+      {% endif %}
+    </div>
+
+    <div class="letter-signatures">
+      {# On an HOD's own application there is no departmental signature: no HOD
+         may decide another HOD's leave, so the Dean's approval rests on its own
+         authority. A blank block would read as a signature nobody gave. #}
+      {% if hod %}
+        <div class="letter-sig">
+          <div class="letter-sig__line">
+            {{ hod.name }}
+            <div style="font-size:.6rem;color:var(--lt-muted);margin-top:.4mm">
+              Head of Department
+            </div>
+          </div>
+          <div class="letter-sig__role">
+            Recommended &middot;
+            {{ leave.hod_at.strftime('%d %m %Y') if leave.hod_at else '—' }}
+          </div>
+        </div>
+      {% else %}
+        <div class="letter-sig letter-sig--none">
+          <div class="letter-sig__line">
+            Not applicable
+            <div style="font-size:.6rem;margin-top:.4mm">
+              Applicant is the Head of Department
+            </div>
+          </div>
+          <div class="letter-sig__role">Departmental recommendation</div>
+        </div>
+      {% endif %}
+
+      <div class="letter-sig">
+        <div class="letter-sig__line">
+          {{ dean.name if dean else '—' }}
+          <div style="font-size:.6rem;color:var(--lt-muted);margin-top:.4mm">
+            Dean
+          </div>
+        </div>
+        <div class="letter-sig__role">
+          Approved &middot;
+          {{ leave.dean_at.strftime('%d %m %Y') if leave.dean_at else '—' }}
+        </div>
+      </div>
+    </div>
+
+    {% if leave.dean_remarks %}
+      <div class="letter-cover" style="margin-top:6mm">
+        <h3>Note of approval</h3>
+        <p>{{ leave.dean_remarks }}</p>
+      </div>
+    {% endif %}
+
+    <footer class="letter-foot">
+      <div class="letter-foot__note">
+        This letter is issued from the department's official leave record and
+        bears a verification code. Scanning the code confirms the approval
+        against that record without an account. It certifies the grant of leave
+        only; it does not disclose the reason for it.
+        {% if is_hod or is_dean %}
+          <br>
+          Issued by {{ user.name }} on behalf of the department.
+        {% endif %}
+      </div>
+      <div class="letter-qr">
+        {# Drawn only when the encoder handed one over. A failing QR dependency
+           degrades to a letter without a code rather than to a letter that will
+           not print. #}
+        {% if qr and qr.image %}
+          <img src="{{ qr.image }}" alt="Scan to verify this leave approval">
+          <div class="letter-qr__ref">{{ qr.reference }}</div>
+        {% elif qr %}
+          <div class="letter-qr__ref">{{ qr.reference }}</div>
+        {% endif %}
+      </div>
+    </footer>
+
+    {# The URL is printed as well as encoded, and this is not decoration. A QR
+       code on a letter that has been through a photocopier or a scanner-quality
+       printer can fail to read, and a reader with nothing to type is stuck. The
+       student letter does the same. #}
+    <p class="letter-colophon">
+      System-generated by the {{ APP_NAME }}.
+      {% if qr and qr.url %}
+        Scan the QR code, or open
+        <a href="{{ qr.url }}">{{ qr.url }}</a>,
+        to check this approval against the department record.
+      {% endif %}
+    </p>
+  </article>
+</body>
+</html>

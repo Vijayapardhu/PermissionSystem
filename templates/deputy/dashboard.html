@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import type_badge, date, time_range, roll, csrf_field with context %}
+{% block title %}Deputy Panel &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Deputy Panel</h1>
+    <p class="page-head__sub">
+      Every request in the department, whether or not it was routed to you.
+      You can grant or refuse any of them directly.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('deputy.permitted') }}" class="btn btn-primary btn-pill">
+      <i class="bi bi-person-check"></i> Permitted today
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat">
+    <div class="stat__value" style="color:var(--au-warning)">{{ stats.pending }}</div>
+    <div class="stat__label">Awaiting a decision</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value" style="color:var(--au-success)">{{ stats.approved_today }}</div>
+    <div class="stat__label">Permitted today</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ stats.own_classes }}</div>
+    <div class="stat__label">Your classes</div>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-inboxes"></i> Waiting for a decision</h2>
+    <span class="form-text">{{ pending_total }} in total</span>
+  </div>
+
+  {% if pending %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Reference</th>
+          <th>Roll No</th>
+          <th>Student</th>
+          <th>Type</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Reason</th>
+          <th>Assigned to</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in pending %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong text-nowrap">REQ-{{ '%04d' % record.id }}</td>
+          <td>{{ roll(record.student_roll_number) }}</td>
+          <td class="text-nowrap">{{ record.student_name }}</td>
+          <td>{{ type_badge(record.permission_type) }}</td>
+          <td class="text-nowrap">{{ date(record.start_date) }}</td>
+          <td class="text-nowrap">{{ date(record.end_date) }}</td>
+          <td class="small text-muted clamp-2" title="{{ record.reason }}">{{ record.reason }}</td>
+          <td class="small">
+            {% if record.assigned_faculty_id == user.id %}
+              <span class="badge-au badge-au--approved">You</span>
+            {% else %}
+              <span class="text-muted">Reviewer</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('deputy.request_detail', request_id=record.id) }}"
+               class="btn btn-sm btn-primary btn-pill">Decide</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="card-au__body">
+      <p class="text-muted mb-0">
+        <i class="bi bi-check2-circle"></i>
+        Nothing is waiting for a decision.
+      </p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

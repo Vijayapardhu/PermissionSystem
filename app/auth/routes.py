@@ -16,7 +16,7 @@ from flask import (
 
 from app.auth import microsoft
 from app.models import UserRole
-from app.models.user import UserModel
+from app.models.user import UserModel, derive_roll_number
 from app.permissions.pages import permission_required
 from app.utils.security import (
     csrf_token, current_user, database_unavailable, is_university_email,
@@ -28,7 +28,13 @@ auth = Blueprint('auth', __name__)
 DASHBOARDS = {
     UserRole.STUDENT: 'student.dashboard',
     UserRole.LECTURER: 'faculty.dashboard',
+    # A deputy is a lecturer first, so they land on the teaching dashboard and
+    # reach their own panels from the sidebar. Sending them to a separate
+    # dashboard would hide the classes they still teach behind a role they did
+    # not ask for.
+    UserRole.DEPUTY_HOD: 'faculty.dashboard',
     UserRole.HOD: 'hod.dashboard',
+    UserRole.DEAN: 'dean.dashboard',
 }
 
 ALLOWED_ROLES = tuple(DASHBOARDS)
@@ -75,7 +81,20 @@ def verify_letter(reference: str):
         ApprovalModel, PermissionModel, attach_members,
     )
     from app.models.user import UserModel
-    from app.utils.qr import reference_for, resolve_reference
+    from app.utils.qr import (
+        LEAVE_PREFIX, reference_for, reference_for_leave,
+        resolve_leave_reference, resolve_reference,
+    )
+
+    # Two kinds of letter, told apart by the prefix of the signed reference
+    # rather than by a second URL. The signature covers the prefix, so neither
+    # link can be presented as the other, and a bad or forged one lands in the
+    # same 404 either way -- answering differently would hand anyone a way to
+    # test which references are real.
+    if (reference or '').startswith(LEAVE_PREFIX):
+        return _verify_leave(reference)
+    if not (reference or '').startswith('REQ-'):
+        abort(404)
 
     try:
         request_id = resolve_reference(reference)
@@ -114,6 +133,57 @@ def verify_letter(reference: str):
     )
 
 
+def _verify_leave(reference: str):
+    """Public lookup for a scanned faculty leave letter.
+
+    Shows what the letter already shows and nothing more: the applicant, the
+    dates, the type, who signed it and when. The reason and the substitutions are
+    deliberately not exposed here -- the letter carries neither, and these are
+    medical and staffing matters that only the department needs to read.
+
+    A letter is only verifiable once the Dean has signed. An application still in
+    a queue has no letter, so there is nothing here to confirm; that is answered
+    404, the same as a reference that does not exist, rather than a page that
+    admits a leave id is real but undecided.
+    """
+    from app.models.leave import AdjustmentModel, LeaveModel
+    from app.models.user import UserModel
+    from app.utils.qr import reference_for_leave, resolve_leave_reference
+
+    try:
+        leave_id = resolve_leave_reference(reference)
+    except ValueError:
+        abort(404)
+
+    try:
+        leave = LeaveModel.find_by_id(leave_id)
+    except Exception:
+        current_app.logger.exception('Leave verification lookup failed for %s',
+                                      reference)
+        abort(503, description=(
+            'The department record could not be reached. Please try again shortly.'
+        ))
+
+    if leave is None or not leave.is_final:
+        abort(404)
+
+    adjustments = AdjustmentModel.find_by_leave(leave_id)
+    approver = UserModel.find_by_id(leave.dean_by) if leave.dean_by else None
+
+    return render_template(
+        'auth/verify_leave.html',
+        leave=leave,
+        applicant=UserModel.find_by_id(leave.faculty_id),
+        hod=UserModel.find_by_id(leave.hod_by) if leave.hod_by else None,
+        approver=approver,
+        # Periods, not blocks. `adjustments` is one row per teaching block, and
+        # "this leave affects 14 periods" is the fact a reader takes away -- a
+        # subject running four periods in a row is one block but four periods.
+        periods=sum(a.period_count for a in adjustments),
+        reference=reference_for_leave(leave_id),
+    )
+
+
 @auth.route('/')
 def landing():
     user = current_user()
@@ -137,7 +207,7 @@ STUDENT_TAGLINE = (
 
 FACULTY_TAGLINE = (
     'Verify student permission requests, manage your classes and '
-    'attendance, and keep the department register accurate.'
+    'the right permissions, and keep the department register accurate.'
 )
 
 
@@ -263,6 +333,119 @@ def callback():
     return redirect(_safe_next(request.args.get('next')) or route_for_role(user))
 
 
+@auth.route('/auth/demo-logins')
+def demo_logins():
+    """A click-through list of the provisioned accounts, for local checking.
+
+    The picker on the sign-in page already contains every one of them, but it is
+    a dropdown of 219 names, which is fine for signing in and useless for
+    checking that each person sees the right thing -- you cannot tell the
+    difference between "signed in as the wrong lecturer" and "the wrong lecturer
+    has no classes" when both end up looking at the same empty page.
+
+    This page lists them as rows with what each one actually teaches, so the
+    answer to "is this the right screen for this person" is visible before
+    signing in rather than inferred afterwards.
+
+    Development only, on the same guard as `dev_login`: DEV_MODE is false in
+    render.yaml, and the route 404s rather than redirecting so a deployed app
+    does not advertise that it has one.
+    """
+    if not current_app_dev_mode():
+        abort(404)
+    if current_user():
+        return redirect(route_for_role(current_user()))
+
+    from app.models.firestore import store
+    from app.models.leave import TimetableModel
+
+    try:
+        staff = UserModel.get_faculty()
+        # How many classes each person owns, from one pass over the groups
+        # rather than a query per lecturer. Taught classes only, so the figure
+        # matches the one on the HOD's workload page -- counting proctor lists
+        # here made the same lecturer look like they carried different workloads
+        # on two screens.
+        class_counts = {}
+        sections = {}
+        proctor_group_ids = {
+            row['id'] for row in store.documents('class_groups')
+            if (row.get('kind') or 'CLASS') == 'PROCTOR'
+        }
+        for row in store.documents('class_groups'):
+            if row['id'] in proctor_group_ids:
+                continue
+            owner = row.get('faculty_id')
+            if not owner:
+                continue
+            class_counts[owner] = class_counts.get(owner, 0) + 1
+            label = row.get('section_code')
+            if label:
+                sections.setdefault(owner, set()).add(label.split('-')[0].strip())
+
+        courses = {}
+        for row in store.documents('section_courses'):
+            for member in (row.get('eligible_faculty_ids') or []):
+                courses[member] = courses.get(member, 0) + 1
+
+        people = [
+            {
+                'id': u.id,
+                'email': u.email,
+                'name': u.name,
+                'role': u.role,
+                'employee_code': u.employee_code,
+                'designation': u.designation,
+                'classes': class_counts.get(u.id, 0),
+                'courses': courses.get(u.id, 0),
+                'sections': sorted(sections.get(u.id, ())),
+            }
+            for u in staff
+        ]
+
+        # Deans are listed on their own rather than folded into the teaching
+        # staff above. They are not teaching staff -- `get_faculty` excludes them
+        # precisely so they are never offered as a substitute for a class -- and a
+        # row of zeroes under "Classes" would read as a broken account rather than
+        # as a role whose whole job is the final signature on somebody else's.
+        deans = [
+            {
+                'id': u.id,
+                'email': u.email,
+                'name': u.name,
+                'role': u.role,
+                'employee_code': u.employee_code,
+                'designation': u.designation,
+            }
+            for u in UserModel.get_deans()
+        ]
+
+        students = [
+            {
+                'email': (u.roll_number or '').lower() + '@'
+                          + current_app_domain(),
+                'roll_number': u.roll_number,
+                'name': u.name,
+            }
+            for u in UserModel.get_students()
+            if u.roll_number
+        ]
+        # A handful is enough to check the student half; 1138 would just be the
+        # roster again.
+        students = students[:12]
+    except Exception:
+        people, students, deans = [], [], []
+
+    return render_template(
+        'auth/demo_logins.html',
+        dev_mode=True,
+        people=people,
+        deans=deans,
+        students=students,
+        domain=current_app_domain(),
+    )
+
+
 @auth.route('/auth/dev-login', methods=['POST'])
 def dev_login():
     """Local sign-in used only while DEV_MODE is enabled.
@@ -283,6 +466,20 @@ def dev_login():
     except DirectoryUnavailable as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('auth.login'))
+
+    if user is None:
+        # A student imported from the college roster has a roll number and no
+        # stored address, so the lookup above misses on the very first sign-in.
+        # Falling back to the roll number the mailbox is named after is what links
+        # them, and it is the same resolution the Entra callback performs -- so
+        # signing in locally exercises the real path rather than a shortcut.
+        roll = derive_roll_number(email)
+        if roll:
+            try:
+                user = _require_user(UserModel.find_by_roll_number, roll)
+            except DirectoryUnavailable as exc:
+                flash(str(exc), 'danger')
+                return redirect(url_for('auth.login'))
 
     if user is None:
         flash(
@@ -394,6 +591,28 @@ def current_app_domain() -> str:
     return current_app.config['DEV_ALLOWED_DOMAIN']
 
 
+def _dev_identifier(row) -> str:
+    """The address the local picker signs in with.
+
+    A student imported from the college roster has a roll number and **no** email,
+    because the mailbox they will eventually sign in with does not exist in the
+    register this app reads. Offering only `email` therefore left every student
+    unreachable in local development, with the student portal untestable until
+    Entra was wired up.
+
+    The fallback is the address the university provisions them anyway --
+    `<rollno>@adityauniversity.in` -- which is not an invention: it is exactly
+    what Microsoft returns on their first real sign-in, so signing in locally
+    exercises the same identity resolution that production will.
+    """
+    email = (row.get('email') or '').strip()
+    if email:
+        return email
+    roll = (row.get('roll_number') or '').strip()
+    domain = current_app_domain()
+    return f'{roll}@{domain}' if roll else ''
+
+
 def _dev_accounts():
     """Seed the dev picker with a representative account per role."""
     from app.models import UserRole
@@ -409,7 +628,7 @@ def _dev_accounts():
                                      r.get('roll_number') or ''))
             for row in rows[:4]:
                 accounts.append({
-                    'email': row.get('email'),
+                    'email': _dev_identifier(row),
                     'name': row.get('name'),
                     'role': row.get('role'),
                     'roll_number': row.get('roll_number'),

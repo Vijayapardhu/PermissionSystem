@@ -158,14 +158,14 @@ def pick_faculty(student: User) -> User:
         if faculty_id:
             open_counts[faculty_id] = open_counts.get(faculty_id, 0) + 1
 
-    lecturers = UserModel.get_lecturers()
-    if not lecturers:
+    faculty = UserModel.get_faculty()
+    if not faculty:
         raise ValidationError(
-            'No lecturer is currently available to review requests. '
-            'Contact the HOD office.'
+            'No member of teaching staff is currently available to review '
+            'requests. Contact the HOD office.'
         )
 
-    chosen = min(lecturers,
+    chosen = min(faculty,
                  key=lambda u: (open_counts.get(u.id, 0), u.name or ''))
     return chosen
 
@@ -173,14 +173,15 @@ def pick_faculty(student: User) -> User:
 def _configured_reviewer(setting_id) -> Optional[User]:
     """The HOD's named reviewer for a queue, if they still hold the role.
 
-    A lecturer who has since been deactivated -- or whose account changed --
-    must not silently receive requests, so anything that is not an active
-    LECTURER reads as "not configured" and the next routing rule applies.
+    A reviewer who has since been deactivated -- or whose account changed --
+    must not silently receive requests, so anything that is not active teaching
+    staff reads as "not configured" and the next routing rule applies. An HOD is
+    teaching staff, so naming one as a reviewer is honoured.
     """
     if not setting_id:
         return None
     user = UserModel.find_by_id(setting_id)
-    if user is not None and user.is_active and user.is_lecturer:
+    if user is not None and user.is_active and user.is_faculty:
         return user
     return None
 
@@ -220,7 +221,7 @@ def find_proctor_for_student(student: User) -> Optional[User]:
     candidates = []
     for faculty_id in owners:
         user = UserModel.find_by_id(faculty_id)
-        if user is not None and user.is_active and user.is_lecturer:
+        if user is not None and user.is_active and user.is_faculty:
             candidates.append(user)
     if not candidates:
         return None
@@ -229,15 +230,29 @@ def find_proctor_for_student(student: User) -> Optional[User]:
 
 
 def resolve_faculty(student: User, reason: str, event=None) -> User:
-    """Who reviews this request: event coordinator, event desk, or proctor.
+    """Who reviews this request: event coordinator, then the student's proctor.
 
     A reason naming an HOD-managed event goes straight to that event's
     coordinator (a sub-event inherits its parent's when it names none of its
-    own). Failing that, the HOD's named event desk takes it; everything else
-    goes to the student's own proctor by default, falling back to the general
-    proctor and then to the least-loaded lecturer. Each step degrades to the
-    next, so an unconfigured queue or a lecturer who left can never leave a
-    request with nowhere to go.
+    own). Everything else goes to the student's own proctor by default, because
+    proctoring is an allocation of responsibility -- every student the college
+    assigned somebody to has somebody answerable for their requests. Failing
+    that, the HOD's named desks take it by route category, and the least-loaded
+    lecturer takes whatever is left.
+
+    The order matters more than it looks. Routing by route category FIRST put
+    almost nothing in front of the proctor, because `classify_route` guesses from
+    keywords and the common ones do not discriminate: 'fest' is a substring of
+    'festival', so 'attending the college technical festival' classified as
+    EVENT. Of thirteen realistic reasons, nine went to the event desk and only
+    three ever reached the proctor lookup -- the opposite of what a proctor list
+    is for, and the reason a lecturer watching their queue could not tell why
+    their mentees' requests were not in it.
+
+    So the factual match comes first and the keyword guess is demoted to a
+    fallback: an event is only special when the request actually names one the
+    HOD manages, which `find_match` checks against real records rather than
+    inferring it from prose.
 
     The store reads are guarded rather than trusted: this runs inside
     submission, and a routing lookup must never fail a student's request when
@@ -249,15 +264,34 @@ def resolve_faculty(student: User, reason: str, event=None) -> User:
 
     category = classify_route(reason)
     try:
+        # 1. A real HOD-managed event, matched against the events the department
+        #    actually created -- not against a guess about the wording.
         if event is None:
             event = EventModel.find_match(reason)
+        if event is not None:
+            coordinator = EventModel.effective_coordinator(event)
+            reviewer = _configured_reviewer(coordinator)
+            if reviewer is not None:
+                return reviewer
+
+        # 2. The student's proctor. This is the default the college allocates,
+        #    and it applies to every request that named no real event.
+        proctor = find_proctor_for_student(student)
+        if proctor is not None:
+            return proctor
+
+        # 3. The HOD's configured routes. Any number of them -- sports,
+        #    interviews, placements, medical -- each with its own reviewer, in
+        #    the order the HOD set. Before this existed there were three fixed
+        #    slots, and a department needing a fourth had no way to name one.
+        reviewer = _route_reviewer(reason)
+        if reviewer is not None:
+            return reviewer
+
+        # 4. The three original desks, kept so a department that configured them
+        #    before the route list existed keeps working untouched.
         routing = SettingsModel.get_routing()
         if category == 'EVENT':
-            if event is not None:
-                coordinator = EventModel.effective_coordinator(event)
-                reviewer = _configured_reviewer(coordinator)
-                if reviewer is not None:
-                    return reviewer
             reviewer = _configured_reviewer(routing.get('event_faculty_id'))
             if reviewer is not None:
                 return reviewer
@@ -267,9 +301,6 @@ def resolve_faculty(student: User, reason: str, event=None) -> User:
             if reviewer is not None:
                 return reviewer
         else:
-            proctor = find_proctor_for_student(student)
-            if proctor is not None:
-                return proctor
             reviewer = _configured_reviewer(routing.get('general_faculty_id'))
             if reviewer is not None:
                 return reviewer
@@ -278,6 +309,16 @@ def resolve_faculty(student: User, reason: str, event=None) -> User:
             'Routing lookup failed; falling back to least-loaded lecturer')
 
     return pick_faculty(student)
+
+
+def _route_reviewer(reason: str) -> Optional[User]:
+    """The lecturer on the first configured route this reason matches."""
+    from app.models.routes import RouteModel
+
+    rule = RouteModel.match(reason)
+    if rule is None:
+        return None
+    return _configured_reviewer(rule.faculty_id)
 
 
 def resolve_event(reason: str):
@@ -541,6 +582,101 @@ def hod_act_on_request(*, request_id: int, hod: User, action: ApprovalAction,
             mailer.notify_member_not_covered(
                 record, student, member, hod, base_url
             )
+
+
+def hod_act_directly(*, request_id: int, hod: User, action: ApprovalAction,
+                     remarks: str, base_url: str,
+                     member_ids=None) -> None:
+    """The HOD decides a request that has not reached them yet.
+
+    Routing sends a request to the student's proctor. When that person is on
+    leave, unreachable, or simply not acting, the request sits in their queue
+    with nobody moving it -- and the department's answer was "wait for the
+    proctor", which is not one when a student needs a letter tonight. This is the
+    way out: the HOD takes the decision directly.
+
+    Two states are acceptable, and the difference is the point:
+
+    - AWAITING_HOD is the ordinary escalation, where a lecturer verified the
+      request and passed it up. `hod_act_on_request` already handles that, and
+      this function defers to it so the two paths cannot drift apart.
+    - PENDING is the request still sitting in a proctor's queue. Nothing has been
+      checked yet, so the HOD is deciding first rather than second. That is a
+      departure from the two-stage order, and it is recorded as such: the
+      history entry names the HOD, and the proctor who was bypassed is notified,
+      because a request that disappears from their queue with no word is how a
+      proctor stops trusting the queue.
+
+    An APPROVED request is deliberately not accepted here. Withdrawing a
+    permission that has already been issued is a different decision with
+    different consequences -- the student may hold a printed letter -- and it
+    does not belong on a button that says "decide now".
+
+    Self-approval is refused. An HOD who is also on a proctor list must not be
+    able to sign their own mentee's request by this route either; the ordinary
+    rule that already stops self-approval applies here unchanged.
+    """
+    record = PermissionModel.find_by_id(request_id)
+    if record is None:
+        raise ValidationError('That request no longer exists.')
+
+    if record.status == RequestStatus.AWAITING_HOD:
+        hod_act_on_request(request_id=request_id, hod=hod, action=action,
+                           remarks=remarks, base_url=base_url,
+                           member_ids=member_ids)
+        return
+
+    if record.status != RequestStatus.PENDING:
+        raise ValidationError(
+            'Only a request that has not been decided yet can be taken '
+            'directly. This one is already '
+            f'{record.status.value.replace("_", " ").lower()}.'
+        )
+
+    student = UserModel.find_by_id(record.student_id)
+    if student is None:
+        raise ValidationError('The student record is missing.')
+
+    if record.assigned_faculty_id == hod.id:
+        raise ValidationError(
+            'You are the assigned reviewer for this request. Decide it from '
+            'your own queue rather than taking it directly.'
+        )
+
+    # The same group rule as the escalation path: an approval that would leave
+    # nobody covered is refused rather than recorded as covering everyone.
+    approved = list(record.members)
+    dropped = []
+    if member_ids is not None and record.is_group:
+        wanted = {int(m) for m in member_ids if str(m).isdigit()}
+        kept = [m for m in record.members if m in wanted]
+        if not kept:
+            raise ValidationError(
+                'An approval has to cover at least one student. Keep one '
+                'member, or reject the whole request instead.'
+            )
+        if kept != approved:
+            approved = kept
+            dropped = [m for m in record.members if m not in set(kept)]
+
+    status = (RequestStatus.APPROVED
+              if action == ApprovalAction.APPROVED else RequestStatus.REJECTED)
+
+    # The reviewer is left on the record rather than cleared. Clearing it would
+    # erase who the request was actually sitting with, which is the fact that
+    # explains why the HOD had to step in at all.
+    PermissionModel.update_status(request_id, status)
+    if status == RequestStatus.APPROVED and record.is_group:
+        PermissionModel.set_approved_members(request_id, approved)
+    ApprovalModel.create(request_id, hod.id, action, (remarks or '').strip())
+
+    mailer.notify_student_of_hod_decision(record, student, hod, action,
+                                          remarks, base_url)
+    for member_id in dropped:
+        member = UserModel.find_by_id(member_id)
+        if member is not None:
+            mailer.notify_member_not_covered(record, student, member, hod,
+                                             base_url)
 
 
 def student_can_view(record, user: User) -> bool:

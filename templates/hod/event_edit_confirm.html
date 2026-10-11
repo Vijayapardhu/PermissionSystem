@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, change_table with context %}
+{% block title %}Confirm event changes &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Confirm your changes</h1>
+    <p class="page-head__sub">
+      {{ changes | length }} field{{ '' if changes | length == 1 else 's' }} of
+      &ldquo;{{ event.name }}&rdquo; will change. Nothing has been saved yet.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('hod.edit_event', event_id=event.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil"></i> Back to editing
+    </a>
+  </div>
+</div>
+
+{% if 'coordinator_id' in changes|map(attribute='key')|list %}
+<div class="alert alert-warning">
+  <i class="bi bi-people"></i>
+  Changing the coordinator re-routes future student requests for this event to
+  somebody else. Requests already decided are not revisited.
+</div>
+{% endif %}
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-arrow-left-right"></i> What will change
+    </h2>
+  </div>
+  <div class="card-au__body">
+    {{ change_table(changes) }}
+  </div>
+</div>
+
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-check2"></i> Save</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.edit_event', event_id=event.id) }}/apply">
+      {{ csrf_field() }}
+      <input type="hidden" name="name" value="{{ form.name }}">
+      <input type="hidden" name="coordinator_id" value="{{ form.coordinator_id }}">
+
+      <div class="d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary btn-pill">
+          <i class="bi bi-check2"></i> Save {{ changes | length }} change{{ '' if changes | length == 1 else 's' }}
+        </button>
+        <a href="{{ url_for('hod.edit_event', event_id=event.id) }}"
+           class="btn btn-outline-secondary btn-pill">
+          <i class="bi bi-x-lg"></i> Exit without saving
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

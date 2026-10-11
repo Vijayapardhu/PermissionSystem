@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+{% block title %}Verified &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-lg-8">
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h1 class="card-au__title">
+          <i class="bi bi-patch-check"></i> Verified leave approval
+        </h1>
+        <span class="form-text">{{ reference }}</span>
+      </div>
+      <div class="card-au__body">
+        <div class="alert alert-success">
+          <i class="bi bi-check-circle"></i>
+          This approval is recorded in the department's official leave register
+          and matches the letter reference <strong>{{ reference }}</strong>.
+        </div>
+
+        <table class="table-au">
+          <tbody>
+            <tr>
+              <th style="width:12rem">Faculty member</th>
+              <td class="table-au__strong">
+                {{ applicant.name if applicant else '—' }}
+              </td>
+            </tr>
+            <tr>
+              <th>Employee code</th>
+              <td>{{ applicant.employee_code if applicant and applicant.employee_code else '—' }}</td>
+            </tr>
+            <tr>
+              <th>Designation</th>
+              <td>{{ applicant.designation if applicant and applicant.designation else '—' }}</td>
+            </tr>
+            <tr>
+              <th>Type of leave</th>
+              <td>{{ leave.leave_type.value|replace('_', ' ')|title }}</td>
+            </tr>
+            <tr>
+              <th>From</th>
+              <td>{{ leave.from_date.strftime('%d %B %Y') }}</td>
+            </tr>
+            <tr>
+              <th>To</th>
+              <td>{{ leave.to_date.strftime('%d %B %Y') }}</td>
+            </tr>
+            <tr>
+              <th>Duration</th>
+              <td>{{ leave.days }} day{{ '' if leave.days == 1 else 's' }}, both dates inclusive</td>
+            </tr>
+            <tr>
+              <th>Periods affected</th>
+              <td>
+                {% if periods %}
+                  {{ periods }} scheduled period{{ '' if periods == 1 else 's' }}
+                {% else %}
+                  None
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Recommended by</th>
+              <td>
+                {% if hod %}
+                  {{ hod.name }} (Head of Department)
+                {% else %}
+                  Not applicable &mdash; the applicant is the Head of Department
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Approved by</th>
+              <td>
+                <strong>{{ approver.name if approver else '—' }}</strong> (Dean)
+                {% if leave.dean_at %}
+                  <div class="form-text">{{ leave.dean_at.strftime('%d %B %Y, %H:%M') }}</div>
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# The reason is deliberately absent here, and so is the name of anyone who
+       covered a period. This page is public: anyone holding the letter can open
+       it. The letter itself carries neither, and a link that disclosed more than
+       the paper it verifies would make the paper the less private copy. #}
+    <div class="alert alert-secondary">
+      <i class="bi bi-info-circle"></i>
+      This confirms the approval only. The reason for the leave and the names of
+      colleagues covering the periods are not shown here, because this page is
+      open to whoever holds the letter.
+    </div>
+  </div>
+</div>
+{% endblock %}

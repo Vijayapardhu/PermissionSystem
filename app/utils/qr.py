@@ -58,21 +58,45 @@ def reference_for(request_id: int) -> str:
     return f'REQ-{int(request_id):04d}'
 
 
+#: Faculty leave uses its own prefix. The signature covers the whole reference
+#: string, so an LVR- link can never be replayed as a REQ- one and reach the
+#: permission register -- the two point at different records with different
+#: contents, and one of them is a medical reason.
+LEAVE_PREFIX = 'LVR-'
+
+
+def reference_for_leave(leave_id: int) -> str:
+    """The reference a leave letter carries, e.g. 7 -> 'LVR-0007'."""
+    return f'{LEAVE_PREFIX}{int(leave_id):04d}'
+
+
 def public_base_url() -> str:
-    """The https origin that verification links are minted against.
+    """The origin verification links are minted against.
 
-    Render terminates TLS in front of gunicorn and nothing in this stack rewrites
-    wsgi.url_scheme, so url_for(_external=True) emits http:// here -- and an
-    http link printed on a formal letter is wrong in a way a user cannot fix.
-    REDIRECT_URI is already the deployed origin, so reuse it rather than
-    inferring a scheme from a proxied Host header.
+    A printed link has to be openable by whoever is holding the paper, which is
+    rarely the machine that printed it. So the origin is resolved in this order:
 
-    The fallback exists for deployments that never set REDIRECT_URI (it is only
-    needed for Entra ID). There the forwarded scheme is trusted, because the
-    alternative is minting a link that downgrades the one page a stranger is
-    invited to open.
+    1. ``PUBLIC_BASE_URL``, if set. An explicit answer beats an inferred one.
+    2. The host the request arrived on, when the configured origin is loopback.
+       ``REDIRECT_URI`` has to be ``http://localhost:5000/auth/callback``
+       locally because that is what Entra registered, and reusing that value for
+       printed links minted every QR at localhost -- so a letter printed from a
+       laptop and scanned by a phone led nowhere. When the configured origin is
+       loopback it is a local development default rather than a published
+       address, and the reader is demonstrably somewhere else.
+    3. ``REDIRECT_URI``. This is what keeps production correct: Render terminates
+       TLS in front of gunicorn and nothing in this stack rewrites
+       ``wsgi.url_scheme``, so ``url_for(_external=True)`` emits ``http://``
+       here, and an http link printed on a formal letter is wrong in a way a user
+       cannot fix. The configured origin is the registered one and carries the
+       right scheme.
+    4. The forwarded headers, for deployments that never set either.
+
+    The step-2 exemption is deliberately limited to loopback. A configured
+    *public* origin is never overridden, so production cannot be talked into
+    emitting links to whatever Host header arrived.
     """
-    configured = current_app.config.get('REDIRECT_URI')
+    configured = current_app.config.get('PUBLIC_BASE_URL')
     if configured:
         parts = urlsplit(configured)
         if parts.scheme in ('http', 'https') and parts.netloc:
@@ -83,7 +107,36 @@ def public_base_url() -> str:
     if scheme not in ('http', 'https'):
         scheme = request.scheme
     host = request.headers.get('X-Forwarded-Host', '').split(',')[0].strip()
-    return f'{scheme}://{host or request.host}'.rstrip('/')
+    served = f'{scheme}://{host or request.host}'.rstrip('/')
+
+    redirect = current_app.config.get('REDIRECT_URI')
+    if redirect:
+        parts = urlsplit(redirect)
+        if parts.scheme in ('http', 'https') and parts.netloc:
+            configured_origin = f'{parts.scheme}://{parts.netloc}'
+            if not _is_loopback(parts.hostname):
+                return configured_origin
+            # Loopback configured and a real host served: the reader is not on
+            # this machine, so the machine's own address is the useless one.
+            if not _is_loopback((urlsplit(served).hostname or '')):
+                return served
+            return configured_origin
+
+    return served
+
+
+def _is_loopback(hostname: str) -> bool:
+    """Whether a host names this machine.
+
+    ``localhost`` and the 127.0.0.0/8 range, plus the empty string -- an unset
+    Host header is not evidence of a published address either.
+    """
+    if not hostname:
+        return True
+    host = hostname.strip().lower().strip('[]')
+    if host in ('localhost', '::1', '0.0.0.0'):
+        return True
+    return host.startswith('127.')
 
 
 def verification_token(request_id: int) -> str:
@@ -100,16 +153,27 @@ def verification_token(request_id: int) -> str:
 
 def verification_url(request_id: int) -> str:
     """The link the QR code points at, e.g. https://host/verify/REQ-0042.<token>."""
-    reference = f'{reference_for(request_id)}.{verification_token(request_id)}'
-    return f'{public_base_url()}{url_for("auth.verify_letter", reference=reference)}'
+    return _link(reference_for(request_id))
 
 
-def resolve_reference(reference: str) -> int:
-    """Return the request id a verification link names, or raise ValueError.
+def leave_verification_url(leave_id: int) -> str:
+    """The link on a faculty leave letter."""
+    return _link(reference_for_leave(leave_id))
 
-    404ing on a bad link keeps the endpoint from distinguishing "no such
-    request" from "forged signature", which would otherwise be a free oracle for
-    testing which reference numbers exist.
+
+def _link(reference: str) -> str:
+    """Sign a reference and mint the public URL that resolves it."""
+    token = _serializer().dumps(reference)
+    return (f'{public_base_url()}'
+            f'{url_for("auth.verify_letter", reference=f"{reference}.{token}")}')
+
+
+def _verified_reference(reference: str) -> str:
+    """The reference a signed link names, or raise ValueError.
+
+    Shared by both kinds of link. Failing here keeps the endpoint from
+    distinguishing "no such record" from "forged signature", which would otherwise
+    be a free oracle for testing which reference numbers exist.
     """
     claimed, separator, token = (reference or '').partition('.')
     if not separator or not token:
@@ -124,14 +188,31 @@ def resolve_reference(reference: str) -> int:
     # a link could read REQ-0001 while resolving to a different record.
     if signed != claimed:
         raise ValueError('reference does not match the signature')
+    return claimed
 
-    digits = claimed.removeprefix('REQ-')
+
+def _id_from(reference: str, prefix: str) -> int:
+    digits = reference.removeprefix(prefix)
     if not digits.isdigit():
-        raise ValueError('reference is not a request number')
-    request_id = int(digits)
-    if request_id < 1:
+        raise ValueError(f'reference is not a {prefix.rstrip("-")} number')
+    record_id = int(digits)
+    if record_id < 1:
         raise ValueError('reference is out of range')
-    return request_id
+    return record_id
+
+
+def resolve_reference(reference: str) -> int:
+    """Return the permission request id a verification link names."""
+    return _id_from(_verified_reference(reference), 'REQ-')
+
+
+def resolve_leave_reference(reference: str) -> int:
+    """Return the faculty leave id a verification link names.
+
+    An `LVR-` link raises here and a `REQ-` link raises in `resolve_reference`.
+    The signature covers the prefix, so neither can be presented as the other.
+    """
+    return _id_from(_verified_reference(reference), LEAVE_PREFIX)
 
 
 def data_uri(payload: str) -> str:
@@ -176,4 +257,14 @@ def letter_qr(request_id: int) -> dict:
         'url': url,
         'image': data_uri(url),
         'reference': reference_for(request_id),
+    }
+
+
+def leave_letter_qr(leave_id: int) -> dict:
+    """The same, for a faculty leave letter."""
+    url = leave_verification_url(leave_id)
+    return {
+        'url': url,
+        'image': data_uri(url),
+        'reference': reference_for_leave(leave_id),
     }

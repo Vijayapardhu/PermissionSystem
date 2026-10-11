@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Edit class &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Edit this class</h1>
+    <p class="page-head__sub">
+      {{ group.name }}
+      {%- if group.section_code %} &middot; {{ group.section_code }}{% endif %}
+      {%- if group.academic_year %} &middot; {{ group.academic_year }}{% endif %}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to the class
+    </a>
+  </div>
+</div>
+
+<form method="post" id="class-edit-form" novalidate>
+  {{ csrf_field() }}
+  <div class="card-au">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-pencil-square"></i> Details</h2>
+      <span class="form-text">The value each field holds now is shown under it</span>
+    </div>
+    <div class="card-au__body">
+
+      <div class="mb-3">
+        <label class="form-label" for="class-name">Class name</label>
+        <input type="text" class="form-control" id="class-name" name="name"
+               required minlength="3"
+               value="{{ form.name if form else group.name }}">
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ group.name }}
+        </span>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-sm-6">
+          <label class="form-label" for="class-section">Section</label>
+          <input type="text" class="form-control" id="class-section"
+                 name="section_code"
+                 value="{{ form.section_code if form else (group.section_code or '') }}">
+          <span class="field-current">
+            <span class="field-current__label">Now</span>
+            {{ group.section_code or '(none)' }}
+          </span>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label" for="class-year">Year</label>
+          <input type="text" class="form-control" id="class-year"
+                 name="academic_year"
+                 value="{{ form.academic_year if form else (group.academic_year or '') }}">
+          <span class="field-current">
+            <span class="field-current__label">Now</span>
+            {{ group.academic_year or '(none)' }}
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="card-au__foot">
+      <a href="{{ url_for('faculty.class_detail', class_id=group.id) }}"
+         class="btn btn-outline-secondary btn-pill">
+        <i class="bi bi-x-lg"></i> Exit without saving
+      </a>
+      <button type="submit" class="btn btn-primary btn-pill ms-2">
+        <i class="bi bi-arrow-right"></i> Review changes
+      </button>
+    </div>
+  </div>
+</form>
+
+<div class="card-au mt-3">
+  <div class="card-au__body">
+    <p class="form-text mb-0">
+      Nothing is saved by <em>Review changes</em> &mdash; the next screen lists
+      every field that differs and you confirm there. The roster on this class is
+      not affected by any of these fields.
+    </p>
+  </div>
+</div>
+{% endblock %}

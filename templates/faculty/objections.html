@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_state with context %}
+{% block title %}Objections &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Objections</h1>
+    <p class="page-head__sub">
+      Classwork a lecturer scheduled against a permission you had granted. Upholding
+      an objection puts the permission back; overruling one refuses it.
+    </p>
+  </div>
+</div>
+
+{% if objections %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-exclamation-diamond"></i> Awaiting your decision
+    </h2>
+    <span class="form-text">{{ objections | length }} open</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Classwork</th>
+          <th>Date</th>
+          <th>Importance</th>
+          <th>Raised by</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in objections %}
+        <tr>
+          <td class="table-au__idx">{{ loop.index }}</td>
+          <td class="table-au__strong">
+            {{ entry.classwork.title if entry.classwork else 'Classwork removed' }}
+            <span class="d-block form-text">Request #{{ entry.request_id }}</span>
+          </td>
+          <td>
+            {{ entry.classwork.date if entry.classwork else '—' }}
+            {% if entry.classwork %}
+              <span class="d-block form-text">{{ entry.classwork.session_label }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if entry.classwork %}
+              <span class="badge {{ entry.classwork.severity_class }}">
+                {{ entry.classwork.importance_label }}
+              </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>{{ entry.raised_by_name or '—' }}</td>
+          <td class="table-au__actions">
+            <a href="{{ url_for('faculty.request_detail', request_id=entry.request_id) }}"
+               class="btn btn-sm btn-primary btn-pill">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card-au"><div class="card-au__body">
+  {{ empty_state('bi-check2-circle', 'No open objections',
+      'When a lecturer schedules classwork that clashes with a permission you granted, it will appear here for a decision.') }}
+</div></div>
+{% endif %}
+{% endblock %}

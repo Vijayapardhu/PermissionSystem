@@ -18,7 +18,7 @@
         <div class="d-flex gap-2 justify-content-center flex-wrap mt-3">
           {% if current_user() and current_user().is_hod %}
             <a href="{{ url_for('hod.dashboard') }}" class="btn btn-primary btn-pill">HOD Dashboard</a>
-          {% elif current_user() and current_user().is_lecturer %}
+          {% elif current_user() and current_user().is_faculty %}
             <a href="{{ url_for('faculty.dashboard') }}" class="btn btn-primary btn-pill">Lecturer Dashboard</a>
           {% elif current_user() %}
             <a href="{{ url_for('student.dashboard') }}" class="btn btn-primary btn-pill">My Dashboard</a>

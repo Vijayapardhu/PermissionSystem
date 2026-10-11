@@ -1,0 +1,288 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Demo logins &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Demo logins</h1>
+    <p class="page-head__sub">
+      Every provisioned account, with what each one actually teaches. Sign in as
+      anybody to check the screen they get &mdash; development only.
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('auth.faculty_login') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to sign-in
+    </a>
+  </div>
+</div>
+
+<div class="card-au toolbar-sticky toolbar-sticky--flush mb-0">
+  <form class="toolbar toolbar--standalone" method="get" id="demo-filter"
+        onsubmit="return false">
+    <div class="filterbar">
+      <div class="filter-search">
+        <i class="bi bi-search filter-search__icon" aria-hidden="true"></i>
+        <input type="search" id="demo-q" class="form-control filter-search__input"
+               placeholder="Search by name, employee code or section&hellip;"
+               aria-label="Search the demo accounts" autocomplete="off">
+        {% if people %}
+        <a class="filter-search__clear" href="{{ url_for('auth.demo_logins') }}"
+           title="Clear the search" aria-label="Clear the search">
+          <i class="bi bi-x-lg" aria-hidden="true"></i>
+        </a>
+        {% endif %}
+      </div>
+
+      <select class="form-select filter-select filter-select--mode" name="role"
+              aria-label="Filter by role" id="demo-role">
+        <option value="">All roles</option>
+        <option value="HOD">Heads of department</option>
+        <option value="LECTURER">Lecturers</option>
+      </select>
+
+      <select class="form-select filter-select filter-select--timetable" name="teaches"
+              aria-label="Filter by whether they teach" id="demo-teaches">
+        <option value="">Anyone</option>
+        <option value="yes">Teaches a class</option>
+        <option value="no">No classes</option>
+      </select>
+
+      <div class="filterbar__actions">
+        <span class="filterbar__count" aria-live="polite">
+          <strong id="demo-count">{{ people | length }}</strong> staff
+        </span>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% macro account_row(person) %}
+<tr data-name="{{ (person.name or '')|lower }}"
+    data-code="{{ (person.employee_code or '')|lower }}"
+    data-sections="{{ person.sections|join(' ') }}"
+    data-role="{{ person.role }}" data-teaches="{{ 'yes' if person.classes else 'no' }}">
+  <td>
+    <div class="table-au__strong">{{ person.name }}</div>
+    <div class="form-text">
+      {% if person.employee_code %}{{ person.employee_code }}{% endif %}
+      {% if person.designation %} &middot; {{ person.designation }}{% endif %}
+    </div>
+  </td>
+  <td class="text-nowrap">
+    {% if person.role == 'HOD' %}
+      <span class="badge-au badge-au--pending"><i class="bi bi-person-badge"></i> HOD</span>
+    {% else %}
+      <span class="form-text">Lecturer</span>
+    {% endif %}
+  </td>
+  <td class="table-au__num">{{ person.classes }}</td>
+  <td class="table-au__num">{{ person.courses }}</td>
+  <td class="text-nowrap">{{ person.sections|join(', ') or '—' }}</td>
+  <td class="table-au__actions">
+    {% if person.email %}
+    <form method="post" action="{{ url_for('auth.dev_login') }}" class="d-inline">
+      {{ csrf_field() }}
+      <input type="hidden" name="email" value="{{ person.email }}">
+      <button class="btn btn-sm btn-primary btn-pill">
+        Sign in<i class="bi bi-box-arrow-right"></i>
+      </button>
+    </form>
+    {% else %}
+    <span class="form-text">No email yet</span>
+    {% endif %}
+  </td>
+</tr>
+{% endmacro %}
+
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-person-badge"></i> Teaching staff</h2>
+    <span class="form-text">HODs first &mdash; they hold both panels</span>
+  </div>
+
+  {% if people %}
+  <div class="au-table-wrap">
+    <table class="table-au" id="demo-staff">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Role</th>
+          <th class="table-au__num">Classes</th>
+          <th class="table-au__num">Course slots</th>
+          <th>Sections</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for person in people %}
+        {{ account_row(person) }}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      <strong>Classes</strong> is the number of subject groups they own, which is
+      what decides what <em>My Classes</em> shows. <strong>Course slots</strong>
+      counts the course teams they appear on, including shared ones.
+    </span>
+  </div>
+  {% else %}
+    {{ empty_state('people', 'No staff accounts yet',
+                   'Import the college register to provision lecturers.') }}
+  {% endif %}
+</div>
+
+{# Deans get their own block rather than a row among the teaching staff. They are
+   not teaching staff -- they teach no classes in this portal, which is why the
+   column above would read zeroes -- and their panel is the leave queue alone. #}
+{% if deans %}
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-award"></i> Dean</h2>
+    <span class="form-text">The final signature on a faculty leave</span>
+  </div>
+
+  <div class="au-table-wrap">
+    <table class="table-au" id="demo-deans">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Role</th>
+          <th>Decides</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for dean in deans %}
+        <tr data-name="{{ (dean.name or '')|lower }}"
+            data-code="{{ (dean.employee_code or '')|lower }}"
+            data-sections=""
+            data-role="{{ dean.role }}" data-teaches="no">
+          <td>
+            <div class="table-au__strong">{{ dean.name }}</div>
+            <div class="form-text">
+              {% if dean.employee_code %}{{ dean.employee_code }}{% endif %}
+              {% if dean.designation %} &middot; {{ dean.designation }}{% endif %}
+            </div>
+          </td>
+          <td class="text-nowrap">
+            <span class="badge-au badge-au--approved"><i class="bi bi-award"></i> Dean</span>
+          </td>
+          <td class="text-nowrap">
+            Faculty leave, after the HOD's approval
+          </td>
+          <td class="table-au__actions">
+            {% if dean.email %}
+            <form method="post" action="{{ url_for('auth.dev_login') }}" class="d-inline">
+              {{ csrf_field() }}
+              <input type="hidden" name="email" value="{{ dean.email }}">
+              <button class="btn btn-sm btn-primary btn-pill">
+                Sign in<i class="bi bi-box-arrow-right"></i>
+              </button>
+            </form>
+            {% else %}
+            <span class="form-text">No email yet</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-foot">
+    <span>
+      A Dean does not hold classes or file leave here &mdash; their role is the
+      approval nobody below them can give. Leaves the HOD approves arrive in their
+      queue; an HOD's own leave goes straight there, since no HOD may decide
+      another HOD's.
+    </span>
+  </div>
+</div>
+{% endif %}
+
+{% if students %}
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-mortarboard"></i> Students</h2>
+    <span class="form-text">The first {{ students | length }} by roll number</span>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Roll number</th>
+          <th>Sign in as</th>
+          <th class="table-au__actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in students %}
+        <tr>
+          <td class="table-au__strong">{{ student.roll_number }}</td>
+          <td class="form-text">{{ student.email }}</td>
+          <td class="table-au__actions">
+            <form method="post" action="{{ url_for('auth.dev_login') }}" class="d-inline">
+              {{ csrf_field() }}
+              <input type="hidden" name="email" value="{{ student.email }}">
+              <button class="btn btn-sm btn-outline-secondary btn-pill">
+                Sign in<i class="bi bi-box-arrow-right"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// A dev-only convenience page, so the filtering is plain script over rows that
+// are already on the page -- no request per keystroke, and it keeps working if
+// the server is busy compiling.
+(function () {
+  var box = document.getElementById('demo-q');
+  var role = document.getElementById('demo-role');
+  var teaches = document.getElementById('demo-teaches');
+  var table = document.getElementById('demo-staff');
+  var count = document.getElementById('demo-count');
+  if (!table) return;
+
+  var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+
+  function apply() {
+    var needle = (box.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var wantRole = role.value;
+    var wantTeaches = teaches.value;
+    var shown = 0;
+
+    rows.forEach(function (row) {
+      // Every word has to appear somewhere, so "6817 T6" narrows rather than
+      // widening the way a plain substring match would.
+      var haystack = [row.dataset.name, row.dataset.code,
+                      row.dataset.sections].join(' ');
+      var wordsMatch = needle.every(function (w) {
+        return haystack.indexOf(w) !== -1;
+      });
+      var roleMatch = !wantRole || row.dataset.role === wantRole;
+      var teachMatch = !wantTeaches || row.dataset.teaches === wantTeaches;
+      var visible = wordsMatch && roleMatch && teachMatch;
+      row.hidden = !visible;
+      if (visible) shown += 1;
+    });
+
+    count.textContent = shown;
+  }
+
+  box.addEventListener('input', apply);
+  role.addEventListener('change', apply);
+  teaches.addEventListener('change', apply);
+}());
+</script>
+{% endblock %}

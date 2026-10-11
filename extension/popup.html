@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Faculty assistant</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <span class="head__mark"><i class="bi bi-lightning-charge-fill"></i></span>
+    <h1>Faculty assistant</h1>
+    <!-- The portal address is a one-time setting, so it collapses to the host
+         once set rather than taking half the popup for the rest of its life.
+         An HTML comment and not a Jinja one: Chrome serves this file as-is, and
+         a Jinja comment is rendered as literal text. -->
+    <details class="setup" id="setup">
+      <summary class="setup__summary" id="setup-summary">
+        <span class="setup__host" id="setup-host">set up</span>
+        <i class="bi bi-chevron-down setup__chevron" aria-hidden="true"></i>
+      </summary>
+      <div class="setup__body">
+        <label class="label" for="portal">Portal address</label>
+        <div class="row">
+          <input id="portal" type="url" spellcheck="false"
+                 placeholder="http://127.0.0.1:5000">
+          <button id="save-portal" class="btn">Save</button>
+        </div>
+        <div class="row row-tight">
+          <button id="detect" class="btn btn-quiet">
+            <i class="bi bi-crosshair"></i> Detect from this tab
+          </button>
+          <button id="grant" class="btn btn-quiet">
+            <i class="bi bi-shield-check"></i> Allow on this site
+          </button>
+        </div>
+        <p class="hint" id="setup-hint"></p>
+      </div>
+    </details>
+  </header>
+
+  <section class="list-head">
+    <span id="list-title">Your classes</span>
+    <div class="list-head__actions">
+      <button id="reload" class="mini" title="Read the page again"
+              aria-label="Read the page again">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+      <button id="open-classes" class="mini" title="Open the classes page"
+              aria-label="Open the classes page">
+        <i class="bi bi-box-arrow-up-right"></i>
+      </button>
+    </div>
+  </section>
+
+  <ul id="classes" class="list"></ul>
+  <p id="empty" class="empty">
+    <i class="bi bi-people"></i>
+    <span id="empty-text">Open <strong>My Classes</strong> in the portal, then
+      press the refresh button above.</span>
+  </p>
+
+  {# The inspector works on any page, including the college's own attendance
+     system, so it sits below the class list rather than inside the setup
+     panel -- it is not about the portal and must not read as such. #}
+  <section class="tools">
+    <button id="inspect" class="tools__btn" type="button">
+      <i class="bi bi-search-heart"></i>
+      <span>Inspect this page</span>
+    </button>
+    <p class="tools__hint">Works on any site. Read-only &mdash; it reports what
+      the page looks like and changes nothing.</p>
+  </section>
+
+  <footer class="foot">
+    <i class="bi bi-info-circle" aria-hidden="true"></i>
+    <span>This popup only opens the attendance sheet. On that page the panel
+      marks the permission students &mdash; and never presses save.</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

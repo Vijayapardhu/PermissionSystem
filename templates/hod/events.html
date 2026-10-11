@@ -24,6 +24,14 @@
     </select>
     <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
   </form>
+  {# The row above saves inline, which is fine for a one-character fix. The view
+     and edit pages are for looking an event up, and for a change worth
+     previewing before it lands. #}
+  <a href="{{ url_for('hod.event_detail', event_id=event.id) }}"
+     class="btn btn-sm btn-outline-secondary btn-pill"
+     title="Open {{ event.name }}">
+    <i class="bi bi-box-arrow-up-right"></i> Open
+  </a>
   <form method="post" action="{{ delete_url }}" class="d-inline"
         onsubmit="return confirm('Delete {{ event.name }}?{% if event.sub_count %} Its {{ event.sub_count }} sub-event{{ 's' if event.sub_count != 1 }} go too.{% endif %} Past requests keep their record.');">
     {{ csrf_field() }}

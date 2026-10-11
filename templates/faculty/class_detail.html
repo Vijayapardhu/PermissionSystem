@@ -20,9 +20,11 @@
     </p>
   </div>
   <div class="page-head__actions">
-    <a href="{{ url_for('faculty.attendance', class_id=class_group.id, date=view_date) }}"
-       class="btn btn-primary btn-pill">
-      <i class="bi bi-check2-square"></i> Mark Attendance
+    {# This page is the class's view; the edit page shows each stored value and
+       previews the difference before anything is written. #}
+    <a href="{{ url_for('faculty.edit_class', class_id=class_group.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-pencil-square"></i> Edit
     </a>
     <a href="{{ url_for('faculty.classes') }}" class="btn btn-outline-secondary btn-pill">
       <i class="bi bi-arrow-left"></i> All Classes
@@ -62,8 +64,36 @@
 
 <div class="card-au mb-3">
   <div class="card-au__head">
-    <h2 class="card-au__title"><i class="bi bi-list-check"></i> Class Roster &amp; Permissions</h2>
-    <span class="form-text">{{ rows | length }} row{{ '' if rows|length == 1 else 's' }}</span>
+    <h2 class="card-au__title">
+      <i class="bi bi-list-check"></i>
+      {% if show_all %}Class Roster &amp; Permissions{% else %}On Permission{% endif %}
+    </h2>
+    {# The default view is the students who have permission, because that is
+       what a lecturer opens this page to answer. The full roster is one click
+       away rather than hidden, since "who am I teaching" is the other half of
+       the question. Carried in the URL rather than a form so the browser's back
+       button undoes it. #}
+    <span class="form-text">
+      {% if show_all %}
+        {{ rows | length }} of {{ summary.roster }}
+      {% else %}
+        {{ rows | length }} of {{ summary.roster }} on permission
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="px-3 pt-2 pb-0 d-flex justify-content-end no-print">
+    {% if show_all %}
+      <a class="btn btn-sm btn-outline-secondary btn-pill"
+         href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat()) }}">
+        <i class="bi bi-file-earmark-check"></i> Show only on permission
+      </a>
+    {% else %}
+      <a class="btn btn-sm btn-outline-secondary btn-pill"
+         href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat(), view='all') }}">
+        <i class="bi bi-people"></i> Full class ({{ summary.roster }})
+      </a>
+    {% endif %}
   </div>
 
   {% if rows %}
@@ -77,7 +107,6 @@
           <th>Contact</th>
           <th>On Date</th>
           <th>Permission</th>
-          <th>Attendance</th>
           <th class="table-au__actions"></th>
         </tr>
       </thead>
@@ -127,17 +156,6 @@
               <span class="text-muted small">No permission on this date</span>
             {% endif %}
           </td>
-          <td>
-            {% if row.attendance == 'PRESENT' %}
-              <span class="badge-au badge-au--approved">Present</span>
-            {% elif row.attendance == 'ABSENT' %}
-              <span class="badge-au badge-au--rejected">Absent</span>
-            {% elif row.attendance == 'ON_PERMISSION' %}
-              <span class="badge-au badge-au--pending">On permission</span>
-            {% else %}
-              <span class="badge-au badge-au--cancelled">Not marked</span>
-            {% endif %}
-          </td>
           <td class="table-au__actions">
             <form method="post" class="d-inline"
                   action="{{ url_for('faculty.delete_member', class_id=class_group.id, member_id=member.id) }}"
@@ -157,16 +175,26 @@
   <div class="table-foot">
     <span>
       {{ summary.on_permission }} on permission &middot;
-      {{ summary.present }} present &middot; {{ summary.absent }} absent
-    </span>
-    <span class="table-foot__stats">
-      <span class="table-foot__stat">Attendance marked
-        <strong>{{ summary.present + summary.absent }}</strong></span>
+      {{ summary.linked }} of {{ summary.roster }} linked to an account
     </span>
   </div>
   {% else %}
-    {{ empty_state('upload', 'Roster is empty',
-                   'Upload a spreadsheet of roll numbers to populate this class.') }}
+    {# Two different empties: "nobody on permission" is good news and must not
+       be rendered as "your roster is empty", which is a different problem with
+       a different fix. #}
+    {% if show_all %}
+      {{ empty_state('upload', 'Roster is empty',
+                     'Upload a spreadsheet of roll numbers to populate this class.') }}
+    {% else %}
+      {{ empty_state('check2-circle', 'Nobody has permission on this date',
+                     'Every student in this section is available.') }}
+      <div class="text-center pb-3">
+        <a class="btn btn-outline-secondary btn-pill"
+           href="{{ url_for('faculty.class_detail', class_id=class_group.id, date=view_date.isoformat(), view='all') }}">
+          <i class="bi bi-people"></i> Show the full class
+        </a>
+      </div>
+    {% endif %}
   {% endif %}
 </div>
 
@@ -199,8 +227,8 @@
       <div class="card-au__body">
         <p class="small text-muted">
           Removes <strong>{{ class_group.name }}</strong>, its
-          {{ summary.roster }} roster {{ 'entry' if summary.roster == 1 else 'entries' }}
-          and all attendance recorded for it. Permission requests are not affected.
+          {{ summary.roster }} roster {{ 'entry' if summary.roster == 1 else 'entries' }}.
+          Permission requests are not affected.
         </p>
         <form method="post" action="{{ url_for('faculty.delete_class', class_id=class_group.id) }}"
               onsubmit="return confirm('Delete {{ class_group.name }}? This cannot be undone.');">

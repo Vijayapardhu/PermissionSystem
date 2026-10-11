@@ -27,6 +27,134 @@
   </div>
 </div>
 
+{# Review desks: any number of named reviewers, matched on words.
+
+     Separate from the three selects below on purpose. Three fixed slots could
+     not cover a department that wants a sports desk, an interviews desk and a
+     placements desk, and adding a fourth meant a code change and a redeploy.
+     The slots stay, as the fallback for anything no desk matches. #}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-signpost-2"></i> Review Desks</h2>
+    <span class="form-text">{{ routes | length }} configured</span>
+  </div>
+
+  {% if routes %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th class="table-au__idx">#</th>
+          <th>Desk</th>
+          <th>Matches on</th>
+          <th>Reviewed by</th>
+          <th class="table-au__actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in routes %}
+        <tr>
+          <td class="table-au__idx">{{ rule.position }}</td>
+          <td class="table-au__strong">
+            {{ rule.name }}
+            {% if rule.description %}
+              <span class="d-block form-text">{{ rule.description }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% for word in rule.keywords %}
+              <span class="badge text-bg-light">{{ word }}</span>
+            {% else %}
+              <span class="text-muted">no words &mdash; matches nothing</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% if rule.faculty_id %}
+              <span class="badge-au badge-au--approved">{{ rule.faculty_name or 'Unknown' }}</span>
+            {% else %}
+              <span class="badge-au badge-au--pending">nobody &mdash; inert</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <form method="post" class="d-inline"
+                  action="{{ url_for('hod.route_delete', route_id=rule.id) }}"
+                  onsubmit="return confirm('Remove the {{ rule.name }} desk? Requests already routed to it are unaffected.');">
+              {{ csrf_field() }}
+              <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="card-au__body">
+      <p class="text-muted mb-0">
+        No desks configured. A request from a student with no proctor goes to
+        whichever lecturer is least busy.
+      </p>
+    </div>
+  {% endif %}
+</div>
+
+<div class="collapse mb-3" id="newRoute">
+  <div class="card-au">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-plus-circle"></i> New review desk</h2>
+    </div>
+    <div class="card-au__body">
+      <form method="post" action="{{ url_for('hod.route_create') }}">
+        {{ csrf_field() }}
+        <div class="row g-2">
+          <div class="col-12 col-md-4">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" name="name" required
+                   minlength="2" maxlength="60" placeholder="Sports &amp; games">
+          </div>
+          <div class="col-12 col-md-4">
+            <label class="form-label">Reviewed by</label>
+            <select class="form-select" name="faculty_id">
+              <option value="">Nobody yet &mdash; assign later</option>
+              {% for person in lecturers %}
+                <option value="{{ person.id }}">{{ person.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Order</label>
+            <input type="number" class="form-control" name="position"
+                   value="10" min="0">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Words that send a request here</label>
+            <input type="text" class="form-control" name="keywords"
+                   placeholder="sports, match, tournament">
+            <div class="form-text">
+              Comma separated. Matching is a substring test on the student's
+              reason, so &ldquo;fest&rdquo; also catches &ldquo;festival&rdquo;.
+              The first desk to match wins &mdash; put the specific ones first.
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Note (optional)</label>
+            <input type="text" class="form-control" name="description" maxlength="160">
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-pill mt-3">
+          <i class="bi bi-check2"></i> Add desk
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<button class="btn btn-outline-primary btn-pill mb-3 no-print"
+        data-bs-toggle="collapse" data-bs-target="#newRoute"
+        aria-expanded="false">
+  <i class="bi bi-plus-circle"></i> Add a review desk
+</button>
+
 <div class="card-au mb-3">
   <div class="card-au__head">
     <h2 class="card-au__title"><i class="bi bi-signpost-2"></i> Dedicated Reviewers</h2>
@@ -40,23 +168,34 @@
         ('general_faculty_id', 'General proctor', 'Fallback when a student sits on nobody\u2019s proctor list.'),
       ] %}
       {% for field, label, hint in queues %}
+      {% set picked = form[field] if form and field in form else routing[field] %}
       <div class="mb-3">
         <label for="{{ field }}" class="form-label">{{ label }}</label>
         <select class="form-select" id="{{ field }}" name="{{ field }}">
           <option value="">Default (student's proctor)</option>
           {% for lecturer in lecturers %}
           <option value="{{ lecturer.id }}"
-                  {{ 'selected' if routing and routing[field] == lecturer.id }}>
+                  {{ 'selected' if picked and picked|string == lecturer.id|string }}>
             {{ lecturer.name }}
           </option>
           {% endfor %}
         </select>
+        {# What this queue points at right now, stated as a sentence rather than
+           left for you to infer from which option is ticked. Routing decides
+           whose queue every future request lands in. #}
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ current_names[field] }}
+        </span>
         <div class="form-text">{{ hint }}</div>
       </div>
       {% endfor %}
       <button type="submit" class="btn btn-primary btn-pill">
-        <i class="bi bi-check-lg"></i> Save routing
+        <i class="bi bi-arrow-right"></i> Review changes
       </button>
+      <span class="form-text ms-2">
+        Nothing is saved by this button. The next screen lists what moves.
+      </span>
     </form>
   </div>
 </div>

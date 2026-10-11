@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import roll, empty_state with context %}
+{% from '_macros.html' import roll, empty_state, search_form with context %}
 {% block title %}Students &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -10,18 +10,11 @@
   </div>
 </div>
 
-<div class="card-au mb-3">
-  <form class="toolbar" method="get">
-    <div class="input-group input-group-sm" style="max-width:260px">
-      <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="search" class="form-control" name="q" value="{{ search }}"
-             placeholder="Roll number or name" aria-label="Search students">
-    </div>
-    <button type="submit" class="btn btn-sm btn-primary btn-pill">Search</button>
-    {% if search %}
-    <a href="{{ url_for('hod.students') }}" class="btn btn-sm btn-outline-secondary btn-pill">Clear</a>
-    {% endif %}
-  </form>
+{# Pins under the top bar. The directory runs to over a thousand students, so
+   without this the search box is gone by the time you have read thirty rows. #}
+<div class="card-au au-searchbar">
+  {{ search_form(value=search, placeholder='Roll number or name',
+                 label='Search students', size='bar') }}
 </div>
 
 <div class="card-au">
@@ -56,7 +49,16 @@
           <td class="table-au__strong text-nowrap">{{ student.name }}</td>
           <td class="small text-muted">{{ student.email }}</td>
           <td class="small">{{ student.phone or '—' }}</td>
-          <td class="table-au__num">{{ student.classes }}</td>
+          <td class="table-au__num">{{ student.classes }}
+            {# Proctoring is not a class. A separate mark, so the HOD can see at
+               a glance which students have nobody allocated to review their
+               requests -- with routing falling back to the least-loaded
+               lecturer when a proctor is missing, those students are the ones
+               being handled by whoever happened to be free. #}
+            {% if not student.proctored %}
+            <div><span class="badge text-bg-warning" title="No proctor allocated">no proctor</span></div>
+            {% endif %}
+          </td>
           <td class="table-au__num">{{ student.total }}</td>
           <td class="table-au__num text-success">{{ student.approved }}</td>
           <td class="table-au__num">{{ student.pending }}</td>

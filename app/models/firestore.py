@@ -38,6 +38,15 @@ from zoneinfo import ZoneInfo
 
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+# The type mapping is shared with the SQL backend so a record written through one
+# reads back identically through the other. Re-exported here because everything
+# above this module has always imported it from here, and moving it should not
+# mean touching thirty call sites to rename a helper.
+from app.models.values import (  # noqa: F401
+    UNCHANGED as _UNCHANGED, to_local_naive, to_python_value, to_timestamp,
+    utc_now,
+)
+
 # Errors worth a second attempt. Everything else -- a missing field, a bad
 # document id, a permission failure -- fails identically on a retry and is better
 # reported immediately.
@@ -342,6 +351,16 @@ class Store:
         """Prove the store answers. Raises DatabaseUnavailable if it does not."""
         self.collection('users').limit(1).get(timeout=self.timeout)
 
+    def batch(self):
+        """A Firestore write batch.
+
+        Present so the SQL store can answer the same call: the import script
+        batches through the store rather than reaching for the client, and the two
+        backends are meant to be interchangeable behind that interface.
+        """
+        self._require_client()
+        return self.client.batch()
+
     def _require_client(self):
         if self.client is None:
             raise DatabaseUnavailable(
@@ -370,6 +389,14 @@ class Store:
         an automatic index too, so it costs the same as an equality filter. It is
         a named argument rather than a `where` key so it can never be mistaken
         for a document field called `array_contains`.
+
+        Filter values go through the same type mapping as writes. Dates are
+        stored as ISO strings, so a filter for a `date` object has to be
+        converted too or Firestore rejects it as an unencodable type -- and it
+        fails at request time, from a call site that looks perfectly ordinary.
+        A mismatch here is silent rather than loud: a date stored as a string and
+        queried as a string works, so getting this wrong in the other direction
+        returns nothing at all instead of raising.
         """
         query = self.collection(name)
         field_filter = FieldFilter
@@ -380,11 +407,12 @@ class Store:
                 # foreign key is not set", which the caller already knows.
                 continue
             query = query.where(
-                filter=field_filter(field, '==', value))
+                filter=field_filter(field, '==', self._to_firestore_item(value)))
         for field, value in (array_contains or {}).items():
             if value is None:
                 continue
-            query = query.where(filter=field_filter(field, 'array_contains', value))
+            query = query.where(filter=field_filter(
+                field, 'array_contains', self._to_firestore_item(value)))
         return [self.to_python(snapshot.to_dict() or {})
                 for snapshot in query.stream(timeout=self.timeout)]
 
@@ -398,7 +426,7 @@ class Store:
             return None
         data = self.to_python(dict(snapshot.to_dict() or {}))
         # Keep the stored id, coercing only int-like values. A blind int()
-        # crashes on string-keyed documents (settings, attendance marks),
+        # crashes on string-keyed documents (settings, permission letters),
         # which insert() explicitly supports -- and the crash used to surface
         # as a 503, sending the reader to check the database instead of the
         # mapping.
@@ -422,7 +450,7 @@ class Store:
 
         if doc_id is None:
             doc_id = self.next_id(name)
-        # Attendance marks are keyed by "<class>:<student>:<date>" so a second
+        # Anything keyed as "<a>:<b>:<c>" does this: a second
         # save for the same day overwrites the first. That id is a string by
         # design, and only the allocated integer ones are coerced.
         payload['id'] = int(doc_id) if _is_int_id(doc_id) else doc_id
@@ -501,10 +529,31 @@ class Store:
             elif hasattr(value, 'value'):  # the models' Enums
                 out[key] = value.value
             elif isinstance(value, (list, tuple)):
-                out[key] = [str(item) for item in value]
+                # Element types are preserved. Flattening every list to strings
+                # looks harmless and is not: an id stored as "42" does not match
+                # a query for the number 42, and Firestore will not compare the
+                # two. That silently broke `array_contains` over `member_ids`,
+                # so a student added to a group permission could not find the
+                # permission they were covered by -- the query was correct and
+                # the write had changed the type underneath it.
+                out[key] = [self._to_firestore_item(item) for item in value]
             else:
                 out[key] = str(value)
         return out
+
+    def _to_firestore_item(self, item):
+        """One list element, keeping its type where Firestore has one."""
+        if item is None or isinstance(item, (str, bool, int, float)):
+            return item
+        if isinstance(item, datetime):
+            return to_timestamp(item)
+        if isinstance(item, date):
+            return item.isoformat()
+        if isinstance(item, time):
+            return item.isoformat()
+        if hasattr(item, 'value'):  # the models' Enums
+            return self._to_firestore_item(item.value)
+        return str(item)
 
     def to_python(self, data):
         """Stored fields back into the types Postgres used to return."""
@@ -516,5 +565,25 @@ class Store:
         return out
 
 
-store = Store()
+def _select_backend():
+    """The store this process should talk to.
+
+    Firestore unless `DATABASE_BACKEND=sql`. The choice is made once, here, so
+    that no model, route or service has to know which database it is running
+    against -- every one of them imports `store` from this module and calls the
+    same methods either way. See `app/models/sqlstore.py` for the SQL side, which
+    implements this same interface on SQLite or Postgres.
+
+    Returning Firestore on an unrecognised value is deliberate: a typo in the
+    environment should not silently point development at an empty database
+    instead of the records the developer meant to see.
+    """
+    backend = (os.environ.get('DATABASE_BACKEND') or '').strip().lower()
+    if backend == 'sql':
+        from app.models.sqlstore import SqlStore
+        return SqlStore()
+    return Store()
+
+
+store = _select_backend()
 db = store  # the name the routes already import

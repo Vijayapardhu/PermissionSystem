@@ -6,19 +6,28 @@ from flask import (
 )
 
 from app.models import (
-    ApprovalAction, PermissionType, RequestStatus, UserRole,
+    ApprovalAction, LeaveStatus, PermissionType, RequestStatus, UserRole,
 )
-from app.models.classes import ClassModel, MemberModel
+from app.models.classes import ClassModel, MemberModel, KIND_CLASS, KIND_PROCTOR
+from app.models.leave import (
+    AdjustmentModel, LeaveModel, LeaveSummary, TimetableModel,
+)
 from app.models.permission import (
     ApprovalModel, PermissionModel, ProofModel, attach_members,
 )
+from app.models.routes import RouteModel
 from app.models.settings import SettingsModel
 from app.models.user import UserModel
+from app.permissions.leave_service import (
+    LeaveError, hod_act_on_leave, letter_context,
+)
 from app.permissions.pages import permission_required
 from app.permissions.service import (
-    ValidationError, categorize_reason, hod_act_on_request,
+    ValidationError, categorize_reason, hod_act_directly,
+    hod_act_on_request,
 )
 from app.utils.roster import RosterError, parse_faculty_roster
+from app.utils.changes import diff_fields, summarise
 from app.utils.security import current_user
 
 hod_bp = Blueprint('hod', __name__, url_prefix='/hod')
@@ -168,7 +177,7 @@ def requests():
 
     reviewers = [
         {'id': lecturer.id, 'name': lecturer.name}
-        for lecturer in UserModel.get_lecturers()
+        for lecturer in UserModel.get_faculty()
     ]
     counts = {
         'awaiting': sum(1 for r in records
@@ -227,6 +236,44 @@ def request_detail(request_id: int):
         proofs=ProofModel.find_by_request(request_id),
         history=ApprovalModel.find_by_request(request_id),
     )
+
+
+@hod_bp.route('/requests/<int:request_id>/decide', methods=['POST'])
+@permission_required('hod.request_action')
+def decide_request_directly(request_id: int):
+    """The HOD decides a request still sitting in somebody else's queue.
+
+    Routing puts a request in the student's proctor's queue. That proctor may be
+    unavailable, and a student waiting on a letter does not get one by waiting
+    longer -- so the HOD can take the decision here without waiting for a stage
+    that is not moving.
+
+    Same grant as the ordinary HOD action, and deliberately: both write the
+    status of a request and both must stay the HOD's alone.
+    """
+    user = current_user()
+    action = _approval_action(request.form.get('action', ''))
+    remarks = (request.form.get('remarks') or '').strip()
+
+    group_scope = (request.form.get('member_scope') == 'group')
+    submitted_members = request.form.getlist('member_ids') if group_scope else None
+
+    try:
+        hod_act_directly(
+            request_id=request_id,
+            hod=user,
+            action=action,
+            remarks=remarks,
+            base_url=url_for('hod.dashboard', _external=True).rsplit('/', 1)[0],
+            member_ids=submitted_members,
+        )
+    except ValidationError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('hod.request_detail', request_id=request_id))
+
+    verb = 'approved' if action == ApprovalAction.APPROVED else 'rejected'
+    flash(f'Request #{request_id} {verb} directly by the HOD.', 'success')
+    return redirect(url_for('hod.request_detail', request_id=request_id))
 
 
 @hod_bp.route('/requests/<int:request_id>/action', methods=['POST'])
@@ -300,6 +347,7 @@ def students():
     # Firestore has no subquery, and one read per student would be worse.
     per_student = Counter()
     class_counts = Counter()
+    proctor_counts = Counter()
     for row in store.documents('permission_requests'):
         per_student[row.get('student_id')] += 1
     for row in store.documents('permission_requests',
@@ -311,8 +359,20 @@ def students():
     for row in store.documents('permission_requests',
                                status=RequestStatus.REJECTED.value):
         per_student[(row.get('student_id'), 'rejected')] += 1
+
+    # Taught classes only, and the proctor count kept beside it rather than
+    # folded in. The column is labelled "Classes"; a proctor list is not one, so
+    # counting it here told the HOD a student was in more classes than they are,
+    # and hid the fact that they had no proctor at all.
+    proctor_class_ids = {
+        row['id'] for row in store.documents('class_groups')
+        if (row.get('kind') or KIND_CLASS) == KIND_PROCTOR
+    }
     for row in store.documents('class_members'):
-        class_counts[row.get('student_id')] += 1
+        if row.get('class_id') in proctor_class_ids:
+            proctor_counts[row.get('student_id')] += 1
+        else:
+            class_counts[row.get('student_id')] += 1
 
     students = []
     for row in rows:
@@ -328,6 +388,7 @@ def students():
             'pending': per_student[(student_id, 'pending')],
             'rejected': per_student[(student_id, 'rejected')],
             'classes': class_counts[student_id],
+            'proctored': proctor_counts[student_id] > 0,
         })
     students.sort(key=lambda s: s['roll_number'] or '')
     students = students[:200]
@@ -360,7 +421,17 @@ def faculty_workload():
     for row in store.documents('approval_history'):
         decisions[row.get('faculty_id')] += 1
     class_counts = Counter()
+    # Taught classes only. A proctor list is a mentoring allocation, and
+    # counting it here inflated the workload figure the HOD uses to decide who
+    # is carrying what -- a lecturer mentoring two batches looked like they were
+    # teaching two more subjects.
+    proctor_group_ids = {
+        row['id'] for row in store.documents('class_groups')
+        if (row.get('kind') or KIND_CLASS) == KIND_PROCTOR
+    }
     for row in store.documents('class_groups'):
+        if row.get('id') in proctor_group_ids:
+            continue
         class_counts[row.get('faculty_id')] += 1
 
     lecturers = [
@@ -373,6 +444,10 @@ def faculty_workload():
             'rejected': assigned[(user_row['id'], RequestStatus.REJECTED.value)],
             'decisions': decisions[user_row['id']],
             'classes': class_counts[user_row['id']],
+            # Carried so the template can offer 'make deputy' to a
+            # lecturer and 'revoke' to a deputy, instead of the same
+            # button doing both and the HOD having to remember which.
+            'role': user_row.get('role'),
         }
         for user_row in store.documents('users',
                                         role=UserRole.LECTURER.value,
@@ -477,39 +552,244 @@ def add_faculty():
 def routing():
     """Name the dedicated reviewers for the event, curricular and general queues.
 
-    GET shows the routing page; POST saves it. Each select holds a lecturer
-    id, or nothing to clear that queue back to the default (the student's own
-    proctor, then the least-loaded lecturer). Only active lecturers are
-    accepted, so a stale or tampered id cannot park a queue on an account that
-    cannot review.
+    GET shows the routing page, with the reviewer each queue currently points at
+    spelled out beside its select. POST does not save: it previews the change,
+    and `/faculty/routing/apply` is what writes. Routing is department-wide and
+    silently decides whose queue every future request lands in, so it gets the
+    same confirmation as everything else.
     """
+    current = SettingsModel.get_routing()
+    faculty = [{'id': row.id, 'name': row.name}
+               for row in UserModel.get_faculty()]
+
     if request.method == 'GET':
-        lecturers = [
-            {'id': row.id, 'name': row.name}
-            for row in UserModel.get_lecturers()
-        ]
         return render_template(
             'hod/routing.html',
+            routes=RouteModel.find_all(),
             user=current_user(),
-            lecturers=lecturers,
-            routing=SettingsModel.get_routing(),
+            lecturers=faculty,
+            routing=current,
+            current_names=_routing_names(current),
         )
 
-    chosen = {}
-    for field in ('event_faculty_id', 'curricular_faculty_id',
-                  'general_faculty_id'):
-        raw = (request.form.get(field) or '').strip()
-        lecturer = UserModel.find_by_id(int(raw)) if raw.isdigit() else None
-        if raw and (lecturer is None or not lecturer.is_active
-                    or not lecturer.is_lecturer):
-            flash('One of the selected reviewers is not an active lecturer. '
-                  'Nothing was changed.', 'danger')
-            return redirect(url_for('hod.routing'))
-        chosen[field] = lecturer.id if lecturer else None
+    chosen, error = _routing_choice(request.form)
+    if error:
+        flash(error, 'danger')
+        return render_template(
+            'hod/routing.html',
+            routes=RouteModel.find_all(),
+            user=current_user(),
+            lecturers=faculty,
+            routing=current,
+            current_names=_routing_names(current),
+            form=request.form,
+        )
+
+    changes = _routing_changes(current, chosen)
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('hod.routing'))
+
+    return render_template('hod/routing_confirm.html', user=current_user(),
+                           changes=changes, form=request.form)
+
+
+@hod_bp.route('/faculty/set-deputy', methods=['POST'])
+@permission_required('hod.set_deputy')
+def set_deputy():
+    """Promote a lecturer to Deputy HOD, or revoke it.
+
+    Promotion is a role change on the account the lecturer already has, so
+    nothing about their teaching moves: their classes, their proctor list and
+    their leave are all attached to the person rather than to a job title. A
+    separate "deputy" account would have split one human in half and taken the
+    teaching with them.
+
+    Two things are deliberately not affected. A deputy is not part of
+    `is_approver`, so faculty leave still climbs the fixed HOD/Dean ladder -- a
+    deputy who could sign their own leave past the HOD would be a hole in the
+    workflow that exists to stop exactly that. And a deputy keeps no
+    administrative panel: no faculty register, no routing, no events.
+    """
+    from app.models import UserRole
+    from app.models.user import UserModel
+
+    user = current_user()
+    faculty_id = request.form.get('faculty_id', type=int)
+    make_deputy = request.form.get('make_deputy') == '1'
+
+    person = UserModel.find_by_id(faculty_id) if faculty_id else None
+    if person is None:
+        flash('Choose a member of teaching staff.', 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    # Teaching staff only. A student or a Dean is not a candidate however the
+    # form was submitted.
+    if not person.is_faculty or not person.is_active:
+        flash(f'{person.name} is not active teaching staff.', 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    if person.id == user.id:
+        # The HOD is above the deputy, not one. Letting the HOD demote
+        # themselves would leave the department with no delegated authority at
+        # all, without anyone deciding that.
+        flash('You are the Head of Department. The deputy role reports to you.',
+              'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    current_deputies = UserModel._by_role(UserRole.DEPUTY_HOD.value, 'name')
+    if make_deputy and len(current_deputies) >= 3:
+        flash('There are already three Deputy HODs. Revoke one before '
+              'appointing another.', 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    target = UserRole.DEPUTY_HOD if make_deputy else UserRole.LECTURER
+    if person.role == target:
+        flash(f'{person.name} is already in that role.', 'info')
+        return redirect(url_for('hod.faculty_workload'))
+
+    # `set_role` hands back the re-read account, or None when there is nothing
+    # under that id. Tested against None rather than for truthiness: a User
+    # object is truthy, so a future empty-but-present row would pass a
+    # truthiness check and report a success that never happened.
+    updated = UserModel.set_role(person.id, target)
+    if updated is None:
+        flash('The role could not be changed.', 'danger')
+        return redirect(url_for('hod.faculty_workload'))
+
+    if make_deputy:
+        flash(f'{person.name} is now a Deputy HOD.', 'success')
+    else:
+        flash(f'{person.name} is a lecturer again. Their classes are unchanged.',
+              'success')
+    return redirect(url_for('hod.faculty_workload'))
+
+
+@hod_bp.route('/faculty/routing/routes/new', methods=['POST'])
+@permission_required('hod.apply_routing')
+def route_create():
+    """Add a review desk."""
+    from app.models.routes import RouteModel
+
+    name = (request.form.get('name') or '').strip()
+    if len(name) < 2:
+        flash('Give the route a name of at least 2 characters.', 'danger')
+        return redirect(url_for('hod.routing'))
+
+    # Keywords arrive as one comma-separated field because typing them into
+    # separate boxes is how a half-empty rule gets saved and then silently
+    # matches nothing.
+    keywords = request.form.get('keywords', '')
+    RouteModel.create(
+        name=name,
+        keywords=[k for k in (keywords or '').split(',')],
+        faculty_id=request.form.get('faculty_id', type=int),
+        position=request.form.get('position', type=int) or 0,
+        description=(request.form.get('description') or '').strip(),
+    )
+    flash(f'Route "{name}" added.', 'success')
+    return redirect(url_for('hod.routing'))
+
+
+@hod_bp.route('/faculty/routing/routes/<int:route_id>/save', methods=['POST'])
+@permission_required('hod.apply_routing')
+def route_save(route_id: int):
+    """Edit a desk: its name, its words, or who reviews it."""
+    from app.models.routes import RouteModel
+
+    if RouteModel.find_by_id(route_id) is None:
+        abort(404)
+
+    RouteModel.update(
+        route_id,
+        name=request.form.get('name'),
+        keywords=request.form.get('keywords'),
+        faculty_id=request.form.get('faculty_id', type=int),
+        position=request.form.get('position', type=int),
+        description=request.form.get('description'),
+    )
+    flash('Route updated.', 'success')
+    return redirect(url_for('hod.routing'))
+
+
+@hod_bp.route('/faculty/routing/routes/<int:route_id>/delete', methods=['POST'])
+@permission_required('hod.apply_routing')
+def route_delete(route_id: int):
+    """Remove a desk. Requests already assigned to it are left alone."""
+    from app.models.routes import RouteModel
+
+    rule = RouteModel.find_by_id(route_id)
+    if rule is None:
+        abort(404)
+    RouteModel.delete(route_id)
+    flash(f'Route "{rule.name}" removed.', 'info')
+    return redirect(url_for('hod.routing'))
+
+
+@hod_bp.route('/faculty/routing/apply', methods=['POST'])
+@permission_required('hod.routing')
+def apply_routing():
+    """Write a confirmed routing change."""
+    current = SettingsModel.get_routing()
+
+    chosen, error = _routing_choice(request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('hod.routing'))
+
+    changes = _routing_changes(current, chosen)
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('hod.routing'))
 
     SettingsModel.set_routing(**chosen)
-    flash('Request routing updated.', 'success')
+    flash(f'Request routing updated. {summarise(changes)}', 'success')
     return redirect(url_for('hod.routing'))
+
+
+ROUTING_FIELDS = (
+    ('event_faculty_id', 'Event requests'),
+    ('curricular_faculty_id', 'Curricular requests'),
+    ('general_faculty_id', 'General proctor requests'),
+)
+
+ROUTING_LABELS = dict(ROUTING_FIELDS)
+
+
+def _routing_names(current):
+    """Each queue's reviewer, as a name, resolved at read time."""
+    people = {u.id: u.name for u in UserModel.get_faculty()}
+    return {field: (people.get(current.get(field)) or 'Falls through to the '
+                                                  'default rule')
+            for field, _label in ROUTING_FIELDS}
+
+
+def _routing_choice(form):
+    """(chosen, error) from a posted routing form."""
+    chosen = {}
+    for field, label in ROUTING_FIELDS:
+        raw = (form.get(field) or '').strip()
+        person = UserModel.find_by_id(int(raw)) if raw.isdigit() else None
+        if raw and (person is None or not person.is_active
+                    or not person.is_faculty):
+            return {}, (f'The reviewer for {label.lower()} is not on the '
+                        f'teaching staff. Nothing was changed.')
+        chosen[field] = person.id if person else None
+    return chosen, None
+
+
+def _routing_changes(current, chosen):
+    """What a routing change would move, named by queue rather than by column."""
+    people = {u.id: u.name for u in UserModel.get_faculty()}
+
+    def show(value):
+        return people.get(value) or 'Falls through to the default rule'
+
+    return diff_fields(
+        {field: show(current.get(field)) for field, _ in ROUTING_FIELDS},
+        {field: show(chosen.get(field)) for field, _ in ROUTING_FIELDS},
+        ROUTING_LABELS,
+    )
 
 
 @hod_bp.route('/events')
@@ -527,11 +807,147 @@ def events():
     tree = EventModel.list_tree()
     lecturers = [
         {'id': row.id, 'name': row.name}
-        for row in UserModel.get_lecturers()
+        for row in UserModel.get_faculty()
     ]
     return render_template(
         'hod/events.html', user=user, mains=tree, lecturers=lecturers
     )
+
+
+@hod_bp.route('/events/<int:event_id>')
+@permission_required('hod.event_detail')
+def event_detail(event_id: int):
+    """One event on its own page: its coordinator, its subs, and its requests.
+
+    The management page edits inline, which is fine for a one-character fix and
+    useless for looking an event up. This is the read-only view; editing goes
+    through its own page so the change can be previewed first.
+    """
+    from app.models.events import EventModel
+    from app.models.firestore import store
+
+    event = EventModel.find_by_id(event_id)
+    if event is None:
+        abort(404)
+
+    parent = (EventModel.find_by_id(event.parent_id)
+              if event.parent_id else None)
+    # A main event's subs come from the tree; a sub event has none of its own.
+    subs = []
+    for main in EventModel.list_tree():
+        if main.id == event_id:
+            subs = list(getattr(main, 'subs', []))
+
+    coordinator = (UserModel.find_by_id(event.coordinator_id)
+                   if event.coordinator_id else None)
+    requests = [r for r in store.documents('permission_requests')
+                if r.get('event_id') == event_id]
+
+    return render_template(
+        'hod/event_detail.html',
+        user=current_user(),
+        event=event,
+        parent=parent,
+        subs=subs,
+        coordinator=coordinator,
+        request_count=len(requests),
+        faculty=UserModel.get_faculty(),
+    )
+
+
+@hod_bp.route('/events/<int:event_id>/edit', methods=['GET', 'POST'])
+@permission_required('hod.edit_event')
+def edit_event(event_id: int):
+    """Rename an event or move its coordinator, previewing the change first.
+
+    The parent is not editable, for the reason the inline editor already gave:
+    re-parenting would rewrite what past requests that named the sub-event meant.
+    """
+    from app.models.events import EventModel
+
+    event = EventModel.find_by_id(event_id)
+    if event is None:
+        abort(404)
+
+    faculty = [{'id': u.id, 'name': u.name} for u in UserModel.get_faculty()]
+    parent = (EventModel.find_by_id(event.parent_id)
+              if event.parent_id else None)
+    coordinator = (UserModel.find_by_id(event.coordinator_id)
+                   if event.coordinator_id else None)
+    context = {
+        'event': event,
+        'faculty': faculty,
+        'parent_name': parent.name if parent else None,
+        'current_coordinator': coordinator.name if coordinator else 'Nobody assigned',
+    }
+
+    if request.method == 'GET':
+        return render_template('hod/event_edit.html', user=current_user(),
+                               **context)
+
+    changes, error = _event_changes(event, request.form)
+    if error:
+        flash(error, 'danger')
+        return render_template('hod/event_edit.html', user=current_user(),
+                               form=request.form, **context)
+
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('hod.event_detail', event_id=event_id))
+
+    return render_template('hod/event_edit_confirm.html', user=current_user(),
+                           event=event, changes=changes, form=request.form)
+
+
+@hod_bp.route('/events/<int:event_id>/edit/apply', methods=['POST'])
+@permission_required('hod.edit_event')
+def apply_event_edit(event_id: int):
+    """Write a confirmed event edit."""
+    from app.models.events import EventModel
+
+    event = EventModel.find_by_id(event_id)
+    if event is None:
+        abort(404)
+
+    changes, error = _event_changes(event, request.form)
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('hod.edit_event', event_id=event_id))
+    if not changes:
+        flash('Nothing was changed.', 'info')
+        return redirect(url_for('hod.event_detail', event_id=event_id))
+
+    raw = (request.form.get('coordinator_id') or '').strip()
+    EventModel.update(event_id, request.form.get('name', ''),
+                      UserModel.find_by_id(int(raw)).id if raw.isdigit() else None)
+    flash(f'{summarise(changes)} Saved.', 'success')
+    return redirect(url_for('hod.event_detail', event_id=event_id))
+
+
+EVENT_EDIT_LABELS = {'name': 'Event name', 'coordinator_id': 'Coordinator'}
+
+
+def _event_changes(event, form):
+    """(changes, error) for a proposed event edit."""
+    name = (form.get('name') or '').strip()
+    if len(name) < 3:
+        return [], 'Give the event a name of at least 3 characters.'
+    raw = (form.get('coordinator_id') or '').strip()
+    if raw and not raw.isdigit():
+        return [], 'Choose a coordinator from the list.'
+    coordinator = UserModel.find_by_id(int(raw)) if raw.isdigit() else None
+    if raw and (coordinator is None or not coordinator.is_active
+                or not coordinator.is_faculty):
+        return [], 'The chosen coordinator is not on the teaching staff.'
+    current = UserModel.find_by_id(event.coordinator_id) if event.coordinator_id \
+        else None
+    return diff_fields(
+        {'name': event.name,
+         'coordinator_id': current.name if current else ''},
+        {'name': name,
+         'coordinator_id': coordinator.name if coordinator else ''},
+        EVENT_EDIT_LABELS,
+    ), None
 
 
 @hod_bp.route('/events/save', methods=['POST'])
@@ -558,8 +974,8 @@ def save_event():
     coordinator = (UserModel.find_by_id(int(raw_coordinator))
                    if raw_coordinator.isdigit() else None)
     if raw_coordinator and (coordinator is None or not coordinator.is_active
-                            or not coordinator.is_lecturer):
-        flash('The chosen coordinator is not an active lecturer. '
+                            or not coordinator.is_faculty):
+        flash('The chosen coordinator is not on the teaching staff. '
               'Nothing was saved.', 'danger')
         return redirect(url_for('hod.events'))
 
@@ -612,18 +1028,75 @@ def delete_event():
     return redirect(url_for('hod.events'))
 
 
+# What the class search box matches against. The lecturer modes exist because
+# the department refers to one person both ways -- "RAPAKA RAHUL" on a letter and
+# "6848" on a roster -- and a single combined box would only ever find whichever
+# one the searcher happened to type.
+CLASS_SEARCH_MODES = (
+    ('class', 'Class name'),
+    ('section', 'Timetable / section'),
+    ('subject', 'Subject'),
+    ('faculty', 'Lecturer name'),
+    ('code', 'Employee code'),
+)
+
+# What the box invites you to type. The mode dropdown is the one control whose
+# effect cannot be guessed from what is already on screen, so the placeholder
+# carries the meaning instead of a label above it.
+CLASS_SEARCH_PLACEHOLDERS = {
+    'class': 'Search class names…',
+    'section': 'Search timetables, e.g. T1-General…',
+    'subject': 'Search subjects, e.g. ADSAA…',
+    'faculty': 'Search lecturer names…',
+    'code': 'Search employee codes, e.g. 6113…',
+}
+
+_VALID_SEARCH_MODES = {value for value, _label in CLASS_SEARCH_MODES}
+
+
+def _class_search_mode(raw):
+    """The search mode, defaulting to the class name rather than to nothing."""
+    raw = (raw or '').strip()
+    return raw if raw in _VALID_SEARCH_MODES else 'class'
+
+
+def _matches_search(text, needle):
+    """Case-insensitive contains, tolerant of how the needle is spaced.
+
+    Both sides are collapsed to runs of single spaces. The stored names are
+    already normalised on import, so this is really about the other side: a
+    searcher who types "RAPAKA  RAHUL" or " Rapaka Rahul " means the same
+    person and should not be told the list is empty.
+    """
+    haystack = ' '.join((text or '').split()).casefold()
+    return ' '.join(needle.split()).casefold() in haystack
+
+
 @hod_bp.route('/classes')
 @permission_required('hod.classes')
 def classes():
-    """Every class across all lecturers."""
+    """Every class across all lecturers, with filters.
+
+    Filters are read from the query string rather than posted, so a narrowed
+    view is a shareable link and the browser's back button walks back through
+    the filters rather than out of the page.
+    """
     from app.models.firestore import store
 
     user = current_user()
     MemberModel.relink_unresolved()
 
-    faculty_names = {
-        row['id']: row.get('name')
+    section_filter = (request.args.get('section') or '').strip()
+    subject_filter = (request.args.get('subject') or '').strip()
+    # -1 rather than None: a filter of "0" must be distinguishable from unset.
+    lecturer_filter = request.args.get('lecturer', type=int)
+    search = (request.args.get('q') or '').strip()
+    mode = _class_search_mode(request.args.get('q_type'))
+
+    staff = {
+        row['id']: row
         for row in store.documents('users')
+        if row.get('role') in ('LECTURER', 'HOD', 'DEPUTY_HOD')
     }
     member_counts = Counter()
     linked_counts = Counter()
@@ -632,28 +1105,143 @@ def classes():
         if row.get('student_id'):
             linked_counts[row.get('class_id')] += 1
 
-    groups = [
-        {
+    total = 0
+    groups = []
+    sections = set()
+    subjects = set()
+    lecturers = {}
+    # Taught classes only. This register is about teaching; a proctor list has
+    # no subject and no section, so listing it here produced rows that could not
+    # be filtered by either. Proctor allocation is visible from the faculty
+    # workload and from the "no proctor" mark on the student register.
+    for row in store.documents('class_groups'):
+        if (row.get('kind') or KIND_CLASS) != KIND_CLASS:
+            continue
+        total += 1
+        owner = staff.get(row.get('faculty_id'))
+        section = row.get('section_code')
+        subject = row.get('subject_code')
+        if section:
+            sections.add(section)
+        if subject:
+            subjects.add(subject)
+        if owner:
+            lecturers[owner['id']] = owner
+
+        groups.append({
             'id': row['id'],
             'name': row.get('name'),
             'kind': row.get('kind') or 'CLASS',
-            'section_code': row.get('section_code'),
+            'section_code': section,
+            'subject_code': subject,
             'academic_year': row.get('academic_year'),
             'faculty_id': row.get('faculty_id'),
             'created_at': row.get('created_at'),
-            'faculty_name': faculty_names.get(row.get('faculty_id')),
+            'faculty_name': (owner or {}).get('name'),
+            'faculty_code': (owner or {}).get('employee_code'),
             'member_count': member_counts[row['id']],
             'linked_count': linked_counts[row['id']],
-        }
-        for row in store.documents('class_groups')
+        })
+
+    filtered = [
+        g for g in groups
+        if (not section_filter or g['section_code'] == section_filter)
+        and (not subject_filter or g['subject_code'] == subject_filter)
+        and (lecturer_filter is None or g['faculty_id'] == lecturer_filter)
+        and (not search or _class_search_hit(g, search, mode))
     ]
+
     # Lecturer name ascending, then newest class first -- the order the query
     # used to state. Sorted twice on purpose: Python's sort is stable, so the
     # first pass fixes the recency and the second keeps it inside each lecturer.
-    groups.sort(key=lambda g: _sort_key(g['created_at']), reverse=True)
-    groups.sort(key=lambda g: g['faculty_name'] or '')
+    filtered.sort(key=lambda g: _sort_key(g['created_at']), reverse=True)
+    filtered.sort(key=lambda g: g['faculty_name'] or '')
 
-    return render_template('hod/classes.html', user=user, classes=groups)
+    active = {
+        'section': section_filter,
+        'subject': subject_filter,
+        'lecturer': lecturer_filter,
+        'q': search,
+    }
+    labels = {
+        'section': ('Timetable', section_filter),
+        'subject': ('Subject', subject_filter),
+        'lecturer': ('Lecturer', (lecturers.get(lecturer_filter) or {}).get('name')
+                     if lecturer_filter is not None else None),
+        'q': (_mode_label(mode), search),
+    }
+    chips = [
+        {'key': key, 'label': labels[key][0], 'value': labels[key][1],
+         'remove_url': _classes_url_without(active, key)}
+        for key in ('section', 'subject', 'lecturer', 'q')
+        if active.get(key) not in ('', None)
+    ]
+
+    return render_template(
+        'hod/classes.html',
+        user=user,
+        classes=filtered,
+        total=total,
+        sections=sorted(sections),
+        subjects=sorted(subjects),
+        # Only lecturers who actually own a class. Listing all 214 and having
+        # 150 of them return nothing is a dropdown that wastes the scroll.
+        lecturers=sorted(lecturers.values(),
+                         key=lambda u: (u.get('name') or '').casefold()),
+        section_filter=section_filter,
+        subject_filter=subject_filter,
+        lecturer_filter=lecturer_filter,
+        search=search,
+        search_mode=mode,
+        search_mode_label=_mode_label(mode),
+        search_placeholder=CLASS_SEARCH_PLACEHOLDERS.get(
+            mode, CLASS_SEARCH_PLACEHOLDERS['class']),
+        search_modes=CLASS_SEARCH_MODES,
+        # Same page, same dropdowns, no query -- for the x inside the box.
+        clear_search_url=_classes_url_without(active, 'q'),
+        chips=chips,
+        active_filters=bool(chips),
+    )
+
+
+def _mode_label(mode):
+    return dict(CLASS_SEARCH_MODES).get(mode, 'Search')
+
+
+def _classes_url_without(active, drop):
+    """This page's URL with one filter removed and the rest kept.
+
+    Chips that reset everything else are worse than useless -- dropping three
+    filters to undo one is how a searcher loses the narrowing they built up.
+    """
+    keep = {k: v for k, v in active.items()
+            if k != drop and v not in ('', None)}
+    if 'q' not in keep:
+        # The search mode is only meaningful alongside a query, and carrying it
+        # alone would silently switch the box back to whatever mode it was left
+        # in once a new search is typed.
+        keep.pop('q_type', None)
+    return url_for('hod.classes', **keep) if keep else url_for('hod.classes')
+
+
+def _class_search_hit(group, needle, mode):
+    """Whether one class matches the search box, under the chosen mode."""
+    if mode == 'section':
+        return _matches_search(group.get('section_code'), needle)
+    if mode == 'subject':
+        return _matches_search(group.get('subject_code'), needle)
+    if mode == 'faculty':
+        return _matches_search(group.get('faculty_name'), needle)
+    if mode == 'code':
+        # An employee code is a number people read off a roster and retype, so
+        # "848" has to find 6848 rather than nothing.
+        code = (group.get('faculty_code') or '').strip()
+        return bool(code) and needle in code
+    # 'class' also matches the subject and section, because the class name is
+    # built out of both and people search for the parts.
+    return (_matches_search(group.get('name'), needle)
+            or _matches_search(group.get('subject_code'), needle)
+            or _matches_search(group.get('section_code'), needle))
 
 
 @hod_bp.route('/classes/<int:class_id>')
@@ -661,14 +1249,20 @@ def classes():
 def class_detail(class_id: int):
     """One class group in full: roster and the permissions in force on a date.
 
-    Read-only, unlike the faculty's own class page: attendance is marked by
-    the lecturer who teaches the class, and rosters are theirs to keep. The
-    HOD opens this to see who is on permission, not to edit.
+    Read-only, unlike the faculty's own class page: rosters are theirs to keep.
+    The HOD opens this to see who is on permission, not to edit.
     """
     from app.faculty.routes import _permissions_for_date as _for_date
 
     group = ClassModel.find_by_id(class_id)
     if group is None:
+        abort(404)
+    # A proctor list is not a class. Opening one here rendered a roster and a
+    # permission summary as though it were a section, which is the same confusion
+    # this page was fixed for everywhere else. The HOD does not need a detail
+    # view of proctoring: the lecturer owns that list, and the HOD sees coverage
+    # from the student register.
+    if (group.kind or KIND_CLASS) != KIND_CLASS:
         abort(404)
 
     view_date = _parse_date(request.args.get('date'), date.today())
@@ -913,86 +1507,181 @@ def _search_students(viewer, query: str) -> list:
     return output
 
 
-@hod_bp.route('/students/import', methods=['GET', 'POST'])
-@permission_required('hod.import_students')
-def import_students():
-    """Add students from the HOD's CSV roster.
+# --------------------------------------------------------------------------
+# Faculty leave approvals
+#
+# The queue for leave that has been arranged and submitted. Kept apart from the
+# student permission register below it: different entity, different evidence, and
+# a different question -- "is this class going to be taught" rather than "may this
+# student leave the campus".
+# --------------------------------------------------------------------------
 
-    GET shows the import page; POST reads the uploaded CSV and creates a
-    STUDENT account per valid CSE row. Accounts sign in through Entra ID like
-    everyone else, matching on email at first sign-in.
+@hod_bp.route('/leave')
+@permission_required('hod.leave_queue')
+def leave_queue():
+    """Faculty leave awaiting a decision, longest-waiting first.
+
+    The HOD's to-do leads, with everything decided below it. An approval queue
+    that mixes decided and undecided rows makes the undecided ones hard to find,
+    which is the whole reason this list exists.
     """
-    if request.method == 'GET':
-        return render_template('hod/student_import.html', user=current_user())
+    user = current_user()
 
-    upload = request.files.get('student_sheet')
-    if upload is None or not (upload.filename or '').strip():
-        flash('Choose a CSV file to import.', 'danger')
-        return redirect(url_for('hod.import_students'))
+    pending = LeaveModel.find_by_status(LeaveStatus.HOD_PENDING)
+    decided = LeaveModel.find_by_status(LeaveStatus.DEAN_PENDING) \
+        + LeaveModel.find_by_status(LeaveStatus.REJECTED)
 
-    filename = (upload.filename or '').lower()
-    if not filename.endswith('.csv'):
-        flash('Only CSV files are supported for student import.', 'danger')
-        return redirect(url_for('hod.import_students'))
+    # An HOD's own application is not in this queue. They are teaching staff and
+    # can file leave like anyone else, so their application arrives here like
+    # everybody else's -- and it is not theirs to decide. It stays visible under
+    # their own "My Leave" instead.
+    pending = [l for l in pending if l.faculty_id != user.id]
+    decided = [l for l in decided if l.faculty_id != user.id]
+
+    for record in pending + decided:
+        LeaveSummary.attach(record, AdjustmentModel.find_by_leave(record.id))
+    _attach_leave_names(pending + decided)
+
+    pending.sort(key=lambda l: (l.from_date or date.max, l.id))
+    decided.sort(key=lambda l: (l.from_date or date.max, l.id), reverse=True)
+
+    counts = {
+        'awaiting': len(pending),
+        'uncovered': sum(1 for l in pending if l.uncovered_count),
+        'with_dean': sum(1 for l in decided
+                         if l.status == LeaveStatus.DEAN_PENDING),
+        'rejected': sum(1 for l in decided
+                        if l.status == LeaveStatus.REJECTED),
+    }
+
+    return render_template(
+        'hod/leave.html',
+        user=user,
+        pending=pending,
+        decided=decided,
+        counts=counts,
+    )
+
+
+@hod_bp.route('/leave/<int:leave_id>')
+@permission_required('hod.leave_detail')
+def leave_detail(leave_id: int):
+    """One application in full, with the class adjustments behind it.
+
+    The HOD decides whether the teaching is covered, so the adjustments are the
+    page rather than an appendix: each period, who is covering it, and which ones
+    nobody could staff. A period marked UNCOVERED is not an error to be tidied
+    away -- it is the fact the approval is actually about.
+    """
+    leave = LeaveModel.find_by_id(leave_id)
+    if leave is None:
+        abort(404)
+
+    # An HOD opens their own application to read it, not to decide it. The
+    # decision is refused in the service too; this keeps the page from
+    # rendering approval buttons over the HOD's own request in the first place.
+    own_application = leave.faculty_id == current_user().id
+
+    adjustments = AdjustmentModel.find_by_leave(leave_id)
+    LeaveSummary.attach(leave, adjustments)
+    _attach_leave_names([leave])
+    _attach_substitute_names(adjustments)
+
+    applicant = UserModel.find_by_id(leave.faculty_id)
+    slots = TimetableModel.slots_by_section(
+        adjustments[0].section if adjustments else '')
+
+    # Their other live applications, so the HOD can see this is not a second
+    # request for the same days before approving it.
+    others = [l for l in LeaveModel.find_open(leave.faculty_id,
+                                              exclude_id=leave_id)
+              if l.status != LeaveStatus.HOD_PENDING]
+
+    return render_template(
+        'hod/leave_detail.html',
+        user=current_user(),
+        leave=leave,
+        applicant=applicant,
+        adjustments=adjustments,
+        slots=slots,
+        others=others,
+        own_application=own_application,
+        coverage=TimetableModel.allocation_coverage(),
+    )
+
+
+@hod_bp.route('/leave/<int:leave_id>/action', methods=['POST'])
+@permission_required('hod.leave_action')
+def leave_action(leave_id: int):
+    """Approve or refuse a faculty leave application.
+
+    A remark is required either way, and required by name when an uncovered period
+    is being approved over -- in that case the HOD is deciding that a class goes
+    untaught, and a bare "approved" would leave nobody able to say who decided
+    that or why.
+    """
+    user = current_user()
+    approve = (request.form.get('decision') or '').lower() == 'approve'
+    remarks = (request.form.get('remarks') or '').strip()
 
     try:
-        import csv
-        from app.models.firestore import utc_now
+        leave = hod_act_on_leave(leave_id=leave_id, hod=user, approve=approve,
+                                 remarks=remarks)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('hod.leave_detail', leave_id=leave_id))
 
-        stream = upload.stream.read().decode('utf-8', errors='ignore').splitlines()
-        reader = csv.reader(stream)
-        header = next(reader, None)
-
-        created = 0
-        existing = 0
-        errors = []
-
-        for line_no, row in enumerate(reader, start=2):
-            if len(row) < 2:
-                errors.append(f'Row {line_no}: not enough columns')
-                continue
-
-            roll = (row[0] or '').strip().upper()
-            name = (row[1] or '').strip()
-            raw_email = (row[21] if len(row) > 21 else '').strip()
-
-            if not roll or not name:
-                errors.append(f'Row {line_no}: missing roll number or name')
-                continue
-
-            email = (raw_email or '').lower().strip()
-            if not email or '@' not in email:
-                email = f'{roll.lower()}@adityauniversity.in'
-
-            email = email.lower()
-            if UserModel.find_by_email(email):
-                existing += 1
-                continue
-
-            UserModel.create(
-                None, email, name,
-                role=UserRole.STUDENT, department='CSE',
-                roll_number=roll,
-            )
-            created += 1
-
-    except Exception as exc:
-        flash(f'Import failed: {exc}', 'danger')
-        return redirect(url_for('hod.import_students'))
-
-    parts = []
-    if created:
-        parts.append(f'{created} student account{"s" if created != 1 else ""} created')
-    if existing:
-        parts.append(f'{existing} already existed')
     flash(
-        ('Student import: ' + ', '.join(parts) + '.')
-        if parts else 'Student import: no new rows to add.',
-        'success' if created else 'warning',
-    )
-    for error in errors[:8]:
-        flash(error, 'warning')
-    if len(errors) > 8:
-        flash(f'... and {len(errors) - 8} more skipped rows.',
-              'warning')
-    return redirect(url_for('hod.import_students'))
+        f'Leave application #{leave_id} approved and passed to the Dean.'
+        if approve else
+        f'Leave application #{leave_id} rejected.',
+        'success')
+    return redirect(url_for('hod.leave_queue'))
+
+
+@hod_bp.route('/leave/<int:leave_id>/letter')
+@permission_required('hod.leave_letter')
+def leave_letter(leave_id: int):
+    """The approval letter, as the HOD prints it.
+
+    Same document the applicant and the Dean receive. Only available once the
+    Dean has signed, because before that there is nothing granted to certify.
+    """
+    leave = LeaveModel.find_by_id(leave_id)
+    if leave is None:
+        abort(404)
+
+    try:
+        context = letter_context(leave)
+    except LeaveError as exc:
+        flash(str(exc), 'warning')
+        return redirect(url_for('hod.leave_detail', leave_id=leave_id))
+
+    return render_template('faculty/leave_letter.html', user=current_user(),
+                           **context)
+
+
+# ---------- leave helpers ----------
+
+def _attach_leave_names(leaves) -> None:
+    """Name the applicant on each leave, with one read for the whole list."""
+    ids = {l.faculty_id for l in leaves if l.faculty_id}
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for leave in leaves:
+        leave.faculty_name = names.get(leave.faculty_id)
+
+
+def _attach_substitute_names(adjustments) -> None:
+    """Name the colleague covering each period."""
+    ids = {a.assigned_faculty_id for a in adjustments if a.assigned_faculty_id}
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for adjustment in adjustments:
+        adjustment.assigned_name = names.get(adjustment.assigned_faculty_id)

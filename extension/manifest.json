@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Aditya Faculty Assistant",
+  "version": "1.0.0",
+  "description": "Lists your classes and fills the attendance page from the permissions the portal already recorded. Never saves attendance for you.",
+
+  "permissions": ["activeTab", "storage", "scripting"],
+
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_title": "Faculty assistant",
+    "default_popup": "popup.html"
+  }
+}

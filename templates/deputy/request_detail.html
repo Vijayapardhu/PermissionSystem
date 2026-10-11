@@ -1,0 +1,158 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import type_badge, date, time_range, roll, status_badge, csrf_field with context %}
+{% block title %}Decide REQ-{{ '%04d' % request.id }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Request REQ-{{ '%04d' % request.id }}</h1>
+    <p class="page-head__sub">
+      Submitted {{ request.created_at.strftime('%d %B %Y at %I:%M %p') }}
+      &middot; {{ roll(request.student_roll_number) }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {{ status_badge(request.status) }}
+    <a href="{{ url_for('deputy.permitted') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-file-text"></i> Request</h2>
+      </div>
+      <div class="card-au__body">
+        <dl class="definition">
+          <dt>Student</dt>
+          <dd class="fw-semibold">{{ student.name }}</dd>
+          <dt>Roll number</dt><dd>{{ roll(student.roll_number) }}</dd>
+          {% if request.is_group %}
+          <dt>Also covers</dt>
+          <dd>
+            {{ request.group_size }} students
+            <ul class="list-unstyled mt-1 mb-0 small">
+              {% for member in request.member_details or [] %}
+                <li>{{ member.roll_number or member.name }}</li>
+              {% endfor %}
+            </ul>
+          </dd>
+          {% endif %}
+          <dt>Type</dt><dd>{{ type_badge(request.permission_type) }}</dd>
+          <dt>From</dt><dd>{{ date(request.start_date) }}</dd>
+          <dt>To</dt><dd>{{ date(request.end_date) }}</dd>
+          {% if request.period %}
+          <dt>Period</dt><dd><span class="badge-au badge-au--pending">{{ request.period|title }}</span></dd>
+          {% endif %}
+          <dt>Time</dt><dd>{{ time_range(request.start_time, request.end_time) }}</dd>
+          <dt>Reason</dt><dd>{{ request.reason }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {# The same panel the lecturer's own review page shows. A deputy deciding
+       without it would be deciding blind to what the section has scheduled,
+       which is the thing this whole module was built to prevent. #}
+    {% if classwork %}
+    <div class="card-au mb-3">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-journal-check"></i> Classwork scheduled</h2>
+        <span class="form-text">most serious first</span>
+      </div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for entry in classwork %}
+          <li class="border-bottom pb-2 mb-2">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <span class="fw-semibold">{{ entry.title }}</span>
+                <div class="form-text">
+                  {% if entry.class_name %}{{ entry.class_name }}{% endif %}
+                  &middot; {{ entry.date }} &middot; {{ entry.session_label }}
+                </div>
+              </div>
+              <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+            </div>
+            {% if entry.notes %}<div class="small mt-1 text-muted">{{ entry.notes }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if history %}
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-clock-history"></i> History</h2>
+      </div>
+      <div class="card-au__body">
+        <ul class="list-unstyled mb-0">
+          {% for entry in history %}
+          <li class="border-bottom pb-2 mb-2">
+            <div class="fw-semibold small">{{ entry.action_label }} by {{ entry.faculty_name }}</div>
+            <div class="form-text mt-1">{{ entry.actioned_at.strftime('%d %b %Y, %I:%M %p') }}</div>
+            {% if entry.remarks %}<div class="small mt-1">{{ entry.remarks }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-12 col-lg-5">
+    {% if request.is_pending or request.status.value == 'AWAITING_HOD' %}
+    <div class="card-au" style="border-left:3px solid var(--au-primary)">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-check2-square"></i> Your decision</h2>
+      </div>
+      <div class="card-au__body">
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle"></i>
+          You are deciding this directly, without waiting for the reviewer it is
+          assigned to.{% if request.assigned_faculty_id and request.assigned_faculty_id != user.id %}
+          That reviewer is recorded on the request so they can see what happened.
+          {% endif %}
+        </p>
+        <form method="post" action="{{ url_for('deputy.decide', request_id=request.id) }}">
+          {{ csrf_field() }}
+          <label for="remarks" class="form-label">Remarks</label>
+          <textarea class="form-control mb-3" id="remarks" name="remarks" rows="3"
+                    placeholder="Shown to the student and kept in the history."></textarea>
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" name="action" value="approve"
+                    class="btn btn-success btn-pill px-4"
+                    onclick="return confirm('Approve REQ-{{ '%04d' % request.id }}? The student may act on it immediately.');">
+              <i class="bi bi-check-circle"></i> Approve
+            </button>
+            <button type="submit" name="action" value="reject"
+                    class="btn btn-danger btn-pill px-4"
+                    onclick="return confirm('Refuse REQ-{{ '%04d' % request.id }}? A remark is required.');">
+              <i class="bi bi-x-circle"></i> Reject
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-info-circle"></i> Already decided</h2>
+      </div>
+      <div class="card-au__body">
+        <p class="text-muted mb-0 small">
+          This request is {{ request.status.value.replace('_', ' ').lower() }}.
+          Only a request that has not been decided yet can be taken directly
+          &mdash; withdrawing a permission a student may already hold is a
+          separate decision.
+        </p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

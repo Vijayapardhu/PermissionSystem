@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_state with context %}
+{% block title %}{{ event.name }} &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">{{ event.name }}</h1>
+    <p class="page-head__sub">
+      {% if parent %}
+        Sub-event of <a href="{{ url_for('hod.event_detail', event_id=parent.id) }}">{{ parent.name }}</a>
+      {% else %}
+        Main event
+      {% endif %}
+      {% if request_count %}
+        &middot; {{ request_count }} request{{ '' if request_count == 1 else 's' }} name{{ '' if request_count == 1 else '' }} it
+      {% endif %}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {# This is the view. Editing goes through its own page so the change can be
+       shown before it is written. #}
+    <a href="{{ url_for('hod.edit_event', event_id=event.id) }}"
+       class="btn btn-primary btn-pill">
+      <i class="bi bi-pencil-square"></i> Edit
+    </a>
+    <a href="{{ url_for('hod.events') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> All events
+    </a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-info-circle"></i> Details</h2>
+      </div>
+      <div class="card-au__body">
+        <dl class="row mb-0">
+          <dt class="col-sm-5">Name</dt>
+          <dd class="col-sm-7">{{ event.name }}</dd>
+
+          <dt class="col-sm-5">Type</dt>
+          <dd class="col-sm-7">
+            {% if parent %}Sub-event{% else %}Main event{% endif %}
+          </dd>
+
+          {% if parent %}
+          <dt class="col-sm-5">Parent</dt>
+          <dd class="col-sm-7">
+            <a href="{{ url_for('hod.event_detail', event_id=parent.id) }}">{{ parent.name }}</a>
+          </dd>
+          {% endif %}
+
+          <dt class="col-sm-5">Coordinator</dt>
+          <dd class="col-sm-7">
+            {% if coordinator %}
+              {{ coordinator.name }}
+              {% if coordinator.employee_code %}
+                <div class="form-text">{{ coordinator.employee_code }}</div>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">Nobody assigned</span>
+            {% endif %}
+          </dd>
+
+          <dt class="col-sm-5">Requests</dt>
+          <dd class="col-sm-7">
+            {% if request_count %}
+              {{ request_count }} student request{{ '' if request_count == 1 else 's' }}
+              name{{ '' if request_count == 1 else '' }} this event
+            {% else %}
+              <span class="text-muted">None yet</span>
+            {% endif %}
+          </dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card-au h-100">
+      <div class="card-au__head">
+        <h2 class="card-au__title">
+          <i class="bi bi-diagram-3"></i> Sub-events
+        </h2>
+        <span class="form-text">{{ subs | length }}</span>
+      </div>
+      <div class="card-au__body">
+        {% if subs %}
+          <ul class="list-unstyled mb-0">
+            {% for sub in subs %}
+            <li class="border-bottom py-2">
+              <a href="{{ url_for('hod.event_detail', event_id=sub.id) }}">{{ sub.name }}</a>
+            </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="form-text mb-0">
+            {% if parent %}
+              A sub-event cannot have sub-events of its own.
+            {% else %}
+              No sub-events yet. Add them from the
+              <a href="{{ url_for('hod.events') }}">events page</a>.
+            {% endif %}
+          </p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

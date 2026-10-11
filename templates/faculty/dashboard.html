@@ -12,9 +12,17 @@
     </p>
   </div>
   <div class="page-head__actions">
+    {# Split the count, because "12 pending" does not say whether any of them
+       are the lecturer's own mentees. A proctor with twelve of each should see
+       the difference at a glance. #}
     <div class="text-end">
       <div class="stat__value" style="color:var(--au-warning)">{{ pending_count }}</div>
       <div class="stat__label">Pending</div>
+      {% if proctor_queue %}
+      <div class="form-text mt-1">
+        {{ proctor_queue }} from your proctor list
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -52,10 +60,32 @@
           <td>{{ roll(record.student_roll_number) }}{% if record.is_group %}<span class="badge text-bg-light ms-1" title="Group permission"><i class="bi bi-people"></i> {{ record.group_size }}</span>{% endif %}</td>
           <td class="text-nowrap">{{ record.student_name }}</td>
           <td>
-            {% set route = record.route_display or 'GENERAL' %}
-            <span class="badge-au {{ 'badge-au--approved' if route == 'GENERAL' else 'badge-au--pending' }}">
-              {{ 'Proctor' if route == 'GENERAL' else route|title }}
-            </span>
+            {# What the badge claims has to be what is actually true.
+               It used to read "Proctor" for every GENERAL-route request, which
+               is a guess about the routing rule rather than a fact about this
+               student -- and when the department has no proctor lists loaded,
+               routing falls through to the least-loaded lecturer in the
+               department, so the label was actively wrong.
+
+               `from_proctor_list` is the real thing: this student's roll is on
+               one of MY proctor lists. When it is false the request is here for
+               some other reason, and saying so is more useful than implying
+               otherwise. #}
+            {% if record.from_proctor_list %}
+              <span class="badge-au badge-au--approved" title="This student is on your proctor list">
+                <i class="bi bi-person-check"></i> Your proctor list
+              </span>
+            {% else %}
+              {% set route = record.route_display or 'GENERAL' %}
+              {% if route == 'GENERAL' %}
+                <span class="badge-au badge-au--pending"
+                      title="This student is not on your proctor list. Routing sent it here because it was the default choice.">
+                  <i class="bi bi-arrow-left-right"></i> Assigned to you
+                </span>
+              {% else %}
+                <span class="badge-au badge-au--approved">{{ route|title }}</span>
+              {% endif %}
+            {% endif %}
           </td>
           <td>{{ type_badge(record.permission_type) }}</td>
           <td class="text-nowrap">{{ date(record.start_date) }}</td>

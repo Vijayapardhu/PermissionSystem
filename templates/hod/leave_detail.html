@@ -1,0 +1,241 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Leave Review &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">
+      {{ applicant.name if applicant else 'Faculty leave' }}
+    </h1>
+    <p class="page-head__sub">
+      {{ leave.leave_type.value|replace('_', ' ') }}
+      &middot; {{ leave.from_date.strftime('%d %b %Y') }} &rarr; {{ leave.to_date.strftime('%d %b %Y') }}
+      &middot; {{ leave.days }} day{{ '' if leave.days == 1 else 's' }}
+      &middot; {{ leave.status.value|replace('_', ' ') }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    {% if leave.is_final %}
+      <a href="{{ url_for('hod.leave_letter', leave_id=leave.id) }}"
+         class="btn btn-primary btn-pill">
+        <i class="bi bi-file-earmark-text"></i> Approval letter
+      </a>
+    {% endif %}
+    <a href="{{ url_for('hod.leave_queue') }}" class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Leave Approvals
+    </a>
+  </div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__body">
+    <div class="row g-3">
+      <div class="col-12 col-md-6">
+        <p class="mb-1"><strong>Reason:</strong> {{ leave.reason }}</p>
+        {% if applicant %}
+          <p class="mb-0 form-text">
+            {{ applicant.designation or '—' }}
+            {% if applicant.employee_code %} &middot; {{ applicant.employee_code }}{% endif %}
+          </p>
+        {% endif %}
+      </div>
+      <div class="col-12 col-md-6">
+        <p class="mb-1">
+          <strong>Class cover:</strong>
+          {% if leave.affected_count %}
+            {{ leave.accepted_count }} of {{ leave.affected_count }} class block{{ '' if leave.affected_count == 1 else 's' }} arranged
+          {% else %}
+            No classes affected by these dates
+          {% endif %}
+        </p>
+        {% if leave.hod_remarks %}
+          <p class="mb-0 form-text"><strong>Your remark:</strong> {{ leave.hod_remarks }}</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if leave.uncovered_count %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle"></i>
+  <strong>{{ leave.uncovered_count }} class block{{ '' if leave.uncovered_count == 1 else 's' }}
+  could not be covered.</strong>
+  The applicant asked you to decide whether to approve with the class untaught.
+  Say below how it will be handled &mdash; a remark is required.
+</div>
+{% endif %}
+
+{% if coverage.missing and adjustments %}
+<div class="alert alert-secondary">
+  <i class="bi bi-info-circle"></i>
+  {{ coverage.missing }} of {{ coverage.total }} periods in the department timetable
+  have no lecturer recorded against them, so the availability the applicant saw
+  was provisional. The cover arranged below is what was actually accepted.
+</div>
+{% endif %}
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-arrow-left-right"></i> Class adjustments</h2>
+    <span class="form-text">{{ leave.accepted_count }} of {{ leave.affected_count }} covered</span>
+  </div>
+  {% if adjustments %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Day</th>
+          <th class="table-au__num">Periods</th>
+          <th>Time</th>
+          <th>Section</th>
+          <th>Subject</th>
+          <th>Covered by</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for adjustment in adjustments %}
+        <tr{% if adjustment.status.value == 'UNCOVERED' %} class="table-danger"{% endif %}>
+          <td class="table-au__strong">{{ adjustment.date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ adjustment.day }}</td>
+          <td class="table-au__num">{{ adjustment.span_label }}</td>
+          <td>
+            {# A block runs from its first period to its last, so the time shown
+               is the whole span -- which is what the substitute is being asked to
+               give up, and comparing it against only the first period would
+               understate the ask. #}
+            {% set first_slot = slots.get(adjustment.period) %}
+            {% set last_slot = slots.get(adjustment.period_list[-1]) %}
+            {% if first_slot %}
+              {{ first_slot.start }}
+              {%- if last_slot and last_slot is not sameas first_slot %} &ndash; {{ last_slot.end }}
+              {%- else %} &ndash; {{ first_slot.end }}{% endif %}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ adjustment.section }}</td>
+          <td>{{ adjustment.subject_code or '—' }}</td>
+          <td>
+            {% if adjustment.assigned_name %}
+              <strong>{{ adjustment.assigned_name }}</strong>
+            {% elif adjustment.status.value == 'UNCOVERED' %}
+              <span class="text-danger"><i class="bi bi-x-circle"></i> Nobody</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+            {% if adjustment.remarks %}
+              <div class="form-text"><em>{{ adjustment.remarks }}</em></div>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge-au badge-au--{{ 'approved' if adjustment.status.value == 'ACCEPTED'
+                                              else 'rejected' if adjustment.status.value in ('UNCOVERED', 'REJECTED')
+                                              else 'pending' }}">
+              {{ adjustment.status.value|replace('_', ' ') }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="card-au__body">
+      <p class="mb-0 text-muted">
+        This applicant teaches nothing in the imported timetable, so these dates
+        affect no classes and there is nothing to arrange.
+      </p>
+    </div>
+  {% endif %}
+</div>
+
+{% if others %}
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-calendar-week"></i> Their other live applications</h2>
+  </div>
+  <div class="card-au__body">
+    <p class="form-text mb-2">
+      Checked for a second request covering days this one already takes.
+    </p>
+    {% for other in others %}
+      <p class="mb-1">
+        {{ other.from_date.strftime('%d %b %Y') }} &rarr; {{ other.to_date.strftime('%d %b %Y') }}
+        <span class="badge-au badge-au--pending">{{ other.status.value|replace('_', ' ') }}</span>
+      </p>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if leave.status.value == 'HOD_PENDING' and own_application %}
+{# Your own application, read-only. It is in this queue only because HODs teach
+   and can file leave; deciding it is not yours to do. #}
+<div class="card-au">
+  <div class="card-au__body">
+    <div class="empty">
+      <div class="empty__icon"><i class="bi bi-person-lock"></i></div>
+      <div class="empty__title">This is your own application</div>
+      <p class="empty__text">
+        You cannot decide it, and it does not sit in your queue: sending it
+        passes it straight to the <strong>Dean</strong>, whose signature grants
+        it. Track it under
+        <a href="{{ url_for('faculty.my_leave') }}">My Leave</a>, and the approval
+        letter appears there once it is signed.
+      </p>
+    </div>
+  </div>
+</div>
+{% elif leave.status.value == 'HOD_PENDING' %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-pen"></i> Your decision</h2>
+  </div>
+  <div class="card-au__body">
+    <form method="post" action="{{ url_for('hod.leave_action', leave_id=leave.id) }}">
+      {{ csrf_field() }}
+      <div class="mb-3">
+        <label class="form-label" for="remarks">
+          Remark
+          {% if leave.uncovered_count %}
+            <span class="text-danger">(required — say how the uncovered class will be handled)</span>
+          {% else %}
+            <span class="text-muted">(required)</span>
+          {% endif %}
+        </label>
+        <textarea class="form-control" id="remarks" name="remarks" rows="3"
+                  required minlength="5"
+                  placeholder="Cover arranged for all periods."></textarea>
+      </div>
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i>
+        Approving passes this to the Dean, whose signature is the last one. Once
+        they sign, the leave is granted and the approval letter becomes printable
+        from here and from the applicant's own leave page.
+      </div>
+      <div class="d-flex gap-2">
+        <button class="btn btn-success btn-pill" name="decision" value="approve">
+          <i class="bi bi-check-lg"></i> Approve &amp; Pass to Dean
+        </button>
+        <button class="btn btn-outline-danger btn-pill" name="decision" value="reject">
+          <i class="bi bi-x-lg"></i> Reject
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary">
+  <i class="bi bi-hourglass-split"></i>
+  This application is <strong>{{ leave.status.value|replace('_', ' ') }}</strong>
+  {% if leave.hod_at %} and was decided on {{ leave.hod_at.strftime('%d %b %Y, %H:%M') }}{% endif %}.
+  {% if leave.status.value == 'DEAN_PENDING' %}
+    It is with the Dean. That stage is not yet available in this portal.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

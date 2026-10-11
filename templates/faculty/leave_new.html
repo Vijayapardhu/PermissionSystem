@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}Apply for Leave &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Apply for Leave</h1>
+    <p class="page-head__sub">
+      Step 1 of 3. The next page lists the periods this leave affects so you can
+      confirm which you will miss.
+    </p>
+  </div>
+</div>
+
+<div class="card-au">
+  <div class="card-au__body">
+    <form method="post" novalidate>
+      {{ csrf_field() }}
+
+      <div class="mb-3">
+        <label class="form-label" for="leave_type">Leave type</label>
+        <select class="form-select" id="leave_type" name="leave_type" required>
+          <option value="">Choose a type</option>
+          {% for value, label in leave_types %}
+            <option value="{{ value.value }}"
+                    {% if form and form.get('leave_type') == value.value %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="from_date">From</label>
+          <input class="form-control" type="date" id="from_date" name="from_date"
+                 required value="{{ form.get('from_date', '') if form else '' }}">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="to_date">To</label>
+          <input class="form-control" type="date" id="to_date" name="to_date"
+                 required value="{{ form.get('to_date', '') if form else '' }}">
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="reason">Reason</label>
+        <textarea class="form-control" id="reason" name="reason" rows="3"
+                  required minlength="5"
+                  placeholder="M.Tech review, medical appointment, personal work...">{{ form.get('reason', '') if form else '' }}</textarea>
+        <div class="form-text">
+          This is printed on the leave document, so write it as it should read there.
+        </div>
+      </div>
+
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i>
+        A single application cannot span more than {{ max_days }} days, and cannot
+        overlap a leave you already have.
+      </div>
+
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-pill">
+          Continue <i class="bi bi-arrow-right"></i>
+        </button>
+        <a href="{{ url_for('faculty.my_leave') }}" class="btn btn-outline-secondary btn-pill">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

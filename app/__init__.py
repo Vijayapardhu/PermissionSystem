@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
 from markupsafe import escape
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
 
@@ -33,8 +34,34 @@ def create_app(config_object=Config) -> Flask:
     _register_request_hooks(app)
     _register_template_helpers(app)
     _register_error_handlers(app)
+    _register_proxy_fix(app)
 
     return app
+
+
+def _register_proxy_fix(app: Flask) -> None:
+    """Let the app see the request nginx received, not the hop from nginx.
+
+    Behind a reverse proxy the hop into gunicorn is plain HTTP: the socket
+    really is `http`, so Flask reads `request.scheme` as `http` and every
+    absolute URL it builds comes out wrong. `post_logout_redirect_uri` on
+    /auth/logout-all was `http://...` for that reason, which then had to be
+    registered with Entra ID in its http:// form -- an odd thing to have in an
+    app registration, and one more place for the two spellings to drift apart.
+    `url_for(..., _external=True)` anywhere in a template would have the same
+    fault, and quietly, because the page still renders.
+
+    X-Forwarded-Proto and X-Forwarded-For are trusted for exactly one hop. That
+    is only safe because gunicorn binds 127.0.0.1, so nginx is the sole thing
+    that can reach it and nothing can hand the app a forged header. Trusting a
+    wider count would be a real vulnerability the moment that stopped being
+    true, so the number is deliberately not configurable.
+
+    x_host and x_port are left off. nginx forwards the original Host in the
+    Host header and sends neither of those, so trusting them would blank the
+    host instead of correcting it.
+    """
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 
 def _register_page_permissions(app: Flask) -> None:
@@ -181,6 +208,8 @@ def _register_extensions(app: Flask) -> None:
 
 def _register_blueprints(app: Flask) -> None:
     from app.auth.routes import auth
+    from app.dean.routes import dean_bp
+    from app.deputy.routes import deputy_bp
     from app.faculty.routes import faculty_bp
     from app.hod.routes import hod_bp
     from app.student.routes import student_bp
@@ -189,6 +218,8 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(student_bp)
     app.register_blueprint(faculty_bp)
     app.register_blueprint(hod_bp)
+    app.register_blueprint(dean_bp)
+    app.register_blueprint(deputy_bp)
 
 
 def _register_request_hooks(app: Flask) -> None:

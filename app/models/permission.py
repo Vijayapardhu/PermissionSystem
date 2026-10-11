@@ -180,19 +180,29 @@ class PermissionModel:
                         limit: int = 50, offset: int = 0) -> List[PermissionRequest]:
         """Every request a student is on, whether they filed it or were added.
 
-        Two queries, because membership lives in two shapes: `student_id` for the
-        requester, and inside the `member_ids` array for everyone else. Asking
-        only one of them is what made a co-member unable to see the permission
-        they were covered by. Results are merged and de-duplicated by id, so a
-        requester matched by both queries appears once.
+        Membership lives in two shapes: `student_id` for the requester, and inside
+        the `member_ids` array for everyone else. Asking only one of them is what
+        made a co-member unable to see the permission they were covered by.
+
+        The array is queried for the id twice, as a number and as text. Rows
+        written before the store stopped flattening lists to strings hold their
+        member ids as "42", and Firestore will not match that against the number
+        42 -- it compares types, and does not coerce. One query would therefore
+        find only the rows written after that fix and silently drop every group
+        permission already on file. Firestore has no OR across array_contains
+        clauses, so both forms are fetched and merged, de-duplicated by id so a
+        requester matched by both the requester query and the array query still
+        appears once.
         """
         rows = list(store.documents(REQUESTS, student_id=student_id))
         seen = {row.get('id') for row in rows}
-        for row in store.documents(REQUESTS,
-                                   array_contains={'member_ids': student_id}):
-            if row.get('id') not in seen:
-                seen.add(row.get('id'))
-                rows.append(row)
+
+        candidates = [student_id, str(student_id)]
+        for value in candidates:
+            for row in store.documents(REQUESTS, array_contains={'member_ids': value}):
+                if row.get('id') not in seen:
+                    seen.add(row.get('id'))
+                    rows.append(row)
 
         requests = [PermissionModel._to_request(row) for row in rows]
         if status:
@@ -249,6 +259,52 @@ class PermissionModel:
         requests = [PermissionModel._to_request(row) for row in rows]
         requests.sort(key=_oldest_first)
         return requests
+
+    @staticmethod
+    def find_touching_faculty(faculty_id: int, status: RequestStatus = None,
+                              limit: int = 50, offset: int = 0
+                              ) -> List[PermissionRequest]:
+        """Every request this lecturer is answerable for: in their queue now, or
+        one they have already decided.
+
+        Two sets, and both are needed. `assigned_faculty_id` is where a request
+        is waiting, which is the queue. The approval history is where a request
+        this person has already signed sits once it has moved on -- and a
+        lecturer who approved something yesterday and finds no trace of it today
+        has no way to check what they did or answer a student who asks.
+
+        Before this existed the lecturer's dashboard read `find_all_for_hod`,
+        which is the whole department. Every lecturer could see every other
+        student's roll number, reason and outcome on a page that was supposed to
+        be their own work queue -- and a proctor had no way to see the requests
+        they had personally handled, which is the thing they most need to see.
+
+        The HOD keeps the department-wide view: overseeing the queue is their
+        job, and the grant for that page is separate from this one.
+        """
+        found = {}
+        for row in store.documents(REQUESTS, assigned_faculty_id=faculty_id):
+            found[int(row['id'])] = row
+
+        # Reached by reading this lecturer's own history rather than the whole
+        # collection, so the cost is proportional to how much they have actually
+        # done instead of to how busy the department is.
+        for entry in store.documents(HISTORY, faculty_id=faculty_id):
+            request_id = entry.get('request_id')
+            if not request_id or request_id in found:
+                continue
+            original = store.get(REQUESTS, request_id)
+            if original is not None:
+                found[int(original['id'])] = original
+
+        requests = [PermissionModel._to_request(row) for row in found.values()]
+        if status:
+            requests = [r for r in requests if r.status == status]
+        requests.sort(key=_newest_first)
+
+        page = requests[offset:offset + limit]
+        attach_students(page)
+        return page
 
     @staticmethod
     def find_all_for_hod(status: RequestStatus = None,

@@ -921,11 +921,12 @@ check('a failed call is retried at least once, so a blip is survivable',
 check('health probe verdict is cached so polling costs no query',
       _store_cfg['HEALTH_DB_CACHE_SECONDS'] >= 10,
       'an uncached probe costs a round trip on every poll')
-check('config carries no Postgres settings at all',
-      not any(key == 'DATABASE_URL' or key.startswith('DB_')
-              for key in _store_cfg),
-      str(sorted(key for key in _store_cfg
-                 if key == 'DATABASE_URL' or key.startswith('DB_'))))
+check('the Postgres settings are documented, not incidental',
+      'DATABASE_URL' in _store_cfg and 'DATABASE_BACKEND' in _store_cfg,
+      'a Postgres target needs both the URL and the backend that selects it')
+check('no leftover DB_* keys from the retired Supabase integration',
+      not any(key.startswith('DB_') for key in _store_cfg),
+      str(sorted(key for key in _store_cfg if key.startswith('DB_'))))
 
 # Static assets: long max-age is only safe because the URL is versioned.
 _cache_app = create_app()
@@ -1123,6 +1124,47 @@ _gaps = sorted(
 check('every endpoint has a page grant or is exempt', not _gaps,
       f'open to any signed-in account: {_gaps}')
 
+# A view function whose name matches a function it calls calls *itself*.
+#
+# Four of the faculty leave routes were written that way -- `request_substitution`
+# the view calling `request_substitution` the service function -- and every one of
+# those buttons returned a 500. Nothing here can see it: a test that calls the
+# service function directly never goes near the view, and the page still renders
+# fine because the bug is only on the POST. It was found by walking the running
+# site, which is not something this harness does, so it is checked statically here
+# instead.
+import ast as _ast  # noqa: E402
+import os as _os  # noqa: E402
+
+_ROUTE_DECORATORS = {'route', 'get', 'post', 'delete', 'patch', 'put'}
+_shadowed = []
+for _base, _dirs, _files in _os.walk('app'):
+    _dirs[:] = [d for d in _dirs if d != '__pycache__']
+    for _name in _files:
+        if not _name.endswith('.py'):
+            continue
+        _path = _os.path.join(_base, _name)
+        with open(_path, encoding='utf-8') as _handle:
+            _tree = _ast.parse(_handle.read(), filename=_path)
+        for _node in _ast.walk(_tree):
+            if not isinstance(_node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            _is_view = any(
+                isinstance(_d, _ast.Call)
+                and isinstance(_d.func, _ast.Attribute)
+                and _d.func.attr in _ROUTE_DECORATORS
+                for _d in _node.decorator_list)
+            if not _is_view:
+                continue
+            _calls = {_c.func.id for _c in _ast.walk(_node)
+                      if isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Name)}
+            if _node.name in _calls:
+                _shadowed.append(f'{_path}:{_node.lineno} {_node.name}()')
+
+check('no route view calls a function of its own name', not _shadowed,
+      'alias the import instead, e.g. `import foo as foo_service`: '
+      + ', '.join(_shadowed))
+
 # The sign-in half of the flow and the public verification page have to work
 # before anyone holds a grant, so they are exempt by name.
 check('the public verification page stays reachable without a grant',
@@ -1250,15 +1292,19 @@ for package in ['Flask', 'msal', 'python-dotenv', 'gunicorn',
     check(f'requirements pins {package}',
           re.search(rf'^{re.escape(package)}==', _req, re.M) is not None)
 
-# The store client and the storage client both pin exactly, so a plain
-# "package==" match would miss nothing -- but a stale Postgres driver left in the
-# list would still be installed on every deploy, so assert its absence.
+# The store clients and the storage client all pin exactly, so a plain
+# "package==" match would miss nothing.
 check('requirements pins the Firestore client',
       re.search(r'^google-cloud-firestore==', _req, re.M) is not None)
 check('requirements pins the proof storage client',
       re.search(r'^boto3==', _req, re.M) is not None)
-check('requirements no longer installs the Postgres driver',
-      'psycopg' not in _req, 'psycopg is still pinned')
+# psycopg is back, deliberately: the SQL store connects to Postgres in production
+# and Render's managed Postgres is the target. It was absent while Postgres had
+# been retired in favour of Firestore, so this assertion used to be the opposite
+# -- and would have failed the moment the SQL store shipped.
+check('requirements pins the Postgres driver for the SQL store',
+      re.search(r'^psycopg(\[binary\])?==', _req, re.M) is not None,
+      'DATABASE_URL selects Postgres, which cannot start without this')
 check('requirements no longer pulls the MySQL driver',
       'mysql' not in _req.lower())
 
@@ -2512,11 +2558,12 @@ check('config carries the Firestore settings',
       str([key for key in ('FIREBASE_PROJECT_ID', 'FIRESTORE_DATABASE',
                            'FIRESTORE_TIMEOUT_SECONDS', 'FIRESTORE_RETRIES')
            if key not in _firestore_config]))
-check('config carries no Postgres settings',
-      not any(key == 'DATABASE_URL' or key.startswith('DB_')
-              for key in _firestore_config),
-      str(sorted(key for key in _firestore_config
-                 if key == 'DATABASE_URL' or key.startswith('DB_'))))
+check('the Postgres settings are documented, not incidental',
+      'DATABASE_URL' in _firestore_config and 'DATABASE_BACKEND' in _firestore_config,
+      'a Postgres target needs both the URL and the backend that selects it')
+check('no leftover DB_* keys from the retired Supabase integration',
+      not any(key.startswith('DB_') for key in _firestore_config),
+      str(sorted(key for key in _firestore_config if key.startswith('DB_'))))
 check('health probe verdicts are cached',
       _firestore_config['HEALTH_DB_CACHE_SECONDS'] >= 10,
       'an uncached probe costs a query on every poll')

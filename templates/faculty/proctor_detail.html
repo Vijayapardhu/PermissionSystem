@@ -28,6 +28,7 @@
 
 <div class="stat-grid">
   {{ stat('On List', summary.roster, 'people', 'primary') }}
+  {{ stat('Awaiting You', pending_count, 'inbox', 'warning') }}
   {{ stat('Linked Accounts', summary.linked, 'link-45deg', 'success') }}
   {{ stat('Not Yet Linked', summary.unlinked, 'question-circle', 'warning') }}
 </div>
@@ -89,12 +90,53 @@
     <span>{{ summary.linked }} of {{ summary.roster }} rolls linked to student accounts.</span>
   </div>
   {% else %}
-    {{ empty_state('upload', 'List is empty',
-                   'Upload a spreadsheet of roll numbers to add the students you proctor.') }}
+    {{ empty_state('person-plus', 'List is empty',
+                   'Add students by roll number on the right, or upload a spreadsheet of roll numbers.') }}
   {% endif %}
 </div>
 
 <div class="row g-3">
+  {# Add one student by hand.
+     The upload covers a whole batch, but the daily case is different: the
+     department allocates one more student to this proctor after the list was
+     uploaded, and making them edit the spreadsheet is how proctor lists end up
+     quietly out of date. #}
+  <div class="col-12 col-lg-6">
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-person-plus"></i> Add a student</h2>
+      </div>
+      <div class="card-au__body">
+        <form method="post" action="{{ url_for('faculty.add_proctor_student', group_id=group.id) }}">
+          {{ csrf_field() }}
+          <label class="form-label" for="roll">Roll number</label>
+          <input type="text" class="form-control mb-2" id="roll" name="roll"
+                 placeholder="25B11CS001" autocomplete="off" list="proctor-rolls">
+          <datalist id="proctor-rolls">
+            {% for member in members[:60] %}<option value="{{ member.roll_number }}"></option>{% endfor %}
+          </datalist>
+          <button type="submit" class="btn btn-primary btn-pill w-100">
+            <i class="bi bi-plus-lg"></i> Add to proctor list
+          </button>
+          <div class="form-text mt-2">
+            Their permission requests are routed to you from the moment they are added.
+          </div>
+        </form>
+
+        <hr class="my-3">
+
+        <label class="form-label" for="proctor-search">Find a student</label>
+        <input type="search" class="form-control mb-2" id="proctor-search"
+               placeholder="Type a roll number or a name" autocomplete="off"
+               data-url="{{ url_for('faculty.proctor_student_search', group_id=group.id) }}"
+               data-add="{{ url_for('faculty.add_proctor_student', group_id=group.id) }}">
+        <div id="proctor-results" class="list-group list-group-flush"></div>
+        <div class="form-text mt-2">Type at least two characters. Only students
+          already on a roster in this department can be added.</div>
+      </div>
+    </div>
+  </div>
+
   <div class="col-12 col-lg-6">
     <div class="card-au">
       <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-file-earmark-arrow-up"></i> Upload / Replace Roster</h2></div>
@@ -113,14 +155,10 @@
             <i class="bi bi-upload"></i> Import roster
           </button>
         </form>
-      </div>
-    </div>
-  </div>
 
-  <div class="col-12 col-lg-6">
-    <div class="card-au" style="border-left:3px solid var(--au-danger)">
-      <div class="card-au__head"><h2 class="card-au__title"><i class="bi bi-trash"></i> Delete List</h2></div>
-      <div class="card-au__body">
+        <hr class="my-3">
+
+        <h3 class="card-au__title fs-6"><i class="bi bi-trash"></i> Delete list</h3>
         <p class="small text-muted">
           Removes <strong>{{ group.name }}</strong> and its
           {{ summary.roster }} {{ 'entry' if summary.roster == 1 else 'entries' }}.
@@ -137,4 +175,95 @@
     </div>
   </div>
 </div>
+
+<script>
+// Incremental search for the add-a-student box.
+//
+// Plain script rather than a framework: it is one query per keystroke behind a
+// two-character floor, and the results are rendered server-side already -- this
+// only moves the same markup into place. A full page reload per keystroke was
+// what made adding one student impractical by hand.
+(function () {
+  var box = document.getElementById('proctor-search');
+  var out = document.getElementById('proctor-results');
+  if (!box || !out) return;
+
+  var timer = null;
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+
+  function csrfToken() {
+    var input = document.querySelector('input[name="_csrf_token"]');
+    return input ? input.value : '';
+  }
+
+  function add(roll) {
+    var form = document.createElement('form');
+    form.method = 'post';
+    form.action = box.dataset.add;
+
+    var token = document.createElement('input');
+    token.type = 'hidden';
+    token.name = '_csrf_token';
+    token.value = csrfToken();
+    form.appendChild(token);
+
+    var field = document.createElement('input');
+    field.type = 'hidden';
+    field.name = 'roll';
+    field.value = roll;
+    form.appendChild(field);
+
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  function render(rows) {
+    if (!rows.length) {
+      out.innerHTML = '<div class="form-text px-2 py-2">No matching student.</div>';
+      return;
+    }
+    out.innerHTML = rows.map(function (r) {
+      var roll = esc(r.roll_number || r.name);
+      var name = r.name && r.name !== r.roll_number
+        ? ' <span class="text-muted small">' + esc(r.name) + '</span>' : '';
+      var action = r.already
+        ? '<span class="badge text-bg-light">On this list</span>'
+        : '<button type="button" class="btn btn-sm btn-outline-primary btn-pill" data-add-roll="' + roll + '">Add</button>';
+      return '<div class="list-group-item d-flex justify-content-between align-items-center">'
+        + '<span>' + roll + name + '</span>' + action + '</div>';
+    }).join('');
+
+    out.querySelectorAll('button[data-add-roll]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        add(btn.getAttribute('data-add-roll'));
+      });
+    });
+  }
+
+  function run() {
+    var q = box.value.trim();
+    if (q.length < 2) {
+      out.innerHTML = '';
+      return;
+    }
+    fetch(box.dataset.url + '?q=' + encodeURIComponent(q),
+          {headers: {'Accept': 'application/json'}})
+      .then(function (r) { return r.json(); })
+      .then(function (data) { render(data.results || []); })
+      .catch(function () {
+        out.innerHTML = '<div class="form-text px-2 py-2">Search failed. Try again.</div>';
+      });
+  }
+
+  box.addEventListener('input', function () {
+    clearTimeout(timer);
+    timer = setTimeout(run, 250);
+  });
+}());
+</script>
 {% endblock %}

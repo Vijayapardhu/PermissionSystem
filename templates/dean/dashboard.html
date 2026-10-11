@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import stat, empty_state with context %}
+{% block title %}Overview &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Overview</h1>
+    <p class="page-head__sub">
+      Faculty leave awaiting your signature. Approving is the last step: it grants
+      the leave and makes the approval letter printable.
+    </p>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">{{ stat('Awaiting you', counts.awaiting, 'hourglass-split', 'warning') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Classes uncovered', counts.uncovered, 'exclamation-triangle', 'danger') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Approved by you', counts.approved, 'check-circle', 'success') }}</div>
+  <div class="col-6 col-lg-3">{{ stat('Rejected by you', counts.rejected, 'x-circle') }}</div>
+</div>
+
+<div class="card-au mb-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-inbox"></i> Awaiting your decision</h2>
+    {% if pending %}
+      <a href="{{ url_for('dean.leave_queue') }}" class="btn btn-sm btn-outline-secondary btn-pill">
+        All {{ counts.awaiting }}
+      </a>
+    {% endif %}
+  </div>
+  {% if pending %}
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Faculty</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Type</th>
+          <th>Class cover</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave in pending %}
+        <tr>
+          <td class="table-au__strong">{{ leave.faculty_name or '—' }}</td>
+          <td>{{ leave.from_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.to_date.strftime('%d-%m-%Y') }}</td>
+          <td>{{ leave.leave_type.value|replace('_', ' ') }}</td>
+          <td>
+            {% if leave.affected_count %}
+              <span class="badge-au badge-au--{{ 'approved' if not leave.uncovered_count else 'pending' }}">
+                {{ leave.accepted_count }}/{{ leave.affected_count }}
+              </span>
+              {% if leave.uncovered_count %}
+                <span class="badge-au badge-au--rejected">{{ leave.uncovered_count }} uncovered</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">No classes affected</span>
+            {% endif %}
+          </td>
+          <td class="table-au__actions">
+            <a class="btn btn-sm btn-primary btn-pill"
+               href="{{ url_for('dean.leave_detail', leave_id=leave.id) }}">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="card-au__body">
+      {{ empty_state('check2-all', 'Nothing waiting on you',
+          'Faculty leave arrives here once the department has approved it and '
+          'arranged cover for every period it affects.') }}
+    </div>
+  {% endif %}
+</div>
+
+{% if decided %}
+<div class="card-au">
+  <div class="card-au__head">
+    <h2 class="card-au__title"><i class="bi bi-clock-history"></i> Recently signed</h2>
+  </div>
+  <div class="au-table-wrap">
+    <table class="table-au">
+      <thead>
+        <tr>
+          <th>Faculty</th>
+          <th>Dates</th>
+          <th>Type</th>
+          <th>Your decision</th>
+          <th>Signed</th>
+          <th class="table-au__actions">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave in decided %}
+        <tr>
+          <td class="table-au__strong">{{ leave.faculty_name or '—' }}</td>
+          <td class="text-nowrap">
+            {{ leave.from_date.strftime('%d-%m-%Y') }} &rarr;
+            {{ leave.to_date.strftime('%d-%m-%Y') }}
+          </td>
+          <td>{{ leave.leave_type.value|replace('_', ' ') }}</td>
+          <td>
+            <span class="badge-au badge-au--{{ 'approved' if leave.is_final else 'rejected' }}">
+              {{ 'Approved' if leave.is_final else 'Rejected' }}
+            </span>
+          </td>
+          <td class="text-nowrap">{{ leave.dean_at.strftime('%d-%m-%Y') if leave.dean_at else '—' }}</td>
+          <td class="table-au__actions">
+            {% if leave.is_final %}
+              <a class="btn btn-sm btn-outline-secondary btn-pill"
+                 href="{{ url_for('dean.leave_letter', leave_id=leave.id) }}">Letter</a>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary btn-pill"
+               href="{{ url_for('dean.leave_detail', leave_id=leave.id) }}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

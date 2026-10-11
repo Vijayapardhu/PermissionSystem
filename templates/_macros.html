@@ -76,6 +76,174 @@
 </div>
 {%- endmacro %}
 
+{#
+  The one search box, used by every page that searches.
+
+  It was five shapes before this: two with a label above and a filled Search
+  button, two as a bare Bootstrap input group at two different widths, one
+  joined to a scope dropdown. Nothing about them matched the page they sat on, and
+  a control that looks different on each page has to be re-learned on each page.
+
+  Arguments:
+    value        the current query, so the field is never emptied on reload
+    placeholder  says what is matched, which is also the accessible name
+    label        visible caption; omit it and the placeholder carries the name
+    size         'wide' | 'bar' | 'full' -- how much of the row it may take
+    autofocus    put the caret in the field on load
+    id           the input's id, needed to bind a visible <label>
+    clear_url    where Clear goes; defaults to this page with no query
+    name         the form field name, almost always q
+
+  The Go button is in the markup for the no-JS case and `static/js/search.js`
+  removes it once the field is found, because the bar submits itself and a second
+  way to do the same thing should not sit there looking like the primary action.
+#}
+{% macro search_box(value='', placeholder='Search', label='', size='bar',
+                    autofocus=false, id='au-q', clear_url='', name='q',
+                    minlength=0) -%}
+<div class="au-search au-search--{{ size }}">
+  <div class="au-search__box" data-au-search>
+    <i class="bi bi-search au-search__icon" aria-hidden="true"></i>
+    <input type="search" id="{{ id }}" name="{{ name }}"
+           class="form-control au-search__input"
+           value="{{ value }}" placeholder="{{ placeholder }}"
+           aria-label="{{ label or placeholder }}"
+           autocomplete="off" spellcheck="false"
+           {% if autofocus %}autofocus{% endif %}
+           {% if minlength %}minlength="{{ minlength }}" maxlength="80"{% endif %}>
+    {% if value %}
+      <button type="button" class="au-search__clear"
+              title="Clear the search" aria-label="Clear the search">
+        <i class="bi bi-x-lg" aria-hidden="true"></i>
+      </button>
+    {% endif %}
+    <button type="submit" class="au-search__btn au-search__go"
+            title="Search">
+      <i class="bi bi-arrow-right" aria-hidden="true"></i>
+      <span>Search</span>
+    </button>
+  </div>
+</div>
+{%- endmacro %}
+
+{# The form wrapper, for the pages whose search stands alone rather than sitting
+   in a toolbar of filters. `action` empty means "this page". #}
+{% macro search_form(value='', placeholder='Search', label='', size='wide',
+                     autofocus=false, clear_url='', minlength=0,
+                     hint='') -%}
+<form method="get" action="" class="mb-2" role="search">
+  {{ search_box(value=value, placeholder=placeholder, label=label,
+                size=size, autofocus=autofocus, clear_url=clear_url,
+                minlength=minlength) }}
+  {% if hint %}
+    <p class="au-search__hint">{{ hint }}</p>
+  {% endif %}
+</form>
+{%- endmacro %}
+
+{#
+  The one dropdown, wrapping the select and its arrow.
+
+  The arrow is an element rather than a background image. Painted as a background
+  it was one glyph only as long as `background-repeat: no-repeat` kept winning
+  over an earlier `background` shorthand; when it lost, the arrow tiled across the
+  whole control and the dropdown grew a row of chevrons. An element cannot tile.
+
+  `options` is a list of (value, label) pairs, or of plain strings when the
+  label is the value -- which is the common case and the one every caller reaches
+  for first. The macro takes both, because a template has no way to build a list
+  comprehension and forcing every caller to hand-assemble pairs to say
+  "T1-General, T1-General" twice over is how a filter ends up with a label that
+  does not match what it sends. #}
+{% macro select(name, options, selected='', aria='', cls='', extra='') -%}
+<div class="au-select {{ cls }}">
+  <select class="form-select" name="{{ name }}"
+          {% if aria %}aria-label="{{ aria }}"{% endif %} {{ extra|safe }}>
+    {% for item in options %}
+      {% set pair = [item, item] if item is string else item %}
+      <option value="{{ pair[0] }}"
+              {{ 'selected' if pair[0] == selected }}>{{ pair[1] }}</option>
+    {% endfor %}
+  </select>
+  <i class="bi bi-chevron-down au-select__arrow" aria-hidden="true"></i>
+</div>
+{%- endmacro %}
+
 {% macro csrf_field() -%}
 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+{%- endmacro %}
+
+{# ---------- Editing: what will change, before it changes ------------------
+
+   `changes` is a list of FieldChange (app/utils/changes.py). The previous value
+   is struck through rather than merely labelled "before", so a glance down the
+   list reads as old-to-new instead of as two columns of unrelated text. #}
+{% macro change_table(changes) -%}
+<div class="au-table-wrap">
+  <table class="table-au change-table">
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Now</th>
+        <th>After your edit</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for change in changes %}
+      <tr>
+        <td class="table-au__strong">{{ change.label }}</td>
+        <td>
+          {% if change.before %}
+            <span class="change-before">{{ change.before }}</span>
+          {% else %}
+            <span class="form-text">&mdash;</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if change.after %}
+            <span class="change-after">{{ change.after }}</span>
+          {% else %}
+            <span class="change-after change-after--clear">(cleared)</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+{# The amendment trail, shown on a record's own page once it has been edited
+   after being sent. #}
+{% macro amendment_history(entries) -%}
+{% if entries %}
+<div class="card-au mt-3">
+  <div class="card-au__head">
+    <h2 class="card-au__title">
+      <i class="bi bi-clock-history"></i> Amendments
+    </h2>
+    <span class="form-text">edited {{ entries | length }} time{{ '' if entries|length == 1 else 's' }} after it was sent</span>
+  </div>
+  <div class="card-au__body">
+    {% for entry in entries %}
+    <div class="amendment">
+      <div class="amendment__head">
+        <strong>{{ entry.actor_name or 'Someone' }}</strong>
+        <span class="form-text">{{ entry.at.strftime('%d %b %Y, %H:%M') }}</span>
+      </div>
+      <ul class="amendment__list">
+        {% for change in entry.changes %}
+        <li>
+          <span class="amendment__label">{{ change.label }}</span>
+          <span class="change-before">{{ change.before or '—' }}</span>
+          <i class="bi bi-arrow-right amendment__arrow" aria-hidden="true"></i>
+          <span class="change-after">{{ change.after or '(cleared)' }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 {%- endmacro %}

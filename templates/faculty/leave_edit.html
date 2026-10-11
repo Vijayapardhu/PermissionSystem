@@ -1,0 +1,149 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Amend application &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Amend this application</h1>
+    <p class="page-head__sub">
+      {{ leave.leave_type.value|replace('_', ' ') }} &middot;
+      {{ leave.from_date.strftime('%d %b %Y') }} &rarr;
+      {{ leave.to_date.strftime('%d %b %Y') }}
+      &middot; currently {{ leave.status.value|replace('_', ' ') }}
+    </p>
+  </div>
+  <div class="page-head__actions">
+    <a href="{{ url_for('faculty.my_leave_detail', leave_id=leave.id) }}"
+       class="btn btn-outline-secondary btn-pill">
+      <i class="bi bi-arrow-left"></i> Back to the application
+    </a>
+  </div>
+</div>
+
+{% if leave.status != 'DRAFT' %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle"></i>
+  This application is already <strong>{{ leave.status.value|replace('_', ' ') }}</strong>.
+  You can still amend it, but the change is recorded against your name and your
+  HOD sees both the original and the amendment.
+</div>
+{% endif %}
+
+<form method="post" id="leave-edit-form" novalidate>
+  {{ csrf_field() }}
+  <div class="card-au">
+    <div class="card-au__head">
+      <h2 class="card-au__title"><i class="bi bi-pencil-square"></i> Details</h2>
+      <span class="form-text">The value each field holds now is shown under it</span>
+    </div>
+    <div class="card-au__body">
+
+      <div class="mb-3">
+        <label class="form-label" for="edit-type">Leave type</label>
+        <select class="form-select" id="edit-type" name="leave_type" required>
+          {% for kind in leave_types %}
+          <option value="{{ kind.value }}"
+            {{ 'selected' if (form.leave_type if form else leave.leave_type.value) == kind.value }}>
+            {{ kind.value|replace('_', ' ') }}
+          </option>
+          {% endfor %}
+        </select>
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ leave.leave_type.value|replace('_', ' ') }}
+        </span>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-sm-6">
+          <label class="form-label" for="edit-from">From</label>
+          <input type="date" class="form-control" id="edit-from" name="from_date"
+                 required
+                 value="{{ form.from_date if form else leave.from_date.isoformat() }}"
+                 min="{{ today.isoformat() }}">
+          <span class="field-current">
+            <span class="field-current__label">Now</span>
+            {{ leave.from_date.strftime('%d %b %Y') }}
+          </span>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label" for="edit-to">To</label>
+          <input type="date" class="form-control" id="edit-to" name="to_date"
+                 required
+                 value="{{ form.to_date if form else leave.to_date.isoformat() }}"
+                 min="{{ today.isoformat() }}">
+          <span class="field-current">
+            <span class="field-current__label">Now</span>
+            {{ leave.to_date.strftime('%d %b %Y') }}
+          </span>
+        </div>
+      </div>
+
+      <div class="mb-0">
+        <label class="form-label" for="edit-reason">Reason</label>
+        <textarea class="form-control" id="edit-reason" name="reason" rows="3"
+                  required minlength="5"
+                  placeholder="Why this leave is needed.">{{ form.reason if form else leave.reason }}</textarea>
+        <span class="field-current">
+          <span class="field-current__label">Now</span>
+          {{ leave.reason }}
+        </span>
+      </div>
+    </div>
+    <div class="card-au__foot">
+      {# Two exits, because they mean different things: this one throws the
+         edit away, the other goes to the preview without throwing it away
+         mid-typing. #}
+      <a href="{{ url_for('faculty.my_leave_detail', leave_id=leave.id) }}"
+         class="btn btn-outline-secondary btn-pill">
+        <i class="bi bi-x-lg"></i> Exit without saving
+      </a>
+      <button type="submit" class="btn btn-primary btn-pill ms-2">
+        <i class="bi bi-arrow-right"></i> Review changes
+      </button>
+    </div>
+  </div>
+</form>
+
+<div class="card-au mt-3">
+  <div class="card-au__body">
+    <p class="form-text mb-0">
+      Nothing is saved by <em>Review changes</em>. The next screen lists every
+      field that differs from what is stored now, and you confirm there.
+      {% if leave.status != 'DRAFT' %}
+      Moving the dates also removes any period already recorded outside the new
+      range, so nobody is rostered to a class you are no longer away for.
+      {% endif %}
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Leave dates have to arrive in order. The server refuses an inverted range
+// anyway; catching it here saves a round trip and points at the field.
+(function () {
+  var form = document.getElementById('leave-edit-form');
+  var from = document.getElementById('edit-from');
+  var to = document.getElementById('edit-to');
+  if (!form || !from || !to) return;
+
+  function sync() {
+    // The end date can never be earlier than the start, so once a start is
+    // chosen that becomes the floor for the end.
+    to.min = from.value || to.min;
+    if (from.value && to.value && to.value < from.value) {
+      to.setCustomValidity('The end date cannot be before the start date.');
+    } else {
+      to.setCustomValidity('');
+    }
+  }
+
+  from.addEventListener('change', sync);
+  to.addEventListener('change', sync);
+  sync();
+}());
+</script>
+{% endblock %}

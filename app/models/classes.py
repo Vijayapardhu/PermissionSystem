@@ -1,7 +1,13 @@
-"""Class groups, rosters and attendance.
+"""Class groups and rosters.
 
 A lecturer creates a class, bulk-loads the roster from a spreadsheet of roll
-numbers, then views that class's permissions for any date and marks attendance.
+numbers, then views that class's permissions for any date.
+
+There is no attendance here, and deliberately so: the department does not
+mark it in this system. An earlier version recorded it, which added a screen
+to fill in, a column to read, and a second question on the class page -- for
+a record nobody entered and nobody read. The permission view below is what
+the class page is for.
 """
 
 from dataclasses import dataclass, field
@@ -12,13 +18,12 @@ from app.models.firestore import store
 
 GROUPS = 'class_groups'
 MEMBERS = 'class_members'
-ATTENDANCE = 'attendance_records'
 
-# The two things a lecturer keeps lists of. A CLASS is taught: it has a roster
-# and attendance. A PROCTOR group is mentored: its rolls are the students whose
-# permission requests land in that lecturer's queue. Same storage, because a
-# proctor list is uploaded and linked exactly like a roster -- only the meaning
-# and the pages differ.
+# The two things a lecturer keeps lists of. A CLASS is taught: it has a roster,
+# a subject and a timetable. A PROCTOR group is mentored: its rolls are the
+# students whose permission requests land in that lecturer's queue. Same
+# storage, because a proctor list is uploaded and linked exactly like a roster
+# -- only the meaning and the pages differ.
 KIND_CLASS = 'CLASS'
 KIND_PROCTOR = 'PROCTOR'
 
@@ -57,26 +62,6 @@ class ClassMember:
     def is_linked(self) -> bool:
         """True once the roster entry maps to a real student account."""
         return self.student_id is not None
-
-
-@dataclass
-class AttendanceEntry:
-    id: Optional[int]
-    class_id: int
-    student_id: int
-    attendance_date: date
-    status: str
-    marked_by: Optional[int] = None
-    marked_at: Optional[datetime] = None
-
-
-@dataclass
-class ClassPermissions:
-    """A single student's permissions that overlap a given date."""
-
-    member: ClassMember
-    permissions: List = field(default_factory=list)
-    attendance_status: Optional[str] = None
 
 
 def _member_counts() -> dict:
@@ -130,6 +115,37 @@ class ClassModel:
         return _to_class(row, _member_counts().get(row['id'], (0, 0)))
 
     @staticmethod
+    def update_details(class_id: int, name: str, section_code: str = None,
+                       academic_year: str = None) -> bool:
+        """Change a group's own description.
+
+        `faculty_id` is deliberately not a parameter. Moving a class to another
+        lecturer is a transfer, not a rename: it decides whose queue the class's
+        permission requests land in, and the roster would have to move with it.
+        Doing that quietly from a text field is how a class ends up owned by
+        somebody who never agreed to teach it, so a transfer is a separate,
+        deliberate action.
+        """
+        return store.update(GROUPS, class_id, {
+            'name': (name or '').strip(),
+            'section_code': (section_code or '').strip() or None,
+            'academic_year': (academic_year or '').strip() or None,
+        })
+
+    @staticmethod
+    def find_by_name(name: str, exclude_id: int = None) -> Optional[ClassGroup]:
+        """A group with this name, for refusing a duplicate on rename."""
+        wanted = (name or '').strip().casefold()
+        if not wanted:
+            return None
+        for row in store.documents(GROUPS):
+            if row.get('id') == exclude_id:
+                continue
+            if (row.get('name') or '').strip().casefold() == wanted:
+                return _to_class(row, (0, 0))
+        return None
+
+    @staticmethod
     def find_for_faculty(faculty_id: int, kind: str = None) -> List[ClassGroup]:
         """The lecturer's groups, optionally only one kind.
 
@@ -149,12 +165,11 @@ class ClassModel:
         """Delete a class and everything hanging off it.
 
         Postgres did this with ON DELETE CASCADE. Firestore has no referential
-        integrity, so the cascade is written out: leaving orphaned roster rows and
-        attendance behind would show them on a class that no longer exists.
+        integrity, so the cascade is written out: leaving orphaned roster rows
+        behind would show them on a class that no longer exists.
         """
         for row in store.documents(MEMBERS, class_id=class_id):
             store.delete(MEMBERS, row['id'])
-        store.delete_where(ATTENDANCE, class_id=class_id)
         return store.delete(GROUPS, class_id)
 
 
@@ -236,58 +251,149 @@ class MemberModel:
         return linked
 
 
-class AttendanceModel:
-    @staticmethod
-    def _doc_id(class_id, student_id, attendance_date) -> str:
-        """The natural key of an attendance mark, as the document id.
+class ProctorModel:
+    """Proctor lists: which lecturer reviews which students.
 
-        One row per student per class per day is the rule the old UNIQUE constraint
-        enforced. Making it the document id means a second save for the same day
-        overwrites the first, with no read to decide whether it should.
+    Kept apart from `ClassModel` on purpose. A class is taught -- it has a
+    timetable and a subject. A proctor list is neither: it is the
+    college's allocation of mentoring responsibility, and the only thing it
+    decides is whose permission requests land in that lecturer's queue.
+
+    They share the `class_groups` collection, which is why reading them needs a
+    `kind` filter rather than a different table. Every read that reaches a
+    student-facing or teaching-facing page goes through here, so the two can
+    never be confused again at the call site.
+    """
+
+    @staticmethod
+    def groups_for_faculty(faculty_id: int) -> List[ClassGroup]:
+        return ClassModel.find_for_faculty(faculty_id, kind=KIND_PROCTOR)
+
+    @staticmethod
+    def groups_for_student(student_id: int) -> List[ClassGroup]:
+        """Every proctor list this student is on, oldest first.
+
+        Ordered by id on purpose. A student can end up on two lists -- a
+        transfer, or a batch re-allocated without the old list being cleaned up
+        -- and returning whichever the store happened to yield first made the
+        proctor shown on the student's page depend on read order rather than on
+        anything true about the student.
+
+        This is a list rather than a single value because the right answer for
+        "who reviews this student's requests" is not always the first list; see
+        the note on `group_for_student`.
         """
-        return f'{class_id}:{student_id}:{attendance_date}'
+        found = []
+        for row in store.documents(MEMBERS, student_id=student_id):
+            group = ClassModel.find_by_id(row.get('class_id'))
+            if group is not None and group.is_proctor_group:
+                found.append(group)
+        found.sort(key=lambda g: g.id)
+        return found
 
     @staticmethod
-    def save(class_id: int, records: List[tuple], marked_by: int,
-             attendance_date: date) -> int:
-        """Upsert one mark per (student, date). records is [(student_id, status)]."""
-        saved = 0
-        day = attendance_date.isoformat() if hasattr(
-            attendance_date, 'isoformat') else str(attendance_date)
-        for student_id, status in records:
-            store.insert(
-                ATTENDANCE,
-                {
-                    'class_id': class_id,
-                    'student_id': student_id,
-                    'attendance_date': day,
-                    'status': status,
-                    'marked_by': marked_by,
-                },
-                doc_id=AttendanceModel._doc_id(class_id, student_id, day),
-                timestamps=('marked_at',),
-            )
-            saved += 1
-        return saved
+    def group_for_student(student_id: int) -> Optional[ClassGroup]:
+        """The proctor list this student is on, or None.
+
+        Keyed on the linked account id rather than the roll number, because the
+        roll is what can be mistyped on a spreadsheet while the account id is
+        what the rest of the system identifies a student by. A roster row that
+        has never been linked falls back to the roll, since that is all it has.
+
+        With more than one list this returns the first, which is NOT necessarily
+        the proctor who will review their requests: `find_proctor_for_student`
+        breaks that tie by who has the smaller open queue, because that is the
+        rule routing actually uses. Anything that tells a student who their
+        proctor is must go through the service for that reason -- reporting the
+        first list's owner would be showing them one person while their request
+        is decided by another.
+        """
+        groups = ProctorModel.groups_for_student(student_id)
+        return groups[0] if groups else None
 
     @staticmethod
-    def find_by_class_date(class_id: int, attendance_date: date) -> dict:
-        day = attendance_date.isoformat() if hasattr(
-            attendance_date, 'isoformat') else str(attendance_date)
-        rows = store.documents(ATTENDANCE, class_id=class_id,
-                               attendance_date=day)
-        return {row.get('student_id'): row.get('status') for row in rows}
+    def proctor_for_student_id(student_id: int) -> Optional[int]:
+        """The faculty id of the proctor responsible for this student."""
+        group = ProctorModel.group_for_student(student_id)
+        return group.faculty_id if group else None
 
     @staticmethod
-    def summary_by_date(class_id: int, attendance_date: date) -> dict:
-        counts = {'PRESENT': 0, 'ABSENT': 0, 'ON_PERMISSION': 0}
-        # The mapping is student id -> status, so the status is the value.
-        for status in AttendanceModel.find_by_class_date(
-                class_id, attendance_date).values():
-            if status in counts:
-                counts[status] += 1
-        counts['total'] = sum(counts.values())
-        return counts
+    def student_ids_in_group(group_id: int) -> set:
+        """Every student on one proctor list.
+
+        Used for two things: naming the students who share a proctor on the
+        student's own page, and deciding whether a request in a lecturer's
+        queue came from their own proctor list or was routed to them some other
+        way.
+        """
+        return {row.get('student_id')
+                for row in store.documents(MEMBERS, class_id=group_id)
+                if row.get('student_id')}
+
+    @staticmethod
+    def student_ids_for_faculty(faculty_id: int) -> set:
+        """Every student this lecturer proctors, across all their lists."""
+        proctored = set()
+        for group in ProctorModel.groups_for_faculty(faculty_id):
+            proctored |= ProctorModel.student_ids_in_group(group.id)
+        return proctored
+
+    @staticmethod
+    def rolls_in_group(group_id: int) -> List[str]:
+        """The roll numbers on one proctor list, sorted."""
+        rolls = [str(row.get('roll_number') or '').strip().upper()
+                 for row in store.documents(MEMBERS, class_id=group_id)]
+        return sorted({r for r in rolls if r})
+
+    @staticmethod
+    def add_students(group_id: int, roll_numbers: List[str]) -> dict:
+        """Put these students on a proctor list.
+
+        Delegates to `MemberModel.add_members` rather than duplicating the
+        upsert, so a proctor list and a class roster stay identical in how they
+        store and link a student -- the only thing that differs between them is
+        the meaning of the list.
+        """
+        return MemberModel.add_members(group_id, roll_numbers)
+
+    @staticmethod
+    def search_students(query: str, limit: int = 12) -> List[dict]:
+        """Students matching a roll number or name, for the add-a-student box.
+
+        Scoped to students in this department by construction: the search walks
+        the same roster the proctor already uses rather than the whole directory,
+        so a proctor cannot add a student from another department to their list
+        by guessing a roll number.
+
+        Deliberately not a general directory search. The faculty search page
+        already answers "who is this student", and reusing it here would imply
+        that anyone on it can be added to any list -- which for proctoring is
+        not a thing the college does.
+        """
+        from app.models.user import UserModel
+        from app.models import UserRole
+
+        needle = (query or '').strip().lower()
+        if len(needle) < 2:
+            return []
+
+        found, seen = [], set()
+        for row in store.documents(MEMBERS):
+            roll = str(row.get('roll_number') or '').lower()
+            student_id = row.get('student_id')
+            if not student_id or student_id in seen:
+                continue
+            student = UserModel.find_by_id(student_id)
+            if student is None or student.role != UserRole.STUDENT:
+                continue
+            if needle not in roll and needle not in (student.name or '').lower():
+                continue
+            seen.add(student_id)
+            found.append({'id': student_id, 'roll_number': student.roll_number,
+                          'name': student.name, 'email': student.email or ''})
+            if len(found) >= limit:
+                break
+        return found
 
 
 def _member_row(class_id: int, roll_number: str):

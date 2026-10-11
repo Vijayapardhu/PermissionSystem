@@ -33,5 +33,35 @@
     <code>TENANT_ID</code> in <code>.env</code>, then restart.
   </div>
   {% endif %}
+
+  {# Local development only. The route behind this 404s unless DEV_MODE is on,
+     and render.yaml ships it false, so a deployed app shows neither this nor
+     the link below. It exists because the staff picker used to be built and
+     passed to this page and then never rendered -- which left no way at all to
+     sign in as a lecturer when Entra is not configured. #}
+  {% if dev_mode and faculty_accounts %}
+  <div class="auth-divider">Local development</div>
+  <form method="post" action="{{ url_for('auth.dev_login') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <div class="mb-2">
+      <label for="dev-faculty" class="form-label">Provisioned account</label>
+      <select class="form-select form-select-sm" id="dev-faculty" name="email" required>
+        {% for account in faculty_accounts %}
+        <option value="{{ account.email }}">
+          {{ account.name }} &mdash; {{ account.role|title }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-outline-secondary w-100 btn-pill btn-sm">
+      Continue without Microsoft
+    </button>
+  </form>
+  <p class="auth-note">
+    <a href="{{ url_for('auth.demo_logins') }}">
+      Browse all {{ faculty_accounts | length }} staff accounts
+    </a> to check what each one sees.
+  </p>
+  {% endif %}
 </div>
 {% endblock %}

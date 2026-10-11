@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_macros.html' import empty_state with context %}
+{% from '_macros.html' import empty_state, search_box, select with context %}
 {% block title %}Classes &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -10,10 +10,118 @@
   </div>
 </div>
 
+{# Sticky, for the same reason the request register's filters are: the list is
+   long enough that the filters would otherwise scroll away from under the
+   hand.
+
+   The search box and the "what it matches" dropdown are one composite control
+   rather than two. Side by side with a gap between them, the dropdown read as
+   an unrelated filter -- you had to know already that it chose the search's
+   scope. Joined, they say what they are: "search, matching Class name".
+
+   No labels above the controls. Each select says what it is in its own "All ..."
+   option and the search box says what it matches in its placeholder, so a label
+   would only repeat what the control already says and cost the bar a row of
+   height. The labels live in aria-label, where they are still announced. #}
+<div class="card-au toolbar-sticky toolbar-sticky--flush">
+  <form class="toolbar toolbar--standalone" method="get" id="class-filter">
+    <div class="filterbar">
+      <div class="filter-combo">
+        <div class="filter-search">
+          <i class="bi bi-search filter-search__icon" aria-hidden="true"></i>
+          <input type="search" id="class-q" name="q" value="{{ search }}"
+                 class="form-control filter-search__input"
+                 placeholder="{{ search_placeholder }}"
+                 aria-label="Search classes by {{ search_mode_label|lower }}"
+                 autocomplete="off" spellcheck="false">
+          {% if search %}
+          <a class="filter-search__clear" href="{{ clear_search_url }}"
+             title="Clear the search" aria-label="Clear the search">
+            <i class="bi bi-x-lg" aria-hidden="true"></i>
+          </a>
+          {% endif %}
+        </div>
+        {{ select('q_type', search_modes | list, selected=search_mode,
+                  aria='What the search box matches against',
+                  cls='filter-combo__scope',
+                  extra='title="What the search box matches against"') }}
+      </div>
+
+      <span class="filter-divider" aria-hidden="true"></span>
+
+      <div class="filterbar__narrow">
+        {{ select('section', [('', 'All timetables')] + (sections | list),
+                  selected=section_filter, aria='Filter by timetable',
+                  cls='filter-select--timetable') }}
+
+        {{ select('subject', [('', 'All subjects')] + (subjects | list),
+                  selected=subject_filter, aria='Filter by subject',
+                  cls='filter-select--subject') }}
+
+        <div class="au-select filter-select--lecturer">
+          <select class="form-select" name="lecturer"
+                  aria-label="Filter by lecturer">
+            <option value="">All lecturers</option>
+            {% for lecturer in lecturers %}
+            <option value="{{ lecturer.id }}" {{ 'selected' if lecturer_filter == lecturer.id }}>
+              {{- lecturer.name }}{% if lecturer.employee_code %} ({{ lecturer.employee_code }}){% endif -%}
+            </option>
+            {% endfor %}
+          </select>
+          <i class="bi bi-chevron-down au-select__arrow" aria-hidden="true"></i>
+        </div>
+      </div>
+
+      <div class="filterbar__actions">
+        <span class="filterbar__count" aria-live="polite">
+          {%- if active_filters -%}
+            <strong>{{ classes | length }}</strong> of {{ total }} classes
+          {%- else -%}
+            <strong>{{ classes | length }}</strong> classes
+          {%- endif -%}
+        </span>
+        {# Kept for anyone without JS: the selects and the box both submit on
+           their own once scripting is available, so the button is only ever a
+           fallback rather than the main way to apply a filter. The script below
+           removes it on load rather than leaving a dead bright button sitting
+           at the end of the bar pretending to be the primary action. #}
+        <button type="submit" class="btn btn-sm btn-primary btn-pill filterbar__apply">Apply</button>
+        {% if active_filters %}
+        <a href="{{ url_for('hod.classes') }}" class="btn btn-sm btn-outline-secondary btn-pill">Clear all</a>
+        {% endif %}
+      </div>
+
+      {# Each chip drops one filter and keeps the rest. Four controls that can
+         only be cleared by retyping each one is not a filter bar, it is a
+         puzzle. #}
+      {% if chips %}
+      <div class="filterchips">
+        <span class="filterchips__label">Filtered by</span>
+        {% for chip in chips %}
+        <a class="filterchip" href="{{ chip.remove_url }}"
+           title="Remove this filter, keeping the others"
+           aria-label="Remove filter {{ chip.label }} {{ chip.value }}">
+          <span class="filterchip__key">{{ chip.label }}</span>
+          <span class="filterchip__value">{{ chip.value }}</span>
+          <i class="bi bi-x filterchip__drop" aria-hidden="true"></i>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
 <div class="card-au">
   <div class="card-au__head">
     <h2 class="card-au__title"><i class="bi bi-people"></i> All Class Groups</h2>
-    <span class="form-text">{{ classes | length }} class{{ '' if classes|length == 1 else 'es' }}</span>
+    <span class="form-text">
+      {%- if active_filters -%}
+        filtered from {{ total }}
+      {%- else -%}
+        {{ classes | length }} in the department
+      {%- endif -%}
+    </span>
   </div>
 
   {% if classes %}
@@ -24,7 +132,8 @@
           <th class="table-au__idx">#</th>
           <th>Class</th>
           <th>Kind</th>
-          <th>Section</th>
+          <th>Timetable</th>
+          <th>Subject</th>
           <th>Year</th>
           <th>Lecturer</th>
           <th class="table-au__num">Students</th>
@@ -46,8 +155,14 @@
             {% endif %}
           </td>
           <td>{{ group.section_code or '—' }}</td>
+          <td>{{ group.subject_code or '—' }}</td>
           <td>{{ group.academic_year or '—' }}</td>
-          <td class="text-nowrap">{{ group.faculty_name }}</td>
+          <td class="text-nowrap">
+            {{ group.faculty_name or '—' }}
+            {% if group.faculty_code %}
+            <div class="form-text">{{ group.faculty_code }}</div>
+            {% endif %}
+          </td>
           <td class="table-au__num">{{ group.member_count }}</td>
           <td class="table-au__num">
             {% if group.linked_count == group.member_count %}
@@ -80,9 +195,70 @@
       student signs in.
     </span>
   </div>
+  {% elif active_filters %}
+    {{ empty_state('search', 'No classes match these filters',
+                   'All ' ~ total ~ ' classes are listed under some other combination. Widen or clear the filters to see them.') }}
   {% else %}
     {{ empty_state('people', 'No classes yet',
                    'Lecturers create classes from the Classes page and upload a roster of roll numbers.') }}
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// The filter bar submits itself. Every control is a GET field on one form, so
+// this is only ever "submit the form you are already looking at" -- no
+// hand-built URLs that could drift from what the server accepts.
+//
+// Typing is debounced and the selects fire on change, which is what makes the
+// bar feel like a control rather than a form: nothing here needs the Apply
+// button, and Apply stays in the markup for the no-JS case.
+(function () {
+  var form = document.getElementById('class-filter');
+  if (!form) return;
+
+  // The Apply button exists for anyone without JS, who has no other way to
+  // apply a filter. Now that the bar submits itself it is a dead control at the
+  // loudest end of the bar, so it is removed rather than left looking like the
+  // primary action. Enter in the box still submits, which is the case someone
+  // reaching for it would actually have wanted.
+  var apply = form.querySelector('.filterbar__apply');
+  if (apply) apply.hidden = true;
+
+  var box = form.querySelector('#class-q');
+  var timer = null;
+
+  function submit() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    form.submit();
+  }
+
+  if (box) {
+    box.addEventListener('input', function () {
+      if (timer) clearTimeout(timer);
+      // Long enough to skip most of a pasted or fast-typed word, short enough
+      // that the list does not feel like it is ignoring the keyboard.
+      timer = setTimeout(submit, 350);
+    });
+    // Enter should not wait out the debounce, and should not add a newline.
+    box.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); submit(); }
+      if (event.key === 'Escape' && box.value) {
+        box.value = '';
+        submit();
+      }
+    });
+  }
+
+  Array.prototype.forEach.call(
+    form.querySelectorAll('select'),
+    function (select) {
+      // Switching mode re-reads the text already typed, so it submits straight
+      // away rather than waiting for the next keystroke.
+      select.addEventListener('change', submit);
+    }
+  );
+}());
+</script>
 {% endblock %}

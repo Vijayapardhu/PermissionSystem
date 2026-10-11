@@ -1,0 +1,202 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, empty_state with context %}
+{% block title %}Classwork &middot; {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-head__title">Classwork</h1>
+    <p class="page-head__sub">
+      Record what your section has scheduled. Reviewers see it when deciding on a
+      permission request, and recording it after a permission was granted suspends
+      that permission and sends it back to you.
+    </p>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-5">
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-plus-circle"></i> Schedule Classwork</h2>
+      </div>
+      <div class="card-au__body">
+        {% if not classes %}
+          <div class="alert alert-warning mb-0">
+            <i class="bi bi-exclamation-triangle"></i>
+            Create a class first — classwork is scheduled against a section, and
+            the roster on that section is what tells the system which students it
+            affects.
+            <a href="{{ url_for('faculty.classes') }}" class="alert-link">My Classes</a>
+          </div>
+        {% else %}
+        <form method="post" action="{{ url_for('faculty.create_classwork') }}">
+          {{ csrf_field() }}
+
+          <div class="mb-3">
+            <label class="form-label" for="cw-class">Class</label>
+            <select class="form-select" id="cw-class" name="class_id" required>
+              {% for group in classes %}
+                <option value="{{ group.id }}"
+                        {{ 'selected' if chosen_class == group.id }}>
+                  {{ group.name }}{% if group.section_code %} ({{ group.section_code }}){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">
+              {{ 'Pick a class and date to load its timetable slots.' if not chosen_class }}
+            </div>
+          </div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-7">
+              <label class="form-label" for="cw-date">Date</label>
+              <input type="date" class="form-control" id="cw-date" name="date"
+                     value="{{ chosen_date.isoformat() if chosen_date else '' }}"
+                     min="{{ now_date }}" required>
+            </div>
+            <div class="col-5 d-flex align-items-end">
+              <button type="button" class="btn btn-outline-secondary w-100"
+                      onclick="var d=document.getElementById('cw-date').value;
+                               if(d){window.location='{{ url_for('faculty.classwork') }}?class_id='
+                               +document.getElementById('cw-class').value+'&date='+d;}">
+                <i class="bi bi-calendar-week"></i> Load slots
+              </button>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label" for="cw-title">What is it?</label>
+            <input type="text" class="form-control" id="cw-title" name="title"
+                   maxlength="120" required
+                   placeholder="Project review, internal exam, slip test…">
+          </div>
+
+          <fieldset class="mb-3">
+            <legend class="form-label">When</legend>
+            {% if slots %}
+              <div class="mb-2">
+                {% for slot in slots %}
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="period"
+                         id="cw-period-{{ slot.period }}" value="{{ slot.period }}">
+                  <label class="form-check-label" for="cw-period-{{ slot.period }}">
+                    {{ slot.label }}
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="session"
+                       id="cw-session-none" value="" checked>
+                <label class="form-check-label" for="cw-session-none">
+                  <span class="text-muted">Not in a timetable slot</span>
+                </label>
+              </div>
+            {% else %}
+              <p class="form-text mb-2">
+                No slots loaded for this class and date. Choose a session below,
+                or load the slots above.
+              </p>
+            {% endif %}
+
+            <div class="mt-2">
+              {% for value, label in [('full_day', 'Full day'),
+                                      ('morning', 'Morning'),
+                                      ('afternoon', 'Afternoon')] %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="session"
+                       id="cw-session-{{ value }}" value="{{ value }}"
+                       {{ 'checked' if not slots }}>
+                <label class="form-check-label" for="cw-session-{{ value }}">{{ label }}</label>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="form-text mt-1">
+              A timetable slot uses that section's real clock times. A session uses
+              the department's standard span.
+            </div>
+          </fieldset>
+
+          <div class="mb-3">
+            <label class="form-label" for="cw-importance">How important is it?</label>
+            {% for value, label, help_text in importance_choices %}
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="importance"
+                     id="cw-imp-{{ value.value }}" value="{{ value.value }}"
+                     {{ 'checked' if loop.first }}
+                     {{ 'required' if loop.first }}>
+              <label class="form-check-label" for="cw-imp-{{ value.value }}">
+                <strong>{{ label }}</strong>
+                <span class="d-block form-text">{{ help_text }}</span>
+              </label>
+            </div>
+            {% endfor %}
+            <div class="form-text mt-1">
+              Moderate and above can suspend a permission that was already granted.
+              Notification and Minor are shown to reviewers but do not reopen
+              anything.
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label" for="cw-notes">Note (optional)</label>
+            <textarea class="form-control" id="cw-notes" name="notes" rows="2"
+                      maxlength="400"
+                      placeholder="Anything the reviewer should know"></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-check2"></i> Record classwork
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-7">
+    <div class="card-au">
+      <div class="card-au__head">
+        <h2 class="card-au__title"><i class="bi bi-journal-check"></i> Scheduled</h2>
+        <span class="form-text">{{ entries | length }} item{{ '' if entries|length == 1 else 's' }}</span>
+      </div>
+      {% if entries %}
+      <div class="au-table-wrap">
+        <table class="table-au">
+          <thead>
+            <tr>
+              <th class="table-au__idx">#</th>
+              <th>Classwork</th>
+              <th>Date</th>
+              <th>Session</th>
+              <th>Importance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in entries %}
+            <tr>
+              <td class="table-au__idx">{{ loop.index }}</td>
+              <td class="table-au__strong">{{ entry.title }}
+                {% if entry.notes %}
+                  <span class="d-block form-text">{{ entry.notes }}</span>
+                {% endif %}
+              </td>
+              <td>{{ entry.date }}</td>
+              <td>{{ entry.session_label }}</td>
+              <td>
+                <span class="badge {{ entry.severity_class }}">{{ entry.importance_label }}</span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        {{ empty_state('bi-journal-check', 'Nothing scheduled yet',
+            'Anything you record here appears on the reviewer\'s screen when a student requests a permission for those dates.') }}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

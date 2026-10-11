@@ -13,12 +13,22 @@ def _item(endpoint, icon, label, section=None):
 LECTURER_NAV = [
     _item('faculty.dashboard', 'bi-speedometer2', 'Overview', 'Review'),
     _item('faculty.requests_browser', 'bi-inboxes', 'All Requests', 'Review'),
+    # The disputes queue. Always listed rather than hidden when empty, because a
+    # lecturer who has just scheduled a clash needs to be able to check whether
+    # anyone has answered it without first going to look for the link.
+    _item('faculty.objections', 'bi-exclamation-diamond', 'Objections', 'Review'),
     _item('faculty.search', 'bi-search', 'Find Student', 'Review'),
 
     _item('faculty.classes', 'bi-people', 'My Classes', 'Teaching'),
-    _item('faculty.attendance_overview', 'bi-check2-square', 'Attendance', 'Teaching'),
+    _item('faculty.classwork', 'bi-journal-check', 'Classwork', 'Teaching'),
 
     _item('faculty.proctor_students', 'bi-person-check', 'Proctor Students', 'Proctoring'),
+
+    # Leave and the substitutions it creates. "My Leave" is where an applicant
+    # works, and the inbox is where they answer, so both sit under one heading --
+    # they are two ends of the same request.
+    _item('faculty.my_leave', 'bi-calendar2-check', 'My Leave', 'Leave'),
+    _item('faculty.my_adjustments', 'bi-arrow-left-right', 'Adjustments', 'Leave'),
 
     _item('faculty.reports', 'bi-graph-up', 'My Reports', 'Insights'),
 ]
@@ -28,11 +38,16 @@ HOD_NAV = [
     _item('hod.requests', 'bi-list-check', 'All Requests', 'Overview'),
     _item('hod.students', 'bi-mortarboard', 'Students', 'Overview'),
     _item('hod.search', 'bi-search', 'Search', 'Overview'),
-    _item('hod.import_students', 'bi-file-earmark-arrow-up', 'Import Students', 'Overview'),
 
     _item('hod.faculty_workload', 'bi-person-workspace', 'Workload', 'Faculty'),
     _item('hod.import_faculty', 'bi-file-earmark-arrow-up', 'Add Faculty', 'Faculty'),
     _item('hod.routing', 'bi-signpost-2', 'Routing', 'Faculty'),
+
+    # Its own section, placed between two others rather than inside one. The
+    # section list is derived by grouping consecutive items that share a label, so
+    # slotting a new section in the middle of an existing one splits it in two and
+    # the sidebar shows "Academic" twice.
+    _item('hod.leave_queue', 'bi-calendar2-check', 'Leave Approvals', 'Faculty Leave'),
 
     _item('hod.classes', 'bi-people', 'Classes', 'Academic'),
     _item('hod.events', 'bi-trophy', 'Events', 'Academic'),
@@ -49,9 +64,45 @@ STUDENT_NAV = [
     _item('auth.profile', 'bi-person-circle', 'Account'),
 ]
 
+# A Dean signs faculty leave and does little else here, so the list is short
+# because the job is -- not the routing, the events, the class register and the
+# analytics, which belong to the HOD of the department concerned. Giving a Dean a
+# second copy of each would make two people responsible for one register.
+DEAN_NAV = [
+    _item('dean.dashboard', 'bi-speedometer2', 'Overview', 'Overview'),
+    _item('dean.leave_queue', 'bi-calendar2-check', 'Leave Approvals',
+          'Faculty Leave'),
+]
+
+# An HOD teaches here as well as administering, so their sidebar carries both
+# panels: the administrative one first, because that is the job they were sent
+# to do, and the teaching one after it under "My ..." headings.
+#
+# The prefix is not decoration. The HOD list already ends in a section called
+# "Insights" and the teaching list has one too, and sections are derived by
+# grouping consecutive items that share a label -- so without the rename the
+# sidebar would print "Insights" twice, once for the department's analytics and
+# once for the HOD's own classes, with nothing to tell them apart.
+HOD_TEACHING_NAV = [
+    _item(entry['endpoint'], entry['icon'], entry['label'],
+          f'My {entry["section"]}' if entry['section'] else 'My Teaching')
+    for entry in LECTURER_NAV
+]
+
+# A Deputy HOD keeps the whole teaching sidebar -- they still teach and still
+# proctor -- and gets one extra section on top for the two powers the HOD gave
+# them. Built by addition rather than a separate list so a change to the teaching
+# navigation reaches a deputy without anyone remembering to copy it.
+DEPUTY_NAV = HOD_TEACHING_NAV + [
+    _item('deputy.dashboard', 'bi-shield-check', 'Deputy Panel', 'Deputy'),
+    _item('deputy.permitted', 'bi-person-check', 'Permitted Today', 'Deputy'),
+]
+
 ROLE_NAV = {
     'LECTURER': LECTURER_NAV,
-    'HOD': HOD_NAV,
+    'HOD': HOD_NAV + HOD_TEACHING_NAV,
+    'DEPUTY_HOD': DEPUTY_NAV,
+    'DEAN': DEAN_NAV,
     'STUDENT': STUDENT_NAV,
 }
 
