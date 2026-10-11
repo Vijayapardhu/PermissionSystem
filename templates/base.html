@@ -145,6 +145,9 @@
 </div>{# /.au-app #}
 
 <script src="{{ url_for('static', filename='vendor/js/bootstrap.bundle.min.js') }}"></script>
+{# Table filter. Adds a box to any card holding a table of six or more
+   rows, on every role's pages -- see static/js/tablefilter.js. #}
+<script src="{{ url_for('static', filename='js/tablefilter.js') }}"></script>
 <script src="{{ asset('js/print.js') }}"></script>
 <script src="{{ asset('js/search.js') }}"></script>
 <script>

@@ -729,6 +729,56 @@ a:hover { text-decoration: underline; }
 
 .stat:hover { box-shadow: var(--au-shadow); transform: translateY(-1px); }
 
+/* ---- Table filter ----------------------------------------------------
+   Injected into the head of any card holding a table of six or more rows.
+   Sits on the right of the card title, so it reads as part of the table's
+   heading rather than as a form of its own. */
+.au-tfilter {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  margin-left: auto;
+  padding-left: .75rem;
+}
+
+.au-tfilter__input {
+  width: 11rem;
+  max-width: 40vw;
+  height: 2rem;
+  font-size: .8rem;
+}
+
+.au-tfilter__clear {
+  border: 0;
+  background: transparent;
+  color: var(--au-muted);
+  cursor: pointer;
+  padding: 0 .15rem;
+  line-height: 1;
+  font-size: .8rem;
+}
+
+.au-tfilter__clear:hover { color: var(--au-text); }
+
+.au-tfilter__count {
+  font-size: .74rem;
+  color: var(--au-muted);
+  white-space: nowrap;
+  min-width: 4.2rem;
+  text-align: right;
+}
+
+.au-tfilter__count--none { color: var(--au-danger); font-weight: 600; }
+
+/* Nothing matched: a line where the table was, so the page does not look
+   broken. */
+.au-filter-none {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--au-muted);
+  font-size: .88rem;
+}
+
 /* ---- Meta strip -------------------------------------------------------
    Four small numbers on one line instead of four tiles. Used where the
    numbers are context for the page rather than its subject -- a class roster
