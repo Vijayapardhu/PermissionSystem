@@ -628,11 +628,18 @@ def submit_to_hod(leave_id: int, applicant) -> FacultyLeave:
 def _next_approver_stage(applicant) -> LeaveStatus:
     """Which queue this application belongs in, given who is applying.
 
-    Almost everyone goes to the HOD. An HOD does not, because no HOD may decide
-    another HOD's leave -- `hod_act_on_leave` refuses self-approval, and a
-    hand-written URL cannot get round that -- so their application goes straight
-    to the Dean. Filing it under HOD_PENDING would put it in the one queue the
-    applicant cannot empty, where it would sit forever.
+    Almost everyone goes to the HOD -- or to a Deputy HOD, who now sits in the
+    same queue. An HOD does not, because no HOD may decide their own leave --
+    `hod_act_on_leave` refuses self-approval by applicant id, and a hand-written
+    URL cannot get round that -- so their application goes straight to the Dean.
+    Filing it under HOD_PENDING would put it in the one queue the applicant
+    cannot empty, where it would sit forever.
+
+    A Deputy HOD's own application goes to HOD_PENDING like anybody else's, and
+    is refused there by the same id check. They cannot sign it, and neither can
+    the HOD sign it on their behalf without it being the applicant's own
+    application -- which is the correct outcome: a deputy's leave is decided by
+    somebody above the deputy.
 
     The applicant's role is read here rather than assumed, because the same
     person can hold both jobs: an HOD in this department teaches as well as
@@ -807,8 +814,16 @@ def cancel_leave(leave_id: int, applicant) -> None:
                                        AdjustmentStatus.CANCELLED)
 
 
-def hod_act_on_leave(leave_id: int, hod, approve: bool, remarks: str) -> FacultyLeave:
-    """The HOD's decision on a fully-arranged application.
+def hod_act_on_leave(leave_id: int, approver, approve: bool,
+                     remarks: str) -> FacultyLeave:
+    """An HOD-level decision on a fully-arranged application.
+
+    The HOD's decision, or a Deputy HOD's acting in the same place -- which is
+    why the parameter is `approver` rather than `hod`. Nothing here reads the
+    role: the function uses the id, records it against the decision, and refuses
+    the applicant's own application. Naming it after the HOD invited a role
+    check that would have been wrong, and would have turned a delegation into a
+    special case.
 
     Two things are recorded that a bare status change would lose: who decided and
     when, and any periods the applicant could not staff. The second is the reason
@@ -820,20 +835,41 @@ def hod_act_on_leave(leave_id: int, hod, approve: bool, remarks: str) -> Faculty
         raise LeaveError('That application no longer exists.')
     if leave.status != LeaveStatus.HOD_PENDING:
         raise LeaveError('That application is not waiting on the HOD.')
-    if leave.faculty_id == hod.id:
-        # An HOD teaches here, so they can file leave like anyone else -- and that
-        # own application comes back into the queue they are looking at. Checked
-        # in the service rather than only by hiding the row, because this is the
-        # one check a hand-written URL to /hod/leave/<id>/action would skip, and
-        # an HOD approving their own leave is exactly the thing that has to be
+    if leave.faculty_id == approver.id:
+        # An approver teaches here, so they can file leave like anyone else --
+        # and their own application comes back into the queue they are looking
+        # at. Checked in the service rather than only by hiding the row, because
+        # this is the one check a hand-written URL to the action endpoint would
+        # skip, and signing your own leave is exactly the thing that has to be
         # impossible rather than merely hidden.
         #
-        # `submit_to_hod` routes an HOD's own application straight to the Dean, so
-        # this should be unreachable. It stays as the backstop for a record that
-        # reached this state by some other route.
+        # It is refused for a Deputy HOD as well as an HOD, and by id rather
+        # than by role, so widening who may approve cannot widen this.
+        #
+        # `submit_to_hod` routes an HOD's own application straight to the Dean,
+        # so this should be unreachable for them. It stays as the backstop for a
+        # record that reached this state by some other route.
         raise LeaveError(
             'This is your own application, so it is decided by the Dean rather '
             'than by you.')
+
+    # An HOD's leave is the Dean's, whoever is holding the HOD queue.
+    #
+    # `_next_approver_stage` already sends an HOD's own application straight to
+    # DEAN_PENDING, so this should be unreachable -- exactly as the check above
+    # is unreachable for an HOD. It is here because the previous version relied
+    # on the routing alone, and a Deputy HOD being able to approve is not
+    # something to leave to the absence of a second bug.
+    #
+    # Refused by the applicant's role rather than by who is asking: a deputy
+    # cannot sign an HOD's leave, and neither can the HOD, and the HOD is
+    # precisely the person most likely to be handed the URL.
+    applicant = UserModel.find_by_id(leave.faculty_id)
+    if applicant is not None and getattr(applicant, 'role', None) in (
+            UserRole.HOD, UserRole.DEAN):
+        raise LeaveError(
+            'A Head of Department\'s leave is decided by the Dean, not at '
+            'this level.')
 
     if approve and len((remarks or '').strip()) < 5 and \
             LeaveSummary.attach(leave, AdjustmentModel.find_by_leave(leave_id)) \
@@ -844,7 +880,7 @@ def hod_act_on_leave(leave_id: int, hod, approve: bool, remarks: str) -> Faculty
     LeaveModel.update_status(
         leave_id,
         LeaveStatus.DEAN_PENDING if approve else LeaveStatus.REJECTED,
-        hod_by=hod.id,
+        hod_by=approver.id,
         # Recorded rather than inferred. The letter has to be able to say who
         # decided and when, months later, and `updated_at` is the time of the last
         # write of any kind -- which is not the same moment once anything else

@@ -255,6 +255,10 @@ PAGE_PERMISSIONS = {
     # second HOD, and two people who both think they own the process is how a
     # department ends up with nobody accountable for it. What a deputy cannot
     # reach is the point as much as what they can.
+    #
+    # The leave queue below is the third power, and it is deliberately *not*
+    # `hod.leave_queue`: a grant on the HOD's own page would carry the letter
+    # link and the full administrative set with it.
     'deputy.dashboard': (DEPUTY_HOD,),
     'deputy.permitted': (DEPUTY_HOD,),
     'deputy.request_detail': (DEPUTY_HOD,),
@@ -264,6 +268,19 @@ PAGE_PERMISSIONS = {
     # endpoint name, and the boot-time check is what catches a mismatch here
     # rather than leaving the route quietly open.
     'deputy.decide': (DEPUTY_HOD,),
+    # Faculty leave, in the HOD's place. A Deputy HOD is an approver: they read
+    # the same HOD_PENDING queue the HOD does and clear it, because an HOD for a
+    # whole department means the queue stops moving whenever they are in a
+    # meeting.
+    #
+    # What they cannot do is not expressed here, because it is not a role gate.
+    # Their own application is refused by applicant id inside the leave service,
+    # and an HOD's application never enters this queue at all -- `_next_approver_stage`
+    # sends it straight to the Dean. Widening the grant cannot widen either,
+    # which is the point of putting them there rather than in this table.
+    'deputy.leave_queue': (DEPUTY_HOD,),
+    'deputy.leave_detail': (DEPUTY_HOD,),
+    'deputy.leave_action': (DEPUTY_HOD,),
 
     # ---- Dean ----
     #

@@ -39,15 +39,21 @@ department discovering a clash after the fact.
 |---|---|---|
 | **Student** | Their own requests, classes, proctor | File a request alone or as a group, upload proof, print a letter, withdraw |
 | **Lecturer** | Their own classes, proctored students, their own decisions | Decide requests, schedule classwork, answer objections, file leave, upload a roster |
-| **Deputy HOD** | Everything a lecturer sees, **plus** the department's whole queue | Grant or refuse **any** request directly, read who currently holds a permission |
+| **Deputy HOD** | Everything a lecturer sees, **plus** the department's whole queue and the faculty leave queue | Grant or refuse **any** request directly, approve faculty leave, read who currently holds a permission |
 | **HOD** | The whole department | Everything above, plus routing, the faculty register, events, the student register, and appointing deputies |
 | **Dean** | Faculty leave only | Sign leave, above the HOD |
 
 A **Deputy HOD** is a promotion, not a new person: the same account with more
-authority, so their classes and proctor list do not move. They get exactly two
-powers — deciding directly, and reading the permission register — and
-deliberately **not** the administrative panels, and **not** authority over their
-own leave.
+authority, so their classes and proctor list do not move. Their authority has limits that are **not** role checks, because the thing
+being protected is a decision about somebody's leave rather than a screen:
+
+- **They may approve a lecturer's leave, and another deputy's.** Same queue the
+  HOD works from — one queue with two possible occupants, not two queues.
+- **They may not approve their own.** Refused by applicant id inside the leave
+  service, so widening who may approve cannot widen it.
+- **They may not approve an HOD's.** That is the Dean's. The workflow routes it
+  straight there, and the service refuses it as well.
+- **No administrative panels** — no faculty register, routing or events.
 
 Every request for a lecturer's queue is filtered to what they own or have
 decided. A lecturer cannot see another lecturer's students.

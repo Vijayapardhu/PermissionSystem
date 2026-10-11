@@ -1,5 +1,9 @@
 {% extends 'base.html' %}
 {% from '_macros.html' import csrf_field, empty_state, stat with context %}
+{# `ns` is the blueprint whose leave endpoints these links address. It
+   defaults to 'hod' so every existing render is unchanged; the Deputy HOD
+   passes 'deputy' and gets the same page with its own URLs. #}
+{% set ns = ns|default('hod') %}
 {% block title %}Leave Approvals &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -65,7 +69,7 @@
           </td>
           <td class="table-au__actions">
             <a class="btn btn-sm btn-primary btn-pill"
-               href="{{ url_for('hod.leave_detail', leave_id=leave.id) }}">Review</a>
+               href="{{ url_for(ns ~ '.leave_detail', leave_id=leave.id) }}">Review</a>
           </td>
         </tr>
         {% endfor %}
@@ -124,7 +128,7 @@
           </td>
           <td class="table-au__actions">
             <a class="btn btn-sm btn-outline-secondary btn-pill"
-               href="{{ url_for('hod.leave_detail', leave_id=leave.id) }}">Open</a>
+               href="{{ url_for(ns ~ '.leave_detail', leave_id=leave.id) }}">Open</a>
           </td>
         </tr>
         {% endfor %}

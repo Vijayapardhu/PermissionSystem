@@ -1625,7 +1625,7 @@ def leave_action(leave_id: int):
     remarks = (request.form.get('remarks') or '').strip()
 
     try:
-        leave = hod_act_on_leave(leave_id=leave_id, hod=user, approve=approve,
+        leave = hod_act_on_leave(leave_id=leave_id, approver=user, approve=approve,
                                  remarks=remarks)
     except LeaveError as exc:
         flash(str(exc), 'danger')

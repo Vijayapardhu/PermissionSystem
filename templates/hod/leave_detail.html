@@ -1,5 +1,8 @@
 {% extends 'base.html' %}
 {% from '_macros.html' import csrf_field, empty_state with context %}
+{% set ns = ns|default('hod') %}
+{# A Deputy HOD renders this same page with ns='deputy'. The letter link
+   below stays HOD-only: it is the document the Dean has already signed. #}
 {% block title %}Leave Review &middot; {{ APP_NAME }}{% endblock %}
 
 {% block content %}
@@ -16,13 +19,13 @@
     </p>
   </div>
   <div class="page-head__actions">
-    {% if leave.is_final %}
+    {% if leave.is_final and ns == 'hod' %}
       <a href="{{ url_for('hod.leave_letter', leave_id=leave.id) }}"
          class="btn btn-primary btn-pill">
         <i class="bi bi-file-earmark-text"></i> Approval letter
       </a>
     {% endif %}
-    <a href="{{ url_for('hod.leave_queue') }}" class="btn btn-outline-secondary btn-pill">
+    <a href="{{ url_for(ns ~ '.leave_queue') }}" class="btn btn-outline-secondary btn-pill">
       <i class="bi bi-arrow-left"></i> Leave Approvals
     </a>
   </div>
@@ -196,7 +199,7 @@
     <h2 class="card-au__title"><i class="bi bi-pen"></i> Your decision</h2>
   </div>
   <div class="card-au__body">
-    <form method="post" action="{{ url_for('hod.leave_action', leave_id=leave.id) }}">
+    <form method="post" action="{{ url_for(ns ~ '.leave_action', leave_id=leave.id) }}">
       {{ csrf_field() }}
       <div class="mb-3">
         <label class="form-label" for="remarks">

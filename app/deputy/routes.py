@@ -19,10 +19,14 @@ from flask import (
 )
 
 from app.models import ApprovalAction, RequestStatus
+from app.models.leave import (
+    AdjustmentModel, LeaveModel, LeaveSummary, LeaveStatus, TimetableModel,
+)
 from app.models.permission import (
     ApprovalModel, PermissionModel, attach_members,
 )
 from app.models.user import UserModel
+from app.permissions.leave_service import LeaveError, hod_act_on_leave
 from app.permissions.pages import permission_required
 from app.permissions.service import ValidationError, hod_act_directly
 from app.utils.security import current_user
@@ -198,3 +202,182 @@ def decide(request_id: int):
     verb = 'approved' if action == ApprovalAction.APPROVED else 'refused'
     flash(f'Request #{request_id} {verb} directly.', 'success')
     return redirect(url_for('deputy.permitted'))
+
+
+"""The Deputy HOD's leave panel: a queue they can clear.
+
+Scope, precisely:
+
+  * Faculty leave from lecturers, and from other Deputy HODs -- yes. They sit in
+    the same HOD_PENDING queue the HOD works from, and the HOD cannot be the
+    only person who can clear it.
+  * Their own leave -- no. Refused in the service by applicant id, before any
+    role is considered, so widening who may approve cannot widen this.
+  * An HOD's leave -- no, and not by a permission check but by the shape of the
+    workflow. `_next_approver_stage` sends an HOD's own application straight to
+    DEAN_PENDING because no HOD may decide another's leave, so it never reaches
+    the queue this page reads. A deputy opening the URL gets a page they cannot
+    act on, exactly as an HOD would.
+
+The templates are the HOD's own, rendered with `ns='deputy'`, so the two panels
+cannot drift. The letter link stays HOD-only: it prints the document the Dean has
+already signed, and a deputy acts before that point.
+"""
+from datetime import date
+
+from flask import (
+    abort, flash, redirect, render_template, request, url_for,
+)
+
+from app.models.leave import (
+    AdjustmentModel, LeaveModel, LeaveSummary, LeaveStatus, TimetableModel,
+)
+from app.models.user import UserModel
+from app.permissions.leave_service import LeaveError, hod_act_on_leave
+from app.permissions.pages import permission_required
+from app.utils.security import current_user
+
+
+@deputy_bp.route('/leave')
+@permission_required('deputy.leave_queue')
+def leave_queue():
+    """Faculty leave awaiting an HOD-level decision.
+
+    The same rows the HOD sees -- they are one queue with two possible
+    occupants, not two queues. A deputy and the HOD both drawing from it means
+    neither is looking at a stale copy of the other's work.
+    """
+    user = current_user()
+
+    pending = LeaveModel.find_by_status(LeaveStatus.HOD_PENDING)
+    decided = (LeaveModel.find_by_status(LeaveStatus.DEAN_PENDING)
+               + LeaveModel.find_by_status(LeaveStatus.REJECTED))
+
+    # Their own application is not in the queue they are looking at -- exactly
+    # as for the HOD, and for the same reason.
+    pending = [l for l in pending if l.faculty_id != user.id]
+    decided = [l for l in decided if l.faculty_id != user.id]
+
+    for record in pending + decided:
+        LeaveSummary.attach(record, AdjustmentModel.find_by_leave(record.id))
+    _attach_leave_names(pending + decided)
+
+    pending.sort(key=lambda l: (l.from_date or date.max, l.id))
+    decided.sort(key=lambda l: (l.from_date or date.max, l.id), reverse=True)
+
+    counts = {
+        'awaiting': len(pending),
+        'uncovered': sum(1 for l in pending if l.uncovered_count),
+        'with_dean': sum(1 for l in decided
+                         if l.status == LeaveStatus.DEAN_PENDING),
+        'rejected': sum(1 for l in decided
+                        if l.status == LeaveStatus.REJECTED),
+    }
+
+    return render_template(
+        'hod/leave.html',
+        user=user,
+        ns='deputy',
+        pending=pending,
+        decided=decided,
+        counts=counts,
+    )
+
+
+@deputy_bp.route('/leave/<int:leave_id>')
+@permission_required('deputy.leave_detail')
+def leave_detail(leave_id: int):
+    """One application, with the class adjustments the decision turns on."""
+    user = current_user()
+    leave = LeaveModel.find_by_id(leave_id)
+    if leave is None:
+        abort(404)
+
+    own_application = leave.faculty_id == user.id
+
+    # Not a 403 for their own application. The HOD's page shows it with an
+    # explanation rather than hiding it, because "where has my leave gone" is a
+    # question this person is entitled to have answered on the page they land
+    # on.
+    if leave.status not in (LeaveStatus.HOD_PENDING, LeaveStatus.DEAN_PENDING,
+                            LeaveStatus.REJECTED):
+        abort(404)
+
+    adjustments = AdjustmentModel.find_by_leave(leave_id)
+    _attach_leave_names([leave])
+    _attach_substitute_names(adjustments)
+
+    applicant = UserModel.find_by_id(leave.faculty_id)
+    slots = TimetableModel.slots_by_section(
+        adjustments[0].section if adjustments else '')
+
+    others = [l for l in LeaveModel.find_open(leave.faculty_id,
+                                              exclude_id=leave_id)
+              if l.status != LeaveStatus.HOD_PENDING]
+
+    return render_template(
+        'hod/leave_detail.html',
+        user=user,
+        ns='deputy',
+        leave=leave,
+        applicant=applicant,
+        adjustments=adjustments,
+        slots=slots,
+        others=others,
+        own_application=own_application,
+        coverage=TimetableModel.allocation_coverage(),
+    )
+
+
+@deputy_bp.route('/leave/<int:leave_id>/action', methods=['POST'])
+@permission_required('deputy.leave_action')
+def leave_action(leave_id: int):
+    """Approve or refuse, in the HOD's place.
+
+    Delegates to the same service the HOD uses rather than reimplementing the
+    rules, so the two cannot come to disagree about what an approver may do --
+    which is how the two decide that a deputy cannot sign their own leave would
+    become two decisions, one of them wrong.
+    """
+    user = current_user()
+    approve = (request.form.get('decision') or '').lower() == 'approve'
+    remarks = (request.form.get('remarks') or '').strip()
+
+    try:
+        leave = hod_act_on_leave(leave_id=leave_id, approver=user,
+                                 approve=approve, remarks=remarks)
+    except LeaveError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('deputy.leave_detail', leave_id=leave_id))
+
+    flash(
+        f'Leave application #{leave_id} approved and passed to the Dean.'
+        if approve else
+        f'Leave application #{leave_id} rejected.',
+        'success')
+    return redirect(url_for('deputy.leave_queue'))
+
+
+def _attach_leave_names(leaves) -> None:
+    """Name the applicant on each leave, with one read for the whole list."""
+    ids = {l.faculty_id for l in leaves if l.faculty_id}
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for leave in leaves:
+        leave.faculty_name = names.get(leave.faculty_id)
+
+
+def _attach_substitute_names(adjustments) -> None:
+    """Name the colleague covering each period."""
+    ids = {a.assigned_faculty_id for a in adjustments
+           if a.assigned_faculty_id}
+    names = {}
+    for person_id in ids:
+        person = UserModel.find_by_id(person_id)
+        if person:
+            names[person_id] = person.name
+    for adj in adjustments:
+        adj.substitute_name = names.get(adj.assigned_faculty_id)

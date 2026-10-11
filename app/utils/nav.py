@@ -96,6 +96,8 @@ HOD_TEACHING_NAV = [
 DEPUTY_NAV = HOD_TEACHING_NAV + [
     _item('deputy.dashboard', 'bi-shield-check', 'Deputy Panel', 'Deputy'),
     _item('deputy.permitted', 'bi-person-check', 'Permitted Today', 'Deputy'),
+    _item('deputy.leave_queue', 'bi-calendar2-check', 'Leave Approvals',
+          'Deputy'),
 ]
 
 ROLE_NAV = {

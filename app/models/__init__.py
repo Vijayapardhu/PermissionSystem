@@ -256,17 +256,23 @@ class User:
     def is_approver(self) -> bool:
         """Somebody who signs other people's leave, rather than filing their own.
 
-        Both the HOD and the Dean, and used where the question is "whose decision
-        is this" rather than "can this person teach" -- routing an HOD's own
-        application past the HOD stage, and refusing self-approval at either
-        level, both ask this.
+        The HOD, a Deputy HOD, and the Dean. Used where the question is "whose
+        decision is this" rather than "can this person teach".
 
-        A Deputy HOD is not in it. They decide activity permissions; faculty
-        leave still goes up the fixed ladder, and a deputy who could sign their
-        own leave past the HOD would be a hole in a workflow that exists to stop
-        exactly that.
+        A Deputy HOD is included because the HOD cannot be the only person who
+        can sign leave: one HOD for a department means the queue stops moving
+        whenever they are in a meeting, on leave, or off campus, which is the
+        same argument that created the role in the first place.
+
+        Including them here does **not** let a deputy sign their own leave.
+        That is refused unconditionally in the leave service, by applicant id,
+        for every approver -- and an HOD's own application is routed straight to
+        the Dean rather than into a queue the applicant sits in. This property
+        says what somebody may do in general; the service decides what they may
+        do to a particular application.
         """
-        return self.role in (UserRole.HOD, UserRole.DEAN)
+        return self.role in (UserRole.HOD, UserRole.DEPUTY_HOD,
+                             UserRole.DEAN)
 
     @property
     def is_faculty(self) -> bool:
